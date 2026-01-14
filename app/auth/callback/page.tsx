@@ -6,37 +6,34 @@ import { supabase } from "@/lib/supabaseClient";
 
 export default function AuthCallbackPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const [message, setMessage] = useState("Signing you in…");
+  const params = useSearchParams();
+  const [msg, setMsg] = useState("Signing you in…");
 
   useEffect(() => {
     const run = async () => {
       try {
-        const code = searchParams.get("code");
+        // Supabase magic link / OAuth callbacks often include ?code=
+        const code = params.get("code");
 
-        // For PKCE code flow
         if (code) {
           const { error } = await supabase.auth.exchangeCodeForSession(code);
           if (error) throw error;
         }
 
+        // If already signed in (or after exchange), send them to the app
         router.replace("/inbox");
-      } catch (err: any) {
-        console.error(err);
-        setMessage("Login failed. Redirecting…");
-        setTimeout(() => router.replace("/auth/login"), 1200);
+      } catch (e: any) {
+        setMsg(e?.message ?? "Sign-in failed. Please try again.");
       }
     };
 
     run();
-  }, [router, searchParams]);
+  }, [params, router]);
 
   return (
     <main style={{ padding: 24 }}>
-      <h1 style={{ fontSize: 20, fontWeight: 600, marginBottom: 8 }}>
-        Auth Callback
-      </h1>
-      <p>{message}</p>
+      <h1 style={{ fontSize: 18, fontWeight: 600 }}>Auth Callback</h1>
+      <p style={{ marginTop: 12 }}>{msg}</p>
     </main>
   );
 }
