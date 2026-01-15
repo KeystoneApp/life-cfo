@@ -44,6 +44,18 @@ type RecurringIncome = {
   updated_at: string;
 };
 
+type DecisionRow = {
+  id: string;
+  status: string;
+  created_at: string;
+  decided_at: string | null;
+  reviewed_at: string | null;
+  review_at: string | null;
+  confidence_level: number | null; // decision-time confidence (1-3)
+  review_history: any[] | null; // jsonb array
+  ai_json: any | null; // can be object or stringified JSON
+};
+
 function formatMoneyFromCents(cents: number, currency = "AUD") {
   const value = (cents || 0) / 100;
   try {
@@ -151,6 +163,263 @@ function computeTotals(accounts: Account[], bills: RecurringBill[], income: Recu
   };
 }
 
+// ----------------------
+// Insights helpers (v1)
+// ----------------------
+
+function safeMs(iso: string | null): number | null {
+  if (!iso) return null;
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return null;
+  return ms;
+}
+
+function getAI(ai_json: any | null) {
+  if (!ai_json) return null;
+  if (typeof ai_json === "string") {
+    try {
+      return JSON.parse(ai_json);
+    } catch {
+      return null;
+    }
+  }
+  if (typeof ai_json === "object") return ai_json;
+  return null;
+}
+
+type ReviewHistoryEntry = {
+  reviewed_at?: string;
+  notes?: string;
+  outcome?: string;
+  confidence_level?: number | null; // review-time confidence (0-100 per RPC; may be null)
+  at?: string; // legacy
+  note?: string; // legacy
+};
+
+function normalizeReviewHistory(input: any): ReviewHistoryEntry[] {
+  if (!Array.isArray(input)) return [];
+  return input.filter((x) => x && typeof x === "object");
+}
+
+function daysBetween(aMs: number, bMs: number) {
+  const diff = bMs - aMs;
+  return diff / (1000 * 60 * 60 * 24);
+}
+
+function pickReviewConfidence100(history: ReviewHistoryEntry[]): number | null {
+  // Prefer last entry with confidence_level (0-100), else null
+  for (let i = history.length - 1; i >= 0; i--) {
+    const v = history[i]?.confidence_level;
+    if (typeof v === "number" && Number.isFinite(v)) return v;
+  }
+  return null;
+}
+
+function decisionConfTo100(v: number | null): number | null {
+  // decision confidence is 1-3. Map to 33/67/100.
+  if (v === 1) return 33;
+  if (v === 2) return 67;
+  if (v === 3) return 100;
+  return null;
+}
+
+function bucketLabel(type: any) {
+  if (type === "spending") return "Spending";
+  if (type === "time") return "Time";
+  if (type === "relationship") return "Relationship";
+  if (type === "health") return "Health";
+  if (type === "other") return "Other";
+  return "Unknown";
+}
+
+type Insight = {
+  title: string;
+  body: string;
+  tone?: "neutral" | "warning" | "positive";
+};
+
+function buildInsights(decisions: DecisionRow[]): { insights: Insight[]; stats: { reviewedCount: number } } {
+  const now = Date.now();
+
+  const withReviewAt = decisions.filter((d) => d.review_at != null);
+  const overdue = withReviewAt.filter((d) => {
+    const ra = safeMs(d.review_at);
+    if (!ra) return false;
+    if (ra > now) return false;
+
+    const rv = safeMs(d.reviewed_at);
+    // overdue if never reviewed OR reviewed before scheduled review date
+    if (!rv) return true;
+    return rv < ra;
+  });
+
+  const reviewed = decisions.filter((d) => !!safeMs(d.reviewed_at));
+  const reviewedCount = reviewed.length;
+
+  // Review lateness
+  const latenessDays: number[] = [];
+  for (const d of reviewed) {
+    const ra = safeMs(d.review_at);
+    const rv = safeMs(d.reviewed_at);
+    if (!rv || !ra) continue;
+
+    const diffDays = daysBetween(ra, rv);
+    if (diffDays > 0.05) latenessDays.push(diffDays); // > ~1.2 hours late counts as late
+  }
+  const lateCount = latenessDays.length;
+  const latenessRate = reviewedCount > 0 ? lateCount / reviewedCount : 0;
+  const avgLateDays = lateCount > 0 ? latenessDays.reduce((a, b) => a + b, 0) / lateCount : 0;
+
+  // Confidence drift (decision 1-3 -> 33/67/100 vs review history confidence 0-100)
+  const drift: number[] = [];
+  for (const d of reviewed) {
+    const dec100 = decisionConfTo100(d.confidence_level);
+    const history = normalizeReviewHistory(d.review_history);
+    const rev100 = pickReviewConfidence100(history);
+    if (dec100 == null || rev100 == null) continue;
+    drift.push(rev100 - dec100); // positive means more confident after review
+  }
+  const driftAvg = drift.length ? drift.reduce((a, b) => a + b, 0) / drift.length : null;
+
+  // Avoidance by type: compare overdue rate by decision_type (from ai_json)
+  const byType: Record<string, { total: number; overdue: number }> = {};
+  for (const d of withReviewAt) {
+    const ai = getAI(d.ai_json);
+    const t = ai?.decision_type ?? "unknown";
+    if (!byType[t]) byType[t] = { total: 0, overdue: 0 };
+    byType[t].total += 1;
+    if (overdue.some((x) => x.id === d.id)) byType[t].overdue += 1;
+  }
+  const typePairs = Object.entries(byType)
+    .filter(([, v]) => v.total >= 2) // need at least 2 items to claim a pattern
+    .map(([k, v]) => ({ type: k, total: v.total, overdue: v.overdue, rate: v.total ? v.overdue / v.total : 0 }))
+    .sort((a, b) => b.rate - a.rate);
+
+  const mostAvoided = typePairs[0] ?? null;
+
+  // Learning velocity: reviews in last 30 days
+  const cutoff30 = now - 30 * 24 * 60 * 60 * 1000;
+  const reviews30 = reviewed.filter((d) => {
+    const rv = safeMs(d.reviewed_at);
+    return rv != null && rv >= cutoff30;
+  }).length;
+
+  const insights: Insight[] = [];
+
+  // 1) Overdue
+  if (withReviewAt.length > 0) {
+    if (overdue.length > 0) {
+      insights.push({
+        title: "Reviews currently overdue",
+        tone: "warning",
+        body: `You have ${overdue.length} decision(s) past their review date. Clearing even 1 can reduce mental load.`,
+      });
+    } else {
+      insights.push({
+        title: "Review system is on track",
+        tone: "positive",
+        body: "Nothing is overdue right now. Keystone’s feedback loop is staying healthy.",
+      });
+    }
+  } else {
+    insights.push({
+      title: "No reviews scheduled yet",
+      tone: "neutral",
+      body: "Schedule a review date on a decision to let Keystone learn over time.",
+    });
+  }
+
+  // 2) Lateness rate
+  if (reviewedCount >= 3) {
+    const pct = Math.round(latenessRate * 100);
+    if (pct >= 50) {
+      insights.push({
+        title: "Reviews tend to happen late",
+        tone: "warning",
+        body: `${pct}% of reviewed decisions were completed after their planned review date. Average lateness (when late): ${avgLateDays.toFixed(
+          1
+        )} days.`,
+      });
+    } else if (pct > 0) {
+      insights.push({
+        title: "Review timing is mostly on time",
+        tone: "neutral",
+        body: `${pct}% of reviewed decisions were late. When late, average lateness was ${avgLateDays.toFixed(1)} days.`,
+      });
+    } else {
+      insights.push({
+        title: "You review on time",
+        tone: "positive",
+        body: "So far, your reviewed decisions have been on time vs their scheduled review date.",
+      });
+    }
+  } else {
+    insights.push({
+      title: "Not enough review data (yet)",
+      tone: "neutral",
+      body: "Keystone needs ~3 reviewed decisions to detect timing patterns reliably.",
+    });
+  }
+
+  // 3) Confidence drift
+  if (driftAvg != null && drift.length >= 3) {
+    const direction = driftAvg >= 0 ? "up" : "down";
+    const amt = Math.abs(driftAvg).toFixed(0);
+    insights.push({
+      title: "Confidence drift after review",
+      tone: direction === "down" ? "warning" : "positive",
+      body: `On average, your confidence shifts ${direction} by ~${amt} points after review (based on ${drift.length} reviews with confidence data).`,
+    });
+  } else {
+    insights.push({
+      title: "Confidence patterns pending",
+      tone: "neutral",
+      body: "Add confidence when reviewing decisions (0–100) to unlock confidence drift insights.",
+    });
+  }
+
+  // 4) Avoidance by type
+  if (mostAvoided && mostAvoided.rate >= 0.5) {
+    insights.push({
+      title: "Possible avoidance pattern by decision type",
+      tone: "warning",
+      body: `${bucketLabel(mostAvoided.type)} decisions are overdue more often (${Math.round(
+        mostAvoided.rate * 100
+      )}% overdue across ${mostAvoided.total} item(s)).`,
+    });
+  } else if (mostAvoided && mostAvoided.total >= 2) {
+    insights.push({
+      title: "No strong avoidance signal by type",
+      tone: "neutral",
+      body: `By decision type, overdue rates are currently low or mixed. (Top bucket: ${bucketLabel(mostAvoided.type)} at ${Math.round(
+        mostAvoided.rate * 100
+      )}% overdue.)`,
+    });
+  } else {
+    insights.push({
+      title: "Type-based insights need more data",
+      tone: "neutral",
+      body: "Keystone needs multiple reviewed + scheduled decisions per type to spot patterns.",
+    });
+  }
+
+  // 5) Learning velocity
+  insights.push({
+    title: "Learning velocity",
+    tone: reviews30 >= 5 ? "positive" : "neutral",
+    body: `You reviewed ${reviews30} decision(s) in the last 30 days. Every review compounds Keystone’s usefulness.`,
+  });
+
+  // 6) Small meta insight: how many decisions exist
+  insights.push({
+    title: "Decision trail depth",
+    tone: "neutral",
+    body: `You have ${decisions.length} decision(s) recorded, ${reviewedCount} reviewed, and ${withReviewAt.length} scheduled for review.`,
+  });
+
+  return { insights, stats: { reviewedCount } };
+}
+
 export default function EnginePage() {
   const { showToast } = useToast();
 
@@ -167,6 +436,10 @@ export default function EnginePage() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [bills, setBills] = useState<RecurringBill[]>([]);
   const [income, setIncome] = useState<RecurringIncome[]>([]);
+
+  // Decisions for insights
+  const [decisions, setDecisions] = useState<DecisionRow[]>([]);
+  const [insightsLoading, setInsightsLoading] = useState(true);
 
   // Step 1: last ran indicator (local-only)
   const [lastRanAt, setLastRanAt] = useState<string | null>(null);
@@ -189,6 +462,7 @@ export default function EnginePage() {
 
       setUserId(data.user.id);
       await loadAll(data.user.id);
+      await loadDecisionsForInsights(data.user.id);
       setLoading(false);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -226,10 +500,33 @@ export default function EnginePage() {
     return { accounts: a, bills: b, income: i };
   }
 
+  async function loadDecisionsForInsights(uid: string) {
+    setInsightsLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from("decisions")
+        .select("id,status,created_at,decided_at,reviewed_at,review_at,confidence_level,review_history,ai_json")
+        .eq("user_id", uid)
+        .order("created_at", { ascending: false });
+
+      if (error) {
+        setError(error.message);
+        setDecisions([]);
+        return;
+      }
+
+      setDecisions((data ?? []) as DecisionRow[]);
+    } finally {
+      setInsightsLoading(false);
+    }
+  }
+
   const activeBills = useMemo(() => bills.filter((b) => b.active), [bills]);
   const activeIncome = useMemo(() => income.filter((i) => i.active), [income]);
 
   const totals = useMemo(() => computeTotals(accounts, bills, income), [accounts, bills, income]);
+
+  const insightsPack = useMemo(() => buildInsights(decisions), [decisions]);
 
   function buildUpcomingBillsBody(t: ComputedTotals) {
     if (t.bills14.length === 0) {
@@ -484,6 +781,9 @@ export default function EnginePage() {
         .eq("user_id", userId)
         .in("dedupe_key", ["engine_missing_bills", "engine_missing_income"]);
 
+      // refresh decisions insights too (they may have changed)
+      await loadDecisionsForInsights(userId);
+
       setLastRanAt(new Date().toLocaleString());
       notify({
         title: "Engine v1 ran",
@@ -519,6 +819,63 @@ export default function EnginePage() {
                   {running ? "Running…" : "Run Engine v1"}
                 </Button>
               </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* ✅ NEW: Keystone Insights v1 */}
+        <Card className="bg-zinc-50">
+          <CardContent>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <div className="font-semibold">Keystone Insights (v1)</div>
+                <div className="text-sm opacity-70">
+                  Explainable patterns from your decision + review history. No guessing.
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="secondary"
+                  onClick={() => userId && loadDecisionsForInsights(userId)}
+                  disabled={!userId || insightsLoading}
+                >
+                  {insightsLoading ? "Refreshing…" : "Refresh insights"}
+                </Button>
+              </div>
+            </div>
+
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Badge>Decisions: {decisions.length}</Badge>
+              <Badge>Reviewed: {insightsPack.stats.reviewedCount}</Badge>
+              <Badge>Scheduled: {decisions.filter((d) => d.review_at != null).length}</Badge>
+            </div>
+
+            <div className="mt-4 grid gap-3">
+              {insightsLoading ? (
+                <div className="text-sm opacity-70">Loading insights…</div>
+              ) : (
+                insightsPack.insights.map((x, idx) => (
+                  <div
+                    key={`ins-${idx}`}
+                    className={`rounded-lg border p-3 ${
+                      x.tone === "warning"
+                        ? "border-amber-200 bg-amber-50"
+                        : x.tone === "positive"
+                        ? "border-emerald-200 bg-emerald-50"
+                        : "border-zinc-200 bg-white"
+                    }`}
+                  >
+                    <div className="font-semibold">{x.title}</div>
+                    <div className="text-sm opacity-80 mt-1 whitespace-pre-wrap">{x.body}</div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="text-xs opacity-60 mt-3">
+              Tip: Add confidence (0–100) when reviewing decisions to unlock richer confidence drift insights.
+(Decision confidence is currently 1–3.)
             </div>
           </CardContent>
         </Card>
