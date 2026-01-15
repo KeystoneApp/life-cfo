@@ -27,7 +27,6 @@ export default function LoginClient({ nextPath }: { nextPath: string }) {
 
     setStatus(`Signed in ✅ ${data.user?.email ?? ""}`);
 
-    // force server/proxy to re-evaluate auth cookie
     router.replace(nextPath || "/inbox");
     router.refresh();
   };
@@ -40,9 +39,13 @@ export default function LoginClient({ nextPath }: { nextPath: string }) {
 
     setStatus("Sending reset email...");
 
+    // IMPORTANT:
+    // Use the current origin so dev uses localhost and prod uses your Vercel domain automatically.
+    // Route through /auth/callback so the code is exchanged safely, then land on /reset.
+    const redirectTo = `${window.location.origin}/auth/callback?next=/reset`;
+
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      // IMPORTANT: update later to your Vercel URL when ready
-      redirectTo: "http://localhost:3000/auth/reset",
+      redirectTo,
     });
 
     if (error) {
