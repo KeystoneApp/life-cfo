@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { Badge, Button, Card, CardContent, useToast, Chip } from "@/components/ui";
 import { Page } from "@/components/Page";
@@ -33,6 +34,7 @@ type LiveStatus = "connecting" | "live" | "offline";
 
 export default function InboxPage() {
   const { showToast } = useToast();
+  const router = useRouter();
 
   const [statusLine, setStatusLine] = useState("Loading...");
   const [items, setItems] = useState<InboxItem[]>([]);
@@ -156,6 +158,10 @@ export default function InboxPage() {
   };
 
   const isEngineItem = (it: InboxItem) => it.type === "engine";
+
+  // Identify the Engine insights digest item (we don't currently select dedupe_key here)
+  const isEngineInsightsDigest = (it: InboxItem) =>
+    it.type === "engine" && it.title.trim().toLowerCase() === "keystone noticed (patterns)";
 
   function engineCardClasses(base: { border: string; bg: string }, isEngine: boolean) {
     if (!isEngine) return `${base.border} ${base.bg}`;
@@ -787,6 +793,7 @@ export default function InboxPage() {
             const b = severityBadge(it.severity);
             const s = severityStyle(it.severity);
             const engine = isEngineItem(it);
+            const isDigest = isEngineInsightsDigest(it);
 
             const analysis = aiPreview[it.id];
             const loading = !!aiLoading[it.id];
@@ -801,6 +808,7 @@ export default function InboxPage() {
                         <strong className="text-base">{it.title}</strong>
                         <Badge variant={b.variant}>{b.label}</Badge>
                         {engine && <Chip>Engine</Chip>}
+                        {isDigest && <Chip>Insights</Chip>}
                       </div>
 
                       <div className="text-xs text-zinc-500">
@@ -813,6 +821,37 @@ export default function InboxPage() {
 
                     {it.body && <div className="whitespace-pre-wrap text-sm text-zinc-800">{it.body}</div>}
 
+                    {/* Digest actions */}
+                    {isDigest && (
+                      <Card className="bg-white">
+                        <CardContent>
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="text-xs text-zinc-500">
+                              Shortcut actions — use the insight, then come back.
+                            </div>
+
+                            <div className="flex flex-wrap gap-2">
+                              <Button
+                                onClick={() => router.push("/decisions?tab=review")}
+                                title="Jump to decisions due for review"
+                              >
+                                Review now
+                              </Button>
+
+                              <Button variant="secondary" onClick={() => router.push("/engine")} title="Open Engine page">
+                                Open Engine
+                              </Button>
+
+                              <Button variant="secondary" onClick={() => snoozeItemMinutes(it.id, 60 * 24)} title="Hide for 24 hours">
+                                Snooze 24h
+                              </Button>
+                            </div>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    )}
+
+                    {/* AI Analysis */}
                     <div className="space-y-2">
                       <Button variant="secondary" onClick={() => analyzeItem(it)} disabled={loading}>
                         {loading ? "Analyzing..." : analysis ? "Re-analyze with AI" : "Analyze with AI"}
@@ -863,52 +902,58 @@ export default function InboxPage() {
                       )}
                     </div>
 
-                    <div className="space-y-2">
-                      <div className="text-xs text-zinc-500">How confident do you feel about this?</div>
+                    {/* Decision inputs (hide for digest; digest isn't a decision) */}
+                    {!isDigest && (
+                      <div className="space-y-2">
+                        <div className="text-xs text-zinc-500">How confident do you feel about this?</div>
 
-                      <div className="flex flex-wrap gap-4">
-                        {[1, 2, 3].map((level) => (
-                          <label
-                            key={level}
-                            className={`flex cursor-pointer items-center gap-2 text-sm ${
-                              decisionConfidence[it.id] === level ? "opacity-100" : "opacity-80"
-                            }`}
-                          >
-                            <input
-                              type="radio"
-                              name={`confidence-${it.id}`}
-                              checked={decisionConfidence[it.id] === level}
-                              onChange={() =>
-                                setDecisionConfidence((prev) => ({
-                                  ...prev,
-                                  [it.id]: level,
-                                }))
-                              }
-                            />
-                            {level === 1 ? "Low" : level === 2 ? "Medium" : "High"}
-                          </label>
-                        ))}
+                        <div className="flex flex-wrap gap-4">
+                          {[1, 2, 3].map((level) => (
+                            <label
+                              key={level}
+                              className={`flex cursor-pointer items-center gap-2 text-sm ${
+                                decisionConfidence[it.id] === level ? "opacity-100" : "opacity-80"
+                              }`}
+                            >
+                              <input
+                                type="radio"
+                                name={`confidence-${it.id}`}
+                                checked={decisionConfidence[it.id] === level}
+                                onChange={() =>
+                                  setDecisionConfidence((prev) => ({
+                                    ...prev,
+                                    [it.id]: level,
+                                  }))
+                                }
+                              />
+                              {level === 1 ? "Low" : level === 2 ? "Medium" : "High"}
+                            </label>
+                          ))}
+                        </div>
+
+                        <textarea
+                          placeholder="Why did you decide this? (optional)"
+                          value={decisionReason[it.id] ?? ""}
+                          onChange={(e) =>
+                            setDecisionReason((prev) => ({
+                              ...prev,
+                              [it.id]: e.target.value,
+                            }))
+                          }
+                          className="w-full min-h-[70px] rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
+                        />
                       </div>
+                    )}
 
-                      <textarea
-                        placeholder="Why did you decide this? (optional)"
-                        value={decisionReason[it.id] ?? ""}
-                        onChange={(e) =>
-                          setDecisionReason((prev) => ({
-                            ...prev,
-                            [it.id]: e.target.value,
-                          }))
-                        }
-                        className="w-full min-h-[70px] rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
-                      />
-                    </div>
-
+                    {/* Actions */}
                     <div className="flex flex-wrap gap-2">
-                      <Button onClick={() => decideNowAndCloseInboxItem(it)}>Decide Now ✅</Button>
+                      {!isDigest && <Button onClick={() => decideNowAndCloseInboxItem(it)}>Decide Now ✅</Button>}
 
-                      <Button variant="secondary" onClick={() => promoteInboxItemToDecision(it)}>
-                        Promote → Decisions
-                      </Button>
+                      {!isDigest && (
+                        <Button variant="secondary" onClick={() => promoteInboxItemToDecision(it)}>
+                          Promote → Decisions
+                        </Button>
+                      )}
 
                       <Button variant="secondary" onClick={() => doneItem(it.id)}>
                         Done
