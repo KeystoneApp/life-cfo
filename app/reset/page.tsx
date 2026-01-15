@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
-import { Badge, Button, Card, CardContent, useToast } from "@/components/ui";
+import { Button, Card, CardContent, useToast } from "@/components/ui";
 import { Page } from "@/components/Page";
 
 type Stage = "checking" | "ready" | "error";
@@ -11,6 +11,17 @@ type Stage = "checking" | "ready" | "error";
 function isPkceError(msg: string) {
   const m = (msg || "").toLowerCase();
   return m.includes("pkce") || m.includes("code verifier");
+}
+
+function KeystoneBrand() {
+  return (
+    <div className="flex items-center justify-center gap-3">
+      <div className="flex h-10 w-10 items-center justify-center rounded-full bg-zinc-900 text-sm font-semibold text-white">
+        K
+      </div>
+      <div className="text-base font-semibold text-zinc-900">Keystone</div>
+    </div>
+  );
 }
 
 export default function ResetPasswordPage() {
@@ -42,8 +53,6 @@ export default function ResetPasswordPage() {
       setSignedInEmail(null);
 
       try {
-        // /auth/reset exchanges the code and redirects here.
-        // If cookies/session are present, session should exist now.
         const { data, error } = await supabase.auth.getSession();
 
         if (!mounted) return;
@@ -63,7 +72,7 @@ export default function ResetPasswordPage() {
 
         setSignedInEmail(session.user?.email ?? null);
         setStage("ready");
-        setMessage("Set a new password below.");
+        setMessage("");
       } catch (e: any) {
         if (!mounted) return;
         setStage("error");
@@ -97,52 +106,48 @@ export default function ResetPasswordPage() {
       }
 
       showToast({ message: "Password updated ✅ Redirecting you to Inbox…" }, 6000);
-
-      // After password update, send them back into the app.
       window.location.href = "/inbox";
     } finally {
       setSaving(false);
     }
   };
 
-  const statusBadge = () => {
-    if (stage === "checking") return <Badge variant="warning">Checking…</Badge>;
-    if (stage === "ready") return <Badge variant="success">Ready</Badge>;
-    return <Badge variant="danger">Action needed</Badge>;
-  };
-
   return (
-    <Page
-      title="Reset password"
-      subtitle={
-        <div className="space-y-2">
-          <div className="flex items-center gap-2">
-            {statusBadge()}
-            <div className="text-zinc-700">{message}</div>
-          </div>
+    <Page title="Reset password" subtitle="">
+      <div className="mx-auto w-full max-w-xl space-y-4">
+        {/* Brand (like login) */}
+        <div className="pt-2">
+          <KeystoneBrand />
+        </div>
+
+        {/* Heading + signed-in line */}
+        <div className="space-y-1 text-center">
+          <div className="text-3xl font-semibold tracking-tight text-zinc-900">Reset password</div>
 
           {stage === "ready" && (
-            <div className="text-sm text-zinc-600">
+            <div className="text-sm text-zinc-700">
               {signedInEmail ? (
                 <span>
-                  Signed in as <strong>{signedInEmail}</strong>.
+                  Signed in as <strong>{signedInEmail}</strong>
                 </span>
               ) : (
-                <span>Signed in.</span>
+                <span>Signed in</span>
               )}
             </div>
           )}
+
+          {stage === "checking" && <div className="text-sm text-zinc-600">Checking reset session…</div>}
+
+          {stage === "error" && message && <div className="text-sm text-red-700">{message}</div>}
         </div>
-      }
-    >
-      <div className="mx-auto w-full max-w-xl space-y-3">
+
         <Card>
           <CardContent>
             {stage !== "ready" ? (
               <div className="space-y-3">
-                <div className="text-sm text-zinc-700">{message}</div>
+                <div className="text-sm text-zinc-700">{message || "Checking reset session…"}</div>
 
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap justify-center gap-2">
                   <Link href="/login">
                     <Button>Request a new reset email</Button>
                   </Link>
@@ -154,8 +159,8 @@ export default function ResetPasswordPage() {
 
                 {stage === "error" && (
                   <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
-                    Tip: open the newest reset email link in the same browser/device where you requested it.
-                    If anything looks off, request a fresh reset email.
+                    Tip: open the newest reset email link in the same browser/device where you requested it. If anything looks
+                    off, request a fresh reset email.
                   </div>
                 )}
               </div>
@@ -196,7 +201,7 @@ export default function ResetPasswordPage() {
                   </div>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2">
+                <div className="flex flex-wrap items-center justify-center gap-2">
                   <Button onClick={onSubmit} disabled={!canSubmit || saving}>
                     {saving ? "Setting…" : "Set new password"}
                   </Button>
