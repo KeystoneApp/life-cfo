@@ -610,9 +610,9 @@ export default function EnginePage() {
       return [] as DecisionRow[];
     }
 
-    const rows = (data ?? []) as DecisionRow[];
-    setDecisions(rows);
-    return rows;
+    const decisionRows = (data ?? []) as DecisionRow[];
+    setDecisions(decisionRows);
+    return decisionRows;
   } finally {
     setInsightsLoading(false);
   }
@@ -727,10 +727,9 @@ export default function EnginePage() {
     if (upErr) throw upErr;
   }
 
-async function writeInsightsDigest(runId: string, rows: DecisionRow[]) {
-  const pack = buildInsightsV2(rows);
+async function writeInsightsDigest(runId: string, decisionRows: DecisionRow[]) {
+  const pack = buildInsightsV2(decisionRows);
 
-  // Pick the most useful ones for Inbox (keep it short)
   const top = pack.insights.slice(0, 5);
 
   const body = [
@@ -743,8 +742,7 @@ async function writeInsightsDigest(runId: string, rows: DecisionRow[]) {
     "Tip: Reviewing (and adding confidence 0–100) makes Keystone’s patterns sharper.",
   ].join("\n");
 
-  const severity =
-    pack.stats.overdueNow > 0 ? 2 : pack.stats.reviewed === 0 ? 1 : 1;
+  const severity = pack.stats.overdueNow > 0 ? 2 : 1;
 
   await writeSingleReminder({
     runId,
@@ -908,8 +906,7 @@ async function writeInsightsDigest(runId: string, rows: DecisionRow[]) {
 
       // refresh decisions insights too (they may have changed)
       const decisionRows = await loadDecisionsForInsights(userId);
-      await writeInsightsDigest(runId, decisionRows);
-
+await writeInsightsDigest(runId, decisionRows);
 
       setLastRanAt(new Date().toLocaleString());
       notify({
