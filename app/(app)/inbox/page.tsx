@@ -1,3 +1,4 @@
+// app/(app)/inbox/page.tsx
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -7,9 +8,10 @@ import { Badge, Button, Card, CardContent, useToast, Chip } from "@/components/u
 import { Page } from "@/components/Page";
 
 // ---- CONFIG ----
-// If your Decisions page isn't ready to show "draft" items yet,
-// keep this as "decided" so promoted items appear immediately.
 const PROMOTED_STATUS: "decided" | "draft" = "decided";
+
+// ✅ This is the dedupe key Engine v2 writes for the patterns digest
+const INSIGHTS_DEDUPE_KEY = "engine_insights_v2_digest";
 
 type InboxItem = {
   id: string;
@@ -17,11 +19,14 @@ type InboxItem = {
   type: string;
   title: string;
   body: string | null;
-  severity: number | null; // 1 = highest priority, 3 = lowest
-  status: string; // open | snoozed | done
+  severity: number | null;
+  status: string;
   snoozed_until: string | null;
   created_at: string | null;
   updated_at: string | null;
+
+  // ✅ important for insights actions
+  dedupe_key?: string | null;
 };
 
 function isoNowPlusMinutes(mins: number) {
@@ -62,9 +67,7 @@ export default function InboxPage() {
   // Live indicator
   const [liveStatus, setLiveStatus] = useState<LiveStatus>("connecting");
 
-  // stable load reference (prevents stale closure issues in realtime callbacks)
   const loadRef = useRef<() => void>(() => {});
-  // Realtime: throttle reload
   const reloadTimerRef = useRef<number | null>(null);
 
   const scheduleReload = () => {
@@ -158,20 +161,15 @@ export default function InboxPage() {
   };
 
   const isEngineItem = (it: InboxItem) => it.type === "engine";
-
-  // Identify the Engine insights digest item (we don't currently select dedupe_key here)
-  const isEngineInsightsDigest = (it: InboxItem) =>
-    it.type === "engine" && it.title.trim().toLowerCase() === "keystone noticed (patterns)";
+  const isInsightsDigest = (it: InboxItem) => isEngineItem(it) && (it.dedupe_key ?? "") === INSIGHTS_DEDUPE_KEY;
 
   function engineCardClasses(base: { border: string; bg: string }, isEngine: boolean) {
     if (!isEngine) return `${base.border} ${base.bg}`;
-    // subtle "official" reminder styling: soft background + left accent, without changing severity meaning
     return `${base.border} bg-zinc-50 border-l-4 border-l-zinc-400`;
   }
 
   const prettySupabaseError = (e: any) => {
     const msg = typeof e?.message === "string" ? e.message : "";
-    // common uniqueness/duplicate messages (varies by platform)
     if (
       msg.toLowerCase().includes("duplicate key") ||
       msg.toLowerCase().includes("unique") ||
@@ -222,7 +220,6 @@ export default function InboxPage() {
     setStatusLine(`Loaded ${data?.length ?? 0} item(s).`);
   };
 
-  // keep loadRef updated
   useEffect(() => {
     loadRef.current = () => {
       load();
@@ -293,47 +290,6 @@ export default function InboxPage() {
       return Number.isNaN(snoozeMs) ? true : snoozeMs <= now;
     });
   }, [items, now]);
-
-  // kept (even if unused right now) — useful for later UI
-  const handledTodayCount = useMemo(() => {
-    const startOfToday = new Date();
-    startOfToday.setHours(0, 0, 0, 0);
-
-    return items.filter((it) => {
-      if (it.status !== "done") return false;
-      if (!it.updated_at) return false;
-      const updated = new Date(it.updated_at);
-      return updated >= startOfToday;
-    }).length;
-  }, [items]);
-
-  const hasDecisionThisWeek = useMemo(() => {
-    const startOfWeek = new Date();
-    const day = startOfWeek.getDay();
-    const diff = startOfWeek.getDate() - day + (day === 0 ? -6 : 1);
-    startOfWeek.setDate(diff);
-    startOfWeek.setHours(0, 0, 0, 0);
-
-    return items.some((it) => {
-      if (it.status !== "done") return false;
-      if (!it.updated_at) return false;
-      return new Date(it.updated_at) >= startOfWeek;
-    });
-  }, [items]);
-
-  const focusItems = useMemo(() => {
-    const sorted = [...visibleItems].sort((a, b) => {
-      const pa = priorityValue(a.severity);
-      const pb = priorityValue(b.severity);
-      if (pa !== pb) return pa - pb;
-
-      const ta = a.created_at ? Date.parse(a.created_at) : 0;
-      const tb = b.created_at ? Date.parse(b.created_at) : 0;
-      return tb - ta;
-    });
-
-    return sorted.slice(0, 2);
-  }, [visibleItems]);
 
   // ---------- manual add ----------
   const addManualInboxItem = async () => {
@@ -505,7 +461,6 @@ export default function InboxPage() {
       const userReason = decisionReason[item.id]?.trim() ? decisionReason[item.id].trim() : null;
       const confidenceLevel = decisionConfidence[item.id] ?? null;
 
-      // 1) AI (must not block)
       let ai: any = null;
       try {
         const res = await fetch("/api/analyze-decision", {
@@ -526,7 +481,6 @@ export default function InboxPage() {
         ai = null;
       }
 
-      // 2) Insert decision AND capture its id (needed for Undo)
       const { data: inserted, error: insertError } = await supabase
         .from("decisions")
         .insert({
@@ -561,7 +515,6 @@ export default function InboxPage() {
         return;
       }
 
-      // 3) Close inbox item
       const { error: closeError } = await supabase
         .from("decision_inbox")
         .update({ status: "done", snoozed_until: null })
@@ -613,7 +566,6 @@ export default function InboxPage() {
     }
   };
 
-  // ✅ Promote (Inbox → Decisions) without deciding yet
   const promoteInboxItemToDecision = async (item: InboxItem) => {
     if (!userId) return;
 
@@ -667,9 +619,7 @@ export default function InboxPage() {
         return;
       }
 
-      setItems((prev) =>
-        prev.map((it) => (it.id === item.id ? { ...it, status: "done", snoozed_until: null } : it))
-      );
+      setItems((prev) => prev.map((it) => (it.id === item.id ? { ...it, status: "done", snoozed_until: null } : it)));
       clearPerItemInputs(item.id);
 
       setStatusLine("Promoted ✅");
@@ -698,10 +648,7 @@ export default function InboxPage() {
               return;
             }
 
-            setItems((prev) =>
-              prev.map((it) => (it.id === item.id ? { ...it, status: "open", snoozed_until: null } : it))
-            );
-
+            setItems((prev) => prev.map((it) => (it.id === item.id ? { ...it, status: "open", snoozed_until: null } : it)));
             setStatusLine("Undone ✅");
           },
         },
@@ -793,7 +740,7 @@ export default function InboxPage() {
             const b = severityBadge(it.severity);
             const s = severityStyle(it.severity);
             const engine = isEngineItem(it);
-            const isDigest = isEngineInsightsDigest(it);
+            const insights = isInsightsDigest(it);
 
             const analysis = aiPreview[it.id];
             const loading = !!aiLoading[it.id];
@@ -808,7 +755,19 @@ export default function InboxPage() {
                         <strong className="text-base">{it.title}</strong>
                         <Badge variant={b.variant}>{b.label}</Badge>
                         {engine && <Chip>Engine</Chip>}
-                        {isDigest && <Chip>Insights</Chip>}
+
+                        {/* ✅ clickable Insights chip (only for digest) */}
+                        {insights && (
+                          <Chip
+                            active={false}
+                            onClick={() => {
+                              router.push("/engine");
+                            }}
+                            title="Open Engine (insights are generated there)"
+                          >
+                            Insights
+                          </Chip>
+                        )}
                       </div>
 
                       <div className="text-xs text-zinc-500">
@@ -821,28 +780,32 @@ export default function InboxPage() {
 
                     {it.body && <div className="whitespace-pre-wrap text-sm text-zinc-800">{it.body}</div>}
 
-                    {/* Digest actions */}
-                    {isDigest && (
+                    {/* ✅ Shortcut panel for insights digest */}
+                    {insights && (
                       <Card className="bg-white">
                         <CardContent>
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <div className="text-xs text-zinc-500">
-                              Shortcut actions — use the insight, then come back.
-                            </div>
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div className="text-sm text-zinc-600">Shortcut actions — use the insight, then come back.</div>
 
                             <div className="flex flex-wrap gap-2">
                               <Button
-                                onClick={() => router.push("/decisions?tab=review")}
-                                title="Jump to decisions due for review"
+                                onClick={() => {
+                                  router.push("/decisions?tab=review");
+                                }}
                               >
                                 Review now
                               </Button>
 
-                              <Button variant="secondary" onClick={() => router.push("/engine")} title="Open Engine page">
+                              <Button
+                                variant="secondary"
+                                onClick={() => {
+                                  router.push("/engine");
+                                }}
+                              >
                                 Open Engine
                               </Button>
 
-                              <Button variant="secondary" onClick={() => snoozeItemMinutes(it.id, 60 * 24)} title="Hide for 24 hours">
+                              <Button variant="secondary" onClick={() => snoozeItemMinutes(it.id, 60 * 24)}>
                                 Snooze 24h
                               </Button>
                             </div>
@@ -851,7 +814,6 @@ export default function InboxPage() {
                       </Card>
                     )}
 
-                    {/* AI Analysis */}
                     <div className="space-y-2">
                       <Button variant="secondary" onClick={() => analyzeItem(it)} disabled={loading}>
                         {loading ? "Analyzing..." : analysis ? "Re-analyze with AI" : "Analyze with AI"}
@@ -868,9 +830,7 @@ export default function InboxPage() {
                               <div className="flex flex-wrap gap-2 text-xs text-zinc-600">
                                 {analysis.decision_type && <span>Type: {analysis.decision_type}</span>}
                                 {analysis.stakes && <span>• Stakes: {analysis.stakes}</span>}
-                                {analysis.reversible != null && (
-                                  <span>• Reversible: {analysis.reversible ? "Yes" : "No"}</span>
-                                )}
+                                {analysis.reversible != null && <span>• Reversible: {analysis.reversible ? "Yes" : "No"}</span>}
                                 {analysis.time_horizon && <span>• Horizon: {analysis.time_horizon}</span>}
                               </div>
 
@@ -902,58 +862,52 @@ export default function InboxPage() {
                       )}
                     </div>
 
-                    {/* Decision inputs (hide for digest; digest isn't a decision) */}
-                    {!isDigest && (
-                      <div className="space-y-2">
-                        <div className="text-xs text-zinc-500">How confident do you feel about this?</div>
+                    <div className="space-y-2">
+                      <div className="text-xs text-zinc-500">How confident do you feel about this?</div>
 
-                        <div className="flex flex-wrap gap-4">
-                          {[1, 2, 3].map((level) => (
-                            <label
-                              key={level}
-                              className={`flex cursor-pointer items-center gap-2 text-sm ${
-                                decisionConfidence[it.id] === level ? "opacity-100" : "opacity-80"
-                              }`}
-                            >
-                              <input
-                                type="radio"
-                                name={`confidence-${it.id}`}
-                                checked={decisionConfidence[it.id] === level}
-                                onChange={() =>
-                                  setDecisionConfidence((prev) => ({
-                                    ...prev,
-                                    [it.id]: level,
-                                  }))
-                                }
-                              />
-                              {level === 1 ? "Low" : level === 2 ? "Medium" : "High"}
-                            </label>
-                          ))}
-                        </div>
-
-                        <textarea
-                          placeholder="Why did you decide this? (optional)"
-                          value={decisionReason[it.id] ?? ""}
-                          onChange={(e) =>
-                            setDecisionReason((prev) => ({
-                              ...prev,
-                              [it.id]: e.target.value,
-                            }))
-                          }
-                          className="w-full min-h-[70px] rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
-                        />
+                      <div className="flex flex-wrap gap-4">
+                        {[1, 2, 3].map((level) => (
+                          <label
+                            key={level}
+                            className={`flex cursor-pointer items-center gap-2 text-sm ${
+                              decisionConfidence[it.id] === level ? "opacity-100" : "opacity-80"
+                            }`}
+                          >
+                            <input
+                              type="radio"
+                              name={`confidence-${it.id}`}
+                              checked={decisionConfidence[it.id] === level}
+                              onChange={() =>
+                                setDecisionConfidence((prev) => ({
+                                  ...prev,
+                                  [it.id]: level,
+                                }))
+                              }
+                            />
+                            {level === 1 ? "Low" : level === 2 ? "Medium" : "High"}
+                          </label>
+                        ))}
                       </div>
-                    )}
 
-                    {/* Actions */}
+                      <textarea
+                        placeholder="Why did you decide this? (optional)"
+                        value={decisionReason[it.id] ?? ""}
+                        onChange={(e) =>
+                          setDecisionReason((prev) => ({
+                            ...prev,
+                            [it.id]: e.target.value,
+                          }))
+                        }
+                        className="w-full min-h-[70px] rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
+                      />
+                    </div>
+
                     <div className="flex flex-wrap gap-2">
-                      {!isDigest && <Button onClick={() => decideNowAndCloseInboxItem(it)}>Decide Now ✅</Button>}
+                      <Button onClick={() => decideNowAndCloseInboxItem(it)}>Decide Now ✅</Button>
 
-                      {!isDigest && (
-                        <Button variant="secondary" onClick={() => promoteInboxItemToDecision(it)}>
-                          Promote → Decisions
-                        </Button>
-                      )}
+                      <Button variant="secondary" onClick={() => promoteInboxItemToDecision(it)}>
+                        Promote → Decisions
+                      </Button>
 
                       <Button variant="secondary" onClick={() => doneItem(it.id)}>
                         Done

@@ -1,3 +1,4 @@
+// app/(app)/decisions/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -147,18 +148,19 @@ export default function DecisionsPage() {
   const [draftAiLoading, setDraftAiLoading] = useState<Record<string, boolean>>({});
   const [draftAiError, setDraftAiError] = useState<Record<string, string>>({});
 
-  // --- read tab from URL (first mount + when URL changes) ---
+  // ✅ URL -> tab sync (so /decisions?tab=review selects Review)
   useEffect(() => {
-    const t = (searchParams?.get("tab") ?? "").toLowerCase();
-    if (t === "review" || t === "drafts" || t === "all") {
-      setTab(t as TabMode);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const urlTab = (searchParams.get("tab") || "all") as TabMode;
+    if (urlTab === "all" || urlTab === "review" || urlTab === "drafts") setTab(urlTab);
   }, [searchParams]);
 
   const setTabAndUrl = (next: TabMode) => {
     setTab(next);
-    router.replace(`/decisions?tab=${next}`);
+    const sp = new URLSearchParams(Array.from(searchParams.entries()));
+    if (next === "all") sp.delete("tab");
+    else sp.set("tab", next);
+    const qs = sp.toString();
+    router.replace(qs ? `/decisions?${qs}` : "/decisions");
   };
 
   const load = async () => {
@@ -502,7 +504,6 @@ export default function DecisionsPage() {
     }
   };
 
-  // finishing a draft also closes the linked inbox item (if present)
   const finishDraftDecision = async (d: Decision) => {
     setDraftSaving((prev) => ({ ...prev, [d.id]: true }));
     setStatusLine("Saving decision...");
@@ -568,7 +569,10 @@ export default function DecisionsPage() {
         onUndo: async () => {
           setStatusLine("Undoing...");
 
-          const { error: undoErr } = await supabase.from("decisions").update({ status: "draft", decided_at: null }).eq("id", d.id);
+          const { error: undoErr } = await supabase
+            .from("decisions")
+            .update({ status: "draft", decided_at: null })
+            .eq("id", d.id);
 
           if (undoErr) {
             setStatusLine(`Undo failed: ${undoErr.message}`);
@@ -589,7 +593,7 @@ export default function DecisionsPage() {
 
           setRows((prev) =>
             prev.map((x) =>
-              x.id === d.id ? { ...x, status: prevStatus, decided_at: (prevDecidedAt as any) ?? null } : x
+              x.id === d.id ? { ...x, status: prevStatus, decided_at: prevDecidedAt ?? null } : x
             )
           );
 
@@ -904,7 +908,7 @@ export default function DecisionsPage() {
                   </div>
                 )}
 
-                {/* header is a DIV (not a button) to avoid nested-button hydration issues */}
+                {/* ✅ IMPORTANT: this is a DIV now (not a button) to avoid nested button hydration errors */}
                 <div
                   role="button"
                   tabIndex={0}
@@ -912,8 +916,9 @@ export default function DecisionsPage() {
                   onKeyDown={(e) => {
                     if (e.key === "Enter" || e.key === " ") toggleOne(d.id);
                   }}
-                  className="w-full cursor-pointer select-none"
+                  className="w-full cursor-pointer select-none bg-transparent p-0 text-left"
                   title={isOpen ? "Collapse" : "Expand"}
+                  style={{ border: "none" }}
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex items-start gap-3">
@@ -939,6 +944,20 @@ export default function DecisionsPage() {
                           {conf && <Badge variant="muted">Confidence: {conf}</Badge>}
                           {suggested && <Badge variant="muted">AI: {suggested}</Badge>}
                           {isDraft && d.inbox_item_id && <Badge variant="muted">Linked to Inbox</Badge>}
+
+                          {/* One-click review link (only when due) */}
+                          {!isDraft && due && (
+                            <Button
+                              variant="secondary"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                router.push(`/decisions/${d.id}/review`);
+                              }}
+                              title="Open the review form"
+                            >
+                              Review
+                            </Button>
+                          )}
                         </div>
 
                         <div className="mt-1 text-xs text-zinc-500">
@@ -975,20 +994,20 @@ export default function DecisionsPage() {
                         </Button>
                       )}
 
-                      <Button variant="secondary" onClick={(e) => { e.stopPropagation(); reviewIn1Day(d.id); }}>
+                      <Button variant="secondary" onClick={() => reviewIn1Day(d.id)}>
                         ⏳ Review in 1 day
                       </Button>
-                      <Button variant="secondary" onClick={(e) => { e.stopPropagation(); reviewIn3Days(d.id); }}>
+                      <Button variant="secondary" onClick={() => reviewIn3Days(d.id)}>
                         ⏳ Review in 3 days
                       </Button>
-                      <Button variant="secondary" onClick={(e) => { e.stopPropagation(); reviewIn7Days(d.id); }}>
+                      <Button variant="secondary" onClick={() => reviewIn7Days(d.id)}>
                         ⏳ Review in 7 days
                       </Button>
-                      <Button variant="secondary" onClick={(e) => { e.stopPropagation(); reviewIn30Days(d.id); }}>
+                      <Button variant="secondary" onClick={() => reviewIn30Days(d.id)}>
                         ⏳ Review in 30 days
                       </Button>
 
-                      <Button variant="secondary" onClick={(e) => { e.stopPropagation(); clearReviewAt(d.id); }}>
+                      <Button variant="secondary" onClick={() => clearReviewAt(d.id)}>
                         🧹 Clear review
                       </Button>
                     </div>
