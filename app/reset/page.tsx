@@ -2,9 +2,12 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
+import { useRouter } from "next/navigation";
 
 export default function ResetPasswordPage() {
-  const [status, setStatus] = useState<string>("Reading reset token...");
+  const router = useRouter();
+
+  const [status, setStatus] = useState<string>("Checking session...");
   const [ready, setReady] = useState(false);
 
   const [pw, setPw] = useState("");
@@ -12,41 +15,23 @@ export default function ResetPasswordPage() {
 
   useEffect(() => {
     const run = async () => {
-      // Supabase recovery links arrive in the hash (#access_token=...&refresh_token=...&type=recovery)
-      const hash = window.location.hash || "";
-      if (!hash) {
-        setStatus("No reset token found in URL. Please click the reset email link again.");
+      const { data, error } = await supabase.auth.getUser();
+
+      if (error) {
+        // This usually means no active session
+        setStatus("No active reset session found. Please click the reset link from your email again.");
+        setReady(false);
         return;
       }
 
-      const params = new URLSearchParams(hash.replace("#", ""));
-      const access_token = params.get("access_token");
-      const refresh_token = params.get("refresh_token");
-      const type = params.get("type");
-
-      if (!access_token || !refresh_token) {
-        setStatus("Reset token missing or expired. Please request a new reset email.");
+      if (!data?.user) {
+        setStatus("No active reset session found. Please click the reset link from your email again.");
+        setReady(false);
         return;
       }
 
-      if (type !== "recovery") {
-        // Not fatal, but helps debugging
-        console.log("Auth type:", type);
-      }
-
-      setStatus("Setting session...");
-      const { error: setErr } = await supabase.auth.setSession({
-        access_token,
-        refresh_token,
-      });
-
-      if (setErr) {
-        setStatus(`Could not set session: ${setErr.message}`);
-        return;
-      }
-
+      setStatus("Ready ✅ Enter a new password.");
       setReady(true);
-      setStatus("Session set ✅ Enter a new password.");
     };
 
     run();
@@ -72,9 +57,14 @@ export default function ResetPasswordPage() {
       return;
     }
 
-    setStatus("Password updated ✅ You can close this tab.");
-    // Optional: sign out to force a clean next login
+    setStatus("Password updated ✅ Redirecting to Inbox...");
+    // Optional: you can sign out if you prefer forcing a fresh login:
     // await supabase.auth.signOut();
+
+    setTimeout(() => {
+      router.replace("/inbox");
+      router.refresh();
+    }, 800);
   };
 
   return (
