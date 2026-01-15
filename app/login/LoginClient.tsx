@@ -31,30 +31,28 @@ export default function LoginClient({ nextPath }: { nextPath: string }) {
     router.refresh();
   };
 
-  const sendReset = async () => {
-    if (!email.trim()) {
-      setStatus("Type your email first, then click Reset.");
-      return;
-    }
+ const sendReset = async () => {
+  if (!email.trim()) {
+    setStatus("Type your email first, then click Reset.");
+    return;
+  }
 
-    setStatus("Sending reset email...");
+  setStatus("Sending reset email...");
 
-    // IMPORTANT:
-    // Use current origin so dev uses localhost and prod uses Vercel automatically.
-    // Use a dedicated reset callback route so we ALWAYS end up at /reset (no guessing).
-    const redirectTo = `${window.location.origin}/auth/reset`;
+  // Password recovery works best with the hash-token flow.
+  const redirectTo = `${window.location.origin}/reset`;
 
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo,
-    });
+  const { error } = await supabase.auth.resetPasswordForEmail(email, {
+    redirectTo,
+  });
 
-    if (error) {
-      setStatus(`Reset failed: ${error.message}`);
-      return;
-    }
+  if (error) {
+    setStatus(`Reset failed: ${error.message}`);
+    return;
+  }
 
-    setStatus("Reset email sent ✅ Check your inbox.");
-  };
+  setStatus("Reset email sent ✅ Check your inbox.");
+};
 
   return (
     <main style={{ padding: 24, fontFamily: "system-ui", maxWidth: 520 }}>

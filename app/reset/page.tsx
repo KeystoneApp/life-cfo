@@ -7,29 +7,59 @@ import { supabase } from "@/lib/supabaseClient";
 export default function ResetPasswordPage() {
   const router = useRouter();
 
-  const [status, setStatus] = useState("Checking reset session...");
+  const [status, setStatus] = useState("Reading reset link...");
   const [ready, setReady] = useState(false);
 
   const [pw, setPw] = useState("");
   const [pw2, setPw2] = useState("");
 
   useEffect(() => {
-    const checkSession = async () => {
-      const { data, error } = await supabase.auth.getUser();
-
-      if (error || !data?.user) {
-        setStatus(
-          "No active reset session found. Please click the newest reset link in your email."
-        );
+    const run = async () => {
+      // Supabase recovery links typically include tokens in the hash:
+      // #access_token=...&refresh_token=...&type=recovery
+      const hash = window.location.hash || "";
+      if (!hash) {
+        setStatus("No reset token found. Please click the newest reset link in your email.");
         setReady(false);
         return;
+      }
+
+      const params = new URLSearchParams(hash.replace("#", ""));
+      const access_token = params.get("access_token");
+      const refresh_token = params.get("refresh_token");
+      const type = params.get("type");
+
+      if (!access_token || !refresh_token) {
+        setStatus("Reset token missing or expired. Please request a new reset email.");
+        setReady(false);
+        return;
+      }
+
+      setStatus("Setting reset session...");
+
+      const { error } = await supabase.auth.setSession({
+        access_token,
+        refresh_token,
+      });
+
+      if (error) {
+        setStatus(`Could not set session: ${error.message}`);
+        setReady(false);
+        return;
+      }
+
+      // Optional: clean up the URL so tokens aren't left in the address bar
+      window.history.replaceState(null, "", "/reset");
+
+      if (type && type !== "recovery") {
+        console.log("Auth type:", type);
       }
 
       setStatus("Ready ✅ Enter a new password.");
       setReady(true);
     };
 
-    checkSession();
+    run();
   }, []);
 
   const onSubmit = async (e: React.FormEvent) => {
@@ -39,7 +69,6 @@ export default function ResetPasswordPage() {
       setStatus("Password must be at least 8 characters.");
       return;
     }
-
     if (pw !== pw2) {
       setStatus("Passwords do not match.");
       return;
