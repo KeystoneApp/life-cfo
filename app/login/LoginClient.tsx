@@ -12,15 +12,19 @@ export default function LoginClient({ nextPath }: { nextPath: string }) {
   const [password, setPassword] = useState("");
   const [status, setStatus] = useState<string>("");
 
-  // If auth callback sends us back with an error, show it nicely
+  // Surface auth errors passed back via redirect
   useEffect(() => {
-    const err = searchParams?.get("err") || searchParams?.get("error_description");
+    const err =
+      searchParams?.get("err") ||
+      searchParams?.get("error") ||
+      searchParams?.get("error_description");
+
     if (err) setStatus(decodeURIComponent(err));
   }, [searchParams]);
 
   const signIn = async (e: React.FormEvent) => {
     e.preventDefault();
-    setStatus("Signing in...");
+    setStatus("Signing in…");
 
     const { data, error } = await supabase.auth.signInWithPassword({
       email,
@@ -40,13 +44,12 @@ export default function LoginClient({ nextPath }: { nextPath: string }) {
 
   const sendReset = async () => {
     if (!email.trim()) {
-      setStatus("Type your email first, then click Reset.");
+      setStatus("Enter your email first, then click reset.");
       return;
     }
 
-    setStatus("Sending reset email...");
+    setStatus("Sending reset email…");
 
-    // Keep this as the stable, working reset path:
     const redirectTo = `${window.location.origin}/auth/reset`;
 
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
@@ -62,18 +65,26 @@ export default function LoginClient({ nextPath }: { nextPath: string }) {
   };
 
   return (
-    <main className="min-h-[calc(100vh-0px)] bg-neutral-50 flex items-center justify-center px-4 py-12">
-      <div className="w-full max-w-md">
-        <div className="mb-6 text-center">
-          <div className="mx-auto mb-3 h-10 w-10 rounded-2xl bg-black/90 flex items-center justify-center text-white font-semibold">
+    <main className="min-h-screen bg-neutral-50 flex items-center justify-center px-4 py-12">
+      <div className="w-full max-w-md space-y-6">
+        {/* Header / Mini landing */}
+        <div className="text-center space-y-3">
+          <div className="mx-auto h-11 w-11 rounded-2xl bg-black flex items-center justify-center text-white font-semibold text-lg">
             K
           </div>
-          <h1 className="text-2xl font-semibold tracking-tight">Login</h1>
-          <p className="mt-1 text-sm text-neutral-600">
-            Sign in to access your Keystone workspace.
+
+          <h1 className="text-2xl font-semibold tracking-tight">
+            Welcome to Keystone
+          </h1>
+
+          <p className="text-sm text-neutral-600 leading-relaxed">
+            Keystone is a values-first decision and money operating system.
+            Capture what matters, make clear decisions, and review them over
+            time — without noise or guilt.
           </p>
         </div>
 
+        {/* Login card */}
         <div className="rounded-2xl border border-neutral-200 bg-white shadow-sm p-6">
           <form onSubmit={signIn} className="space-y-4">
             <div>
@@ -115,7 +126,7 @@ export default function LoginClient({ nextPath }: { nextPath: string }) {
               onClick={sendReset}
               className="w-full rounded-xl border border-neutral-300 bg-white py-2.5 font-medium text-neutral-900 hover:bg-neutral-50 transition"
             >
-              Forgot password (send reset email)
+              Forgot password
             </button>
 
             {status && (
@@ -126,8 +137,9 @@ export default function LoginClient({ nextPath }: { nextPath: string }) {
           </form>
         </div>
 
-        <p className="mt-6 text-center text-xs text-neutral-500">
-          Keystone • values-first decisions and money OS
+        {/* Footer values line */}
+        <p className="text-center text-xs text-neutral-500">
+          Designed for clarity • Built for long-term thinking
         </p>
       </div>
     </main>
