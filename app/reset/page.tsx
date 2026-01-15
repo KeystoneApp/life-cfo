@@ -19,11 +19,11 @@ export default function ResetPasswordPage() {
   const [stage, setStage] = useState<Stage>("checking");
   const [message, setMessage] = useState<string>("Checking reset session…");
 
+  const [signedInEmail, setSignedInEmail] = useState<string | null>(null);
+
   const [newPassword, setNewPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [saving, setSaving] = useState(false);
-
-  const [signedInEmail, setSignedInEmail] = useState<string | null>(null);
 
   const canSubmit = useMemo(() => {
     if (stage !== "ready") return false;
@@ -42,6 +42,7 @@ export default function ResetPasswordPage() {
       setSignedInEmail(null);
 
       try {
+        // /auth/reset exchanges the code and redirects here with a session in cookies.
         const { data, error } = await supabase.auth.getSession();
 
         if (!mounted) return;
@@ -55,14 +56,13 @@ export default function ResetPasswordPage() {
         const session = data?.session;
         if (!session) {
           setStage("error");
-          setMessage("This reset link is no longer active. Please request a new reset email.");
+          setMessage("No active reset session found. Please request a new reset email from the login page.");
           return;
         }
 
         setSignedInEmail(session.user?.email ?? null);
-
         setStage("ready");
-        setMessage("Choose what you want to do:");
+        setMessage("Set a new password below.");
       } catch (e: any) {
         if (!mounted) return;
         setStage("error");
@@ -89,47 +89,58 @@ export default function ResetPasswordPage() {
         setStage("error");
         setMessage(
           isPkceError(error.message)
-            ? "This reset link is invalid/expired. Please request a new reset email."
+            ? "This reset link is invalid or expired. Please request a new reset email from the login page."
             : error.message
         );
         return;
       }
 
-      showToast({ message: "Password updated ✅ Please sign in again." }, 6000);
+      showToast({ message: "Password updated ✅ Please sign in." }, 6000);
 
-      // After password update, force a clean re-auth.
+      // After password update, require a fresh login.
       window.location.href = "/login";
     } finally {
       setSaving(false);
     }
   };
 
-  return (
-    <Page
-      title="Reset password"
-      subtitle={
-        <div className="space-y-2">
-          <div className="text-zinc-700">{message}</div>
-
-          {stage === "ready" && (
-            <div className="text-sm text-zinc-600">
-              {signedInEmail ? (
-                <span>
-                  You’re signed in as <strong>{signedInEmail}</strong>.
-                </span>
-              ) : (
-                <span>You’re signed in.</span>
-              )}{" "}
-              <span className="text-zinc-600">
-                If you don’t want to change your password, just click <strong>Back to the app</strong>. Your password will
-                stay the same unless you click <strong>Set new password</strong>.
-              </span>
-            </div>
+  const subtitle =
+    stage === "ready" ? (
+      <div className="space-y-2">
+        <div className="text-zinc-700">{message}</div>
+        <div className="text-sm text-zinc-600">
+          {signedInEmail ? (
+            <>
+              You’re signed in as <strong>{signedInEmail}</strong>.{" "}
+            </>
+          ) : (
+            <>You’re signed in. </>
           )}
+          If you don’t want to change your password, you can safely return to the app —{" "}
+          <strong>nothing will change unless you set a new password</strong>.
         </div>
-      }
-    >
+      </div>
+    ) : (
+      <div className="text-zinc-700">{message}</div>
+    );
+
+  return (
+    <Page title="Reset password" subtitle={subtitle}>
       <div className="mx-auto w-full max-w-xl space-y-3">
+        {/* Brand label/icon */}
+        <div className="flex items-center justify-center">
+          <Link
+            href="/inbox"
+            className="inline-flex items-center gap-2 rounded-2xl px-3 py-2 text-zinc-900 hover:bg-zinc-50"
+            title="Back to Keystone"
+          >
+            <div className="flex h-9 w-9 items-center justify-center rounded-2xl bg-zinc-900 text-sm font-semibold text-white">
+              K
+            </div>
+            <div className="text-sm font-semibold tracking-tight">Keystone</div>
+          </Link>
+        </div>
+
         <Card>
           <CardContent>
             {stage !== "ready" ? (
@@ -144,29 +155,21 @@ export default function ResetPasswordPage() {
                   <Button variant="secondary" onClick={() => window.location.reload()} title="Re-check session">
                     Refresh
                   </Button>
-                </div>
-
-                {stage === "error" && (
-                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
-                    If you opened the link on a different device/browser, or cleared storage/cookies, the reset session may
-                    not be available. Request a new reset email from the login page.
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="space-y-4">
-                {/* Primary choice: go back without changing */}
-                <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-zinc-200 bg-zinc-50 p-3">
-                  <div className="text-sm text-zinc-700">
-                    Keep your existing password and return to the app.
-                  </div>
 
                   <Link href="/inbox">
                     <Button variant="secondary">Back to the app</Button>
                   </Link>
                 </div>
 
-                {/* Optional: change password */}
+                {stage === "error" && (
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+                    If you opened the email link on a different device/browser, or cleared storage/cookies, the reset
+                    session won’t be available here. Request a new reset email from the login page.
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-4">
                 <div className="grid gap-3">
                   <div className="space-y-1">
                     <div className="text-sm font-medium">New password</div>
@@ -206,11 +209,13 @@ export default function ResetPasswordPage() {
                   <Button onClick={onSubmit} disabled={!canSubmit || saving}>
                     {saving ? "Setting…" : "Set new password"}
                   </Button>
+
+                  <Link href="/inbox">
+                    <Button variant="secondary">Back to the app</Button>
+                  </Link>
                 </div>
 
-                <div className="text-xs text-zinc-500">
-                  Tip: after updating, you’ll be redirected to login.
-                </div>
+                <div className="text-xs text-zinc-500">After updating, you’ll be redirected to login.</div>
               </div>
             )}
           </CardContent>
