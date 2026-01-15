@@ -40,7 +40,7 @@ export default function LoginClient({ nextPath }: { nextPath: string }) {
   setStatus("Sending reset email...");
 
   // Password recovery works best with the hash-token flow.
-  const redirectTo = `${window.location.origin}/reset`;
+  const redirectTo = `${window.location.origin}/auth/reset`;
 
   const { error } = await supabase.auth.resetPasswordForEmail(email, {
     redirectTo,

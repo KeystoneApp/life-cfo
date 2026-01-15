@@ -1,102 +1,42 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+import { useRouter } from "next/navigation";
 
 export default function ResetPasswordPage() {
   const router = useRouter();
-
-  const [status, setStatus] = useState("Reading reset link...");
+  const [status, setStatus] = useState("Checking reset session...");
   const [ready, setReady] = useState(false);
-
   const [pw, setPw] = useState("");
   const [pw2, setPw2] = useState("");
 
   useEffect(() => {
     const run = async () => {
-      // 1) Try HASH style first: #access_token=...&refresh_token=...&type=recovery
-      const hash = window.location.hash || "";
-      if (hash) {
-        const params = new URLSearchParams(hash.replace("#", ""));
-        const access_token = params.get("access_token");
-        const refresh_token = params.get("refresh_token");
-
-        if (access_token && refresh_token) {
-          setStatus("Setting reset session...");
-          const { error } = await supabase.auth.setSession({
-            access_token,
-            refresh_token,
-          });
-
-          if (error) {
-            setStatus(`Could not set session: ${error.message}`);
-            setReady(false);
-            return;
-          }
-
-          // Clean URL
-          window.history.replaceState(null, "", "/reset");
-          setStatus("Ready ✅ Enter a new password.");
-          setReady(true);
-          return;
-        }
-      }
-
-      // 2) Otherwise, handle CODE style: /reset?code=...
-      const qs = new URLSearchParams(window.location.search);
-      const code = qs.get("code");
-
-      if (!code) {
-        setStatus("No reset token found. Please click the newest reset link in your email.");
+      const { data, error } = await supabase.auth.getUser();
+      if (error || !data?.user) {
+        setStatus("No active reset session found. Please click the newest reset link in your email.");
         setReady(false);
         return;
       }
-
-      setStatus("Verifying reset link...");
-
-      // Exchange code for session (client-side)
-      const { error } = await supabase.auth.exchangeCodeForSession(code);
-
-      if (error) {
-        setStatus(`Reset link invalid/expired: ${error.message}. Please request a new reset email.`);
-        setReady(false);
-        return;
-      }
-
-      // Clean URL (remove code)
-      window.history.replaceState(null, "", "/reset");
-
       setStatus("Ready ✅ Enter a new password.");
       setReady(true);
     };
-
     run();
   }, []);
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (pw.length < 8) {
-      setStatus("Password must be at least 8 characters.");
-      return;
-    }
-    if (pw !== pw2) {
-      setStatus("Passwords do not match.");
-      return;
-    }
+    if (pw.length < 8) return setStatus("Password must be at least 8 characters.");
+    if (pw !== pw2) return setStatus("Passwords do not match.");
 
     setStatus("Updating password...");
-
     const { error } = await supabase.auth.updateUser({ password: pw });
 
-    if (error) {
-      setStatus(`Password update failed: ${error.message}`);
-      return;
-    }
+    if (error) return setStatus(`Password update failed: ${error.message}`);
 
     setStatus("Password updated ✅ Redirecting to Inbox...");
-
     setTimeout(() => {
       router.replace("/inbox");
       router.refresh();
@@ -109,11 +49,7 @@ export default function ResetPasswordPage() {
       <p>{status}</p>
 
       {!ready && (
-        <button
-          type="button"
-          onClick={() => router.replace("/login")}
-          style={{ marginTop: 16, padding: 10 }}
-        >
+        <button type="button" onClick={() => router.replace("/login")} style={{ marginTop: 16, padding: 10 }}>
           Go to login to request a new reset email
         </button>
       )}
