@@ -113,7 +113,7 @@ export default function ResetPasswordPage() {
   };
 
   return (
-    <Page title="Reset password" subtitle="">
+    <Page title="">
       <div className="mx-auto w-full max-w-xl space-y-4">
         {/* Brand (like login) */}
         <div className="pt-2">
@@ -122,7 +122,9 @@ export default function ResetPasswordPage() {
 
         {/* Heading + signed-in line */}
         <div className="space-y-1 text-center">
-          <div className="text-3xl font-semibold tracking-tight text-zinc-900">Reset password</div>
+         <h1 className="text-3xl font-semibold tracking-tight text-zinc-900">
+  Reset password
+</h1>
 
           {stage === "ready" && (
             <div className="text-sm text-zinc-700">
