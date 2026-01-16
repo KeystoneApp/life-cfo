@@ -39,6 +39,11 @@ function isoNowPlusMinutes(mins: number) {
 const clamp = (n: number, min = 1, max = 3) => Math.max(min, Math.min(max, n));
 type LiveStatus = "connecting" | "live" | "offline";
 
+type DraftStore = {
+  reason?: Record<string, string>;
+  confidence?: Record<string, number>;
+};
+
 export default function InboxPage() {
   const { showToast } = useToast();
   const router = useRouter();
@@ -84,6 +89,83 @@ export default function InboxPage() {
     }, 250);
   };
 
+  // ---------- local draft persistence ----------
+  const draftKey = (uid: string) => `keystone:inbox:drafts:v1:${uid}`;
+
+  const readDraftStore = (uid: string): DraftStore => {
+    try {
+      const raw = window.localStorage.getItem(draftKey(uid));
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object") return {};
+      return {
+        reason: typeof parsed.reason === "object" && parsed.reason ? parsed.reason : {},
+        confidence: typeof parsed.confidence === "object" && parsed.confidence ? parsed.confidence : {},
+      };
+    } catch {
+      return {};
+    }
+  };
+
+  const writeDraftStore = (uid: string, store: DraftStore) => {
+    try {
+      window.localStorage.setItem(draftKey(uid), JSON.stringify(store));
+    } catch {
+      // ignore quota / privacy mode failures
+    }
+  };
+
+  const setDraftReason = (id: string, value: string) => {
+    setDecisionReason((prev) => ({ ...prev, [id]: value }));
+    if (!userId) return;
+
+    const store = readDraftStore(userId);
+    const nextReason = { ...(store.reason ?? {}), [id]: value };
+    writeDraftStore(userId, { ...store, reason: nextReason });
+  };
+
+  const setDraftConfidence = (id: string, value: number) => {
+    setDecisionConfidence((prev) => ({ ...prev, [id]: value }));
+    if (!userId) return;
+
+    const store = readDraftStore(userId);
+    const nextConf = { ...(store.confidence ?? {}), [id]: value };
+    writeDraftStore(userId, { ...store, confidence: nextConf });
+  };
+
+  const clearDraftForId = (id: string) => {
+    setDecisionReason((prev) => {
+      const copy = { ...prev };
+      delete copy[id];
+      return copy;
+    });
+    setDecisionConfidence((prev) => {
+      const copy = { ...prev };
+      delete copy[id];
+      return copy;
+    });
+
+    if (!userId) return;
+    const store = readDraftStore(userId);
+    const nextReason = { ...(store.reason ?? {}) };
+    const nextConf = { ...(store.confidence ?? {}) };
+    delete nextReason[id];
+    delete nextConf[id];
+    writeDraftStore(userId, { ...store, reason: nextReason, confidence: nextConf });
+  };
+
+  // Hydrate drafts on login
+  const hydratedDraftsRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!userId) return;
+    if (hydratedDraftsRef.current === userId) return;
+    hydratedDraftsRef.current = userId;
+
+    const store = readDraftStore(userId);
+    if (store.reason) setDecisionReason(store.reason);
+    if (store.confidence) setDecisionConfidence(store.confidence);
+  }, [userId]);
+
   // ---------- helpers ----------
   function severityStyle(severity: number | null) {
     switch (severity) {
@@ -104,17 +186,8 @@ export default function InboxPage() {
   }
 
   const clearPerItemInputs = (id: string) => {
-    setDecisionReason((prev) => {
-      const copy = { ...prev };
-      delete copy[id];
-      return copy;
-    });
-
-    setDecisionConfidence((prev) => {
-      const copy = { ...prev };
-      delete copy[id];
-      return copy;
-    });
+    // also clears persisted drafts
+    clearDraftForId(id);
 
     setAiPreview((prev) => {
       const copy = { ...prev };
@@ -527,7 +600,9 @@ export default function InboxPage() {
             return;
           }
 
-          setItems((prev) => prev.map((x) => (x.id === it.id ? { ...x, status: prevStatus, snoozed_until: prevSnooze } : x)));
+          setItems((prev) =>
+            prev.map((x) => (x.id === it.id ? { ...x, status: prevStatus, snoozed_until: prevSnooze } : x))
+          );
           setStatusLine("Undone ✅");
         },
       },
@@ -599,8 +674,10 @@ export default function InboxPage() {
       setStatusLine("Saving decision...");
       setAffirmation(null);
 
-      const userReason = decisionReason[item.id]?.trim() ? decisionReason[item.id].trim() : null;
-      const confidenceLevel = decisionConfidence[item.id] ?? null;
+      const userReason = (decisionReason[item.id] ?? "").trim() ? (decisionReason[item.id] ?? "").trim() : null;
+
+      // ✅ Bundle C: default confidence to Medium if not set
+      const confidenceLevel = decisionConfidence[item.id] ?? 2;
 
       let ai: any = null;
       try {
@@ -642,7 +719,7 @@ export default function InboxPage() {
           review_notes: null,
           review_history: [],
         })
-        .select("id,user_id,type,title,body,severity,status,snoozed_until,created_at,run_id,dedupe_key,action_label,action_href")
+        .select("id")
         .single();
 
       if (insertError) {
@@ -735,7 +812,7 @@ export default function InboxPage() {
           review_notes: null,
           review_history: [],
         })
-        .select("id,user_id,type,title,body,severity,status,snoozed_until,created_at,run_id,dedupe_key,action_label,action_href")
+        .select("id")
         .single();
 
       if (insertError) {
@@ -809,18 +886,6 @@ export default function InboxPage() {
   };
 
   const badge = liveBadge();
-
-  const headerSubtitle = (
-    <div className="space-y-1">
-      {email && <div>Signed in as: {email}</div>}
-      <div className="text-zinc-700">{statusLine}</div>
-      {lastLoadedAt && (
-        <div className="text-xs text-zinc-500">
-          Updated {minutesAgo !== null && minutesAgo < 1 ? "just now" : `${minutesAgo ?? 0}m ago`}
-        </div>
-      )}
-    </div>
-  );
 
   // ---------- UI helpers ----------
   const SectionHeader = ({
@@ -905,13 +970,7 @@ export default function InboxPage() {
                 {!isV2 && !isV1 && isEng && <Chip>Engine</Chip>}
 
                 {insightsDigest && (
-                  <Chip
-                    active={false}
-                    onClick={() => {
-                      router.push("/engine");
-                    }}
-                    title="Open Engine (insights are generated there)"
-                  >
+                  <Chip active={false} onClick={() => router.push("/engine")} title="Open Engine (insights are generated there)">
                     Digest
                   </Chip>
                 )}
@@ -974,7 +1033,6 @@ export default function InboxPage() {
                       <Button
                         variant="secondary"
                         onClick={async () => {
-                          // Snooze keeps it in inbox; no auto-clear here
                           await snoozeItemMinutes(it.id, 60 * 24);
                         }}
                       >
@@ -1061,12 +1119,7 @@ export default function InboxPage() {
                       type="radio"
                       name={`confidence-${it.id}`}
                       checked={decisionConfidence[it.id] === level}
-                      onChange={() =>
-                        setDecisionConfidence((prev) => ({
-                          ...prev,
-                          [it.id]: level,
-                        }))
-                      }
+                      onChange={() => setDraftConfidence(it.id, level)}
                     />
                     {level === 1 ? "Low" : level === 2 ? "Medium" : "High"}
                   </label>
@@ -1076,12 +1129,7 @@ export default function InboxPage() {
               <textarea
                 placeholder="Why did you decide this? (optional)"
                 value={decisionReason[it.id] ?? ""}
-                onChange={(e) =>
-                  setDecisionReason((prev) => ({
-                    ...prev,
-                    [it.id]: e.target.value,
-                  }))
-                }
+                onChange={(e) => setDraftReason(it.id, e.target.value)}
                 className="w-full min-h-[70px] rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
               />
             </div>
@@ -1111,19 +1159,11 @@ export default function InboxPage() {
                 </Button>
               )}
 
-              <Button
-                variant="secondary"
-                onClick={() => updateSeverity(it.id, (it.severity ?? 2) - 1)}
-                title="Raise priority (towards 1)"
-              >
+              <Button variant="secondary" onClick={() => updateSeverity(it.id, (it.severity ?? 2) - 1)} title="Raise priority (towards 1)">
                 ↑ Priority
               </Button>
 
-              <Button
-                variant="secondary"
-                onClick={() => updateSeverity(it.id, (it.severity ?? 2) + 1)}
-                title="Lower priority (towards 3)"
-              >
+              <Button variant="secondary" onClick={() => updateSeverity(it.id, (it.severity ?? 2) + 1)} title="Lower priority (towards 3)">
                 ↓ Priority
               </Button>
             </div>
@@ -1180,7 +1220,6 @@ export default function InboxPage() {
         </Card>
       )}
 
-      {/* Manual add */}
       <Card>
         <CardContent>
           <div className="space-y-3">
@@ -1205,7 +1244,6 @@ export default function InboxPage() {
         </CardContent>
       </Card>
 
-      {/* Visible */}
       <div className="space-y-3">
         <div className="flex items-end justify-between gap-3">
           <h2 className="m-0 text-lg font-semibold tracking-tight">Visible</h2>
@@ -1224,26 +1262,11 @@ export default function InboxPage() {
             onToggle={() => setOpenV2((v) => !v)}
             actions={
               <>
-                <Button
-                  variant="secondary"
-                  onClick={(e) => {
-                    e.stopPropagation?.();
-                    router.push("/engine");
-                  }}
-                  title="Open Engine and run a fresh pass"
-                >
+                <Button variant="secondary" onClick={() => router.push("/engine")} title="Open Engine and run a fresh pass">
                   Run Engine
                 </Button>
 
-                <Button
-                  variant="secondary"
-                  onClick={(e) => {
-                    e.stopPropagation?.();
-                    dismissAllV2Insights();
-                  }}
-                  disabled={buckets.v2.length === 0}
-                  title="Mark all visible v2 insights as done"
-                >
+                <Button variant="secondary" onClick={dismissAllV2Insights} disabled={buckets.v2.length === 0} title="Mark all visible v2 insights as done">
                   Dismiss digest
                 </Button>
               </>
