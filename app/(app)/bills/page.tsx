@@ -26,6 +26,18 @@ type RecurringBill = {
   updated_at: string;
 };
 
+type BillPayment = {
+  id: string;
+  user_id: string;
+  bill_id: string;
+  paid_at: string;
+  amount_cents: number;
+  currency: string;
+  note: string | null;
+  source: string;
+  created_at: string;
+};
+
 function formatMoneyFromCents(cents: number, currency = "AUD") {
   const value = (cents || 0) / 100;
   try {
@@ -69,6 +81,18 @@ function fromLocalInputValue(localValue: string) {
   return d.toISOString();
 }
 
+function addCadence(iso: string, cadence: Cadence) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return new Date().toISOString();
+
+  if (cadence === "weekly") d.setDate(d.getDate() + 7);
+  else if (cadence === "fortnightly") d.setDate(d.getDate() + 14);
+  else if (cadence === "monthly") d.setMonth(d.getMonth() + 1);
+  else if (cadence === "yearly") d.setFullYear(d.getFullYear() + 1);
+
+  return d.toISOString();
+}
+
 const LOAD_THROTTLE_MS = 1500;
 
 export default function BillsPage() {
@@ -99,6 +123,9 @@ export default function BillsPage() {
 
   const [bills, setBills] = useState<RecurringBill[]>([]);
   const [error, setError] = useState<string | null>(null);
+
+  // per-row "mark paid" spinner
+  const [payingRow, setPayingRow] = useState<Record<string, boolean>>({});
 
   // Silent reload throttle
   const lastLoadAtRef = useRef<number>(0);
@@ -364,6 +391,96 @@ export default function BillsPage() {
     }
   }
 
+  async function markPaid(b: RecurringBill) {
+    if (!userId) return;
+
+    // prevent accidental paid while editing (and avoid race with draft save)
+    if (drafts[b.id]) {
+      notify({ title: "Mark paid", description: "Finish editing first, then mark paid." });
+      return;
+    }
+
+    setPayingRow((prev) => ({ ...prev, [b.id]: true }));
+
+    const prevDue = b.next_due_at;
+    const nextDue = addCadence(b.next_due_at, b.cadence);
+
+    // Optimistic: bump next_due_at immediately
+    setBills((prev) => prev.map((x) => (x.id === b.id ? { ...x, next_due_at: nextDue } : x)));
+
+    try {
+      // 1) Insert payment receipt
+      const { data: payRow, error: payErr } = await supabase
+        .from("bill_payments")
+        .insert({
+          user_id: userId,
+          bill_id: b.id,
+          paid_at: new Date().toISOString(),
+          amount_cents: b.amount_cents ?? 0,
+          currency: b.currency ?? "AUD",
+          note: "Marked paid in Bills",
+          source: "bills_page",
+        })
+        .select("id,user_id,bill_id,paid_at,amount_cents,currency,note,source,created_at")
+        .single();
+
+      if (payErr) throw payErr;
+
+      const payment = payRow as BillPayment;
+
+      // 2) Update bill next_due_at
+      const { error: updErr } = await supabase
+        .from("recurring_bills")
+        .update({ next_due_at: nextDue })
+        .eq("id", b.id)
+        .eq("user_id", userId);
+
+      if (updErr) throw updErr;
+
+      showToast({
+        message: `"${b.name}" marked paid. Next due updated.`,
+        undoLabel: "Undo",
+        onUndo: async () => {
+          // optimistic UI revert
+          setBills((prev) => prev.map((x) => (x.id === b.id ? { ...x, next_due_at: prevDue } : x)));
+
+          try {
+            // revert bill date
+            const { error: revErr } = await supabase
+              .from("recurring_bills")
+              .update({ next_due_at: prevDue })
+              .eq("id", b.id)
+              .eq("user_id", userId);
+
+            if (revErr) throw revErr;
+
+            // delete receipt row
+            const { error: delErr } = await supabase
+              .from("bill_payments")
+              .delete()
+              .eq("id", payment.id)
+              .eq("user_id", userId);
+
+            if (delErr) throw delErr;
+
+            showToast({ message: "Undone." });
+          } catch (e: any) {
+            showToast({ message: e?.message ?? "Failed to undo." });
+            // fallback reload
+            loadBills(userId, { silent: true });
+          }
+        },
+      });
+    } catch (e: any) {
+      // revert optimistic bump
+      setBills((prev) => prev.map((x) => (x.id === b.id ? { ...x, next_due_at: prevDue } : x)));
+      notify({ title: "Error", description: e?.message ?? "Failed to mark paid." });
+      loadBills(userId, { silent: true });
+    } finally {
+      setPayingRow((prev) => ({ ...prev, [b.id]: false }));
+    }
+  }
+
   async function deleteBill(b: RecurringBill) {
     if (!userId) return;
 
@@ -530,6 +647,7 @@ export default function BillsPage() {
                 bills.map((b) => {
                   const editing = !!drafts[b.id];
                   const d = drafts[b.id];
+                  const paying = !!payingRow[b.id];
 
                   return (
                     <div key={b.id} className="rounded-lg border p-3">
@@ -648,22 +766,30 @@ export default function BillsPage() {
                         <div className="flex items-center gap-2">
                           {!editing ? (
                             <>
-                              <Button onClick={() => toggleActive(b)} disabled={saving}>
+                              <Button
+                                variant="secondary"
+                                onClick={() => markPaid(b)}
+                                disabled={saving || paying || !b.active}
+                                title={!b.active ? "Activate the bill to mark paid" : "Insert a receipt + bump due date"}
+                              >
+                                {paying ? "Marking…" : "Mark paid"}
+                              </Button>
+                              <Button onClick={() => toggleActive(b)} disabled={saving || paying}>
                                 {b.active ? "Pause" : "Activate"}
                               </Button>
-                              <Button onClick={() => beginEdit(b)} disabled={saving}>
+                              <Button onClick={() => beginEdit(b)} disabled={saving || paying}>
                                 Edit
                               </Button>
-                              <Button onClick={() => deleteBill(b)} disabled={saving}>
+                              <Button onClick={() => deleteBill(b)} disabled={saving || paying}>
                                 Delete
                               </Button>
                             </>
                           ) : (
                             <>
-                              <Button onClick={() => saveEdit(b.id)} disabled={saving}>
+                              <Button onClick={() => saveEdit(b.id)} disabled={saving || paying}>
                                 Save
                               </Button>
-                              <Button onClick={() => cancelEdit(b.id)} disabled={saving}>
+                              <Button onClick={() => cancelEdit(b.id)} disabled={saving || paying}>
                                 Cancel
                               </Button>
                             </>
