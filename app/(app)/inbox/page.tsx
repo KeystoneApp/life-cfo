@@ -1,7 +1,7 @@
 // app/(app)/inbox/page.tsx
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { Badge, Button, Card, CardContent, useToast, Chip } from "@/components/ui";
@@ -484,6 +484,36 @@ export default function InboxPage() {
     setStatusLine("Open ✅");
   };
 
+  const dismissAllV2Insights = async () => {
+    if (!userId) return;
+
+    const ids = buckets.v2.map((x) => x.id);
+    if (ids.length === 0) {
+      showToast({ message: "No v2 insights to dismiss." }, 2500);
+      return;
+    }
+
+    setAffirmation(null);
+    setStatusLine("Dismissing v2 insights...");
+
+    const { error } = await supabase
+      .from("decision_inbox")
+      .update({ status: "done", snoozed_until: null })
+      .in("id", ids)
+      .eq("user_id", userId);
+
+    if (error) {
+      setStatusLine(`Dismiss failed: ${error.message}`);
+      return;
+    }
+
+    setItems((prev) => prev.map((it) => (ids.includes(it.id) ? { ...it, status: "done", snoozed_until: null } : it)));
+    ids.forEach((id) => clearPerItemInputs(id));
+
+    setStatusLine("Dismissed ✅");
+    showToast({ message: "Insights dismissed ✅" }, 4000);
+  };
+
   const decideNowAndCloseInboxItem = async (item: InboxItem) => {
     if (!userId) return;
 
@@ -722,6 +752,7 @@ export default function InboxPage() {
     tone = "zinc",
     open,
     onToggle,
+    actions,
   }: {
     title: string;
     count: number;
@@ -729,6 +760,7 @@ export default function InboxPage() {
     tone?: "zinc" | "sky" | "amber";
     open: boolean;
     onToggle: () => void;
+    actions?: ReactNode;
   }) => {
     const toneClasses =
       tone === "sky"
@@ -740,26 +772,25 @@ export default function InboxPage() {
     return (
       <Card className={toneClasses}>
         <CardContent>
-          <button
-            type="button"
-            onClick={onToggle}
-            className="w-full text-left"
-            aria-expanded={open}
-            title={open ? "Hide section" : "Show section"}
-          >
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <h2 className="m-0 text-base font-semibold tracking-tight">{title}</h2>
-                <Badge variant="muted">{count}</Badge>
-                <span className="text-xs text-zinc-500">{open ? "Hide" : "Show"}</span>
-              </div>
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <button
+              type="button"
+              onClick={onToggle}
+              className="flex flex-wrap items-center gap-2 text-left"
+              aria-expanded={open}
+              title={open ? "Hide section" : "Show section"}
+            >
+              <h2 className="m-0 text-base font-semibold tracking-tight">{title}</h2>
+              <Badge variant="muted">{count}</Badge>
+              <span className="text-xs text-zinc-500">{open ? "Hide" : "Show"}</span>
+            </button>
 
-              <div className="flex flex-wrap items-center justify-end gap-2">
-                {description && <div className="text-xs text-zinc-600">{description}</div>}
-              </div>
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              {actions}
             </div>
-          </button>
+          </div>
 
+          {description && <div className="mt-2 text-xs text-zinc-600">{description}</div>}
           {!open && count > 0 && <div className="mt-2 text-xs text-zinc-500">Hidden — click to show.</div>}
         </CardContent>
       </Card>
@@ -824,20 +855,9 @@ export default function InboxPage() {
                     <div className="text-sm text-zinc-600">Shortcut actions — use the insight, then come back.</div>
 
                     <div className="flex flex-wrap gap-2">
-                      <Button
-                        onClick={() => {
-                          router.push("/decisions?tab=review");
-                        }}
-                      >
-                        Review now
-                      </Button>
+                      <Button onClick={() => router.push("/decisions?tab=review")}>Review now</Button>
 
-                      <Button
-                        variant="secondary"
-                        onClick={() => {
-                          router.push("/engine");
-                        }}
-                      >
+                      <Button variant="secondary" onClick={() => router.push("/engine")}>
                         Open Engine
                       </Button>
 
@@ -1069,7 +1089,9 @@ export default function InboxPage() {
       <div className="space-y-3">
         <div className="flex items-end justify-between gap-3">
           <h2 className="m-0 text-lg font-semibold tracking-tight">Visible</h2>
-          <div className="text-xs text-zinc-500">Insights are generated from your inputs — no forecasting. You can snooze or ignore anything.</div>
+          <div className="text-xs text-zinc-500">
+            Insights are generated from your inputs — no forecasting. You can snooze or ignore anything.
+          </div>
         </div>
 
         <div className="grid gap-3">
@@ -1081,6 +1103,32 @@ export default function InboxPage() {
             tone="sky"
             open={openV2}
             onToggle={() => setOpenV2((v) => !v)}
+            actions={
+              <>
+                <Button
+                  variant="secondary"
+                  onClick={(e) => {
+                    e.stopPropagation?.();
+                    router.push("/engine");
+                  }}
+                  title="Open Engine and run a fresh pass"
+                >
+                  Run Engine
+                </Button>
+
+                <Button
+                  variant="secondary"
+                  onClick={(e) => {
+                    e.stopPropagation?.();
+                    dismissAllV2Insights();
+                  }}
+                  disabled={buckets.v2.length === 0}
+                  title="Mark all visible v2 insights as done"
+                >
+                  Dismiss digest
+                </Button>
+              </>
+            }
           />
           {openV2 ? (
             buckets.v2.length ? (
