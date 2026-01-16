@@ -168,9 +168,18 @@ export default function InboxPage() {
     isInsightsDigest(it) || (isEngineItem(it) && String(it.dedupe_key ?? "").includes("engine_insights_v2"));
   const isEngineV1Reminder = (it: InboxItem) => isEngineItem(it) && !isEngineV2Insight(it);
 
-  function engineCardClasses(base: { border: string; bg: string }, isEngine: boolean) {
-    if (!isEngine) return `${base.border} ${base.bg}`;
-    return `${base.border} bg-zinc-50 border-l-4 border-l-zinc-400`;
+  function engineCardClasses(
+    base: { border: string; bg: string },
+    kind: "v2" | "v1" | null
+  ) {
+    if (!kind) return `${base.border} ${base.bg}`;
+
+    const left =
+      kind === "v2"
+        ? "border-l-4 border-l-sky-400 bg-zinc-50"
+        : "border-l-4 border-l-amber-400 bg-zinc-50";
+
+    return `${base.border} ${left}`;
   }
 
   const prettySupabaseError = (e: any) => {
@@ -496,7 +505,7 @@ export default function InboxPage() {
     setAffirmation(null);
     setStatusLine("Dismissing v2 insights...");
 
-    // Optimistic UI
+    // optimistic UI
     setItems((prev) => prev.map((it) => (ids.includes(it.id) ? { ...it, status: "done", snoozed_until: null } : it)));
     ids.forEach((id) => clearPerItemInputs(id));
 
@@ -508,7 +517,7 @@ export default function InboxPage() {
 
     if (error) {
       setStatusLine(`Dismiss failed: ${error.message}`);
-      // Re-sync from source of truth
+      // reload to reconcile
       loadRef.current();
       return;
     }
@@ -522,9 +531,6 @@ export default function InboxPage() {
         onUndo: async () => {
           setStatusLine("Undoing dismiss...");
 
-          // Optimistic reopen
-          setItems((prev) => prev.map((it) => (ids.includes(it.id) ? { ...it, status: "open", snoozed_until: null } : it)));
-
           const { error: undoErr } = await supabase
             .from("decision_inbox")
             .update({ status: "open", snoozed_until: null })
@@ -537,6 +543,7 @@ export default function InboxPage() {
             return;
           }
 
+          setItems((prev) => prev.map((it) => (ids.includes(it.id) ? { ...it, status: "open", snoozed_until: null } : it)));
           setStatusLine("Undone ✅");
         },
       },
@@ -828,8 +835,14 @@ export default function InboxPage() {
   const renderItemCard = (it: InboxItem) => {
     const b = severityBadge(it.severity);
     const s = severityStyle(it.severity);
-    const engine = isEngineItem(it);
-    const insights = isInsightsDigest(it);
+
+    const isV2 = isEngineV2Insight(it);
+    const isV1 = isEngineV1Reminder(it);
+    const isEng = isEngineItem(it);
+
+    const kind: "v2" | "v1" | null = isV2 ? "v2" : isV1 ? "v1" : null;
+
+    const insightsDigest = isInsightsDigest(it);
 
     const analysis = aiPreview[it.id];
     const loading = !!aiLoading[it.id];
@@ -838,17 +851,20 @@ export default function InboxPage() {
     const hasShortcutAction = !!it.action_href;
 
     return (
-      <Card key={it.id} className={engineCardClasses(s, engine)}>
+      <Card key={it.id} className={engineCardClasses(s, kind)}>
         <CardContent>
           <div className="space-y-3">
             <div className="flex items-start justify-between gap-3">
               <div className="flex flex-wrap items-center gap-2">
                 <strong className="text-base">{it.title}</strong>
                 <Badge variant={b.variant}>{b.label}</Badge>
-                {engine && <Chip>Engine</Chip>}
+
+                {isV2 && <Chip>Insight</Chip>}
+                {isV1 && <Chip>Reminder</Chip>}
+                {!isV2 && !isV1 && isEng && <Chip>Engine</Chip>}
 
                 {/* ✅ clickable Insights chip (only for digest) */}
-                {insights && (
+                {insightsDigest && (
                   <Chip
                     active={false}
                     onClick={() => {
@@ -856,7 +872,7 @@ export default function InboxPage() {
                     }}
                     title="Open Engine (insights are generated there)"
                   >
-                    Insights
+                    Digest
                   </Chip>
                 )}
               </div>
@@ -867,7 +883,20 @@ export default function InboxPage() {
               </div>
             </div>
 
-            {engine && (
+            {/* Why am I seeing this? */}
+            {isV2 && (
+              <div className="text-xs text-zinc-500">
+                Why you’re seeing this: generated from your current inputs (no forecasting).
+                {hasShortcutAction ? " Using the action will auto-resolve this item." : ""}
+              </div>
+            )}
+            {isV1 && (
+              <div className="text-xs text-zinc-500">
+                Why you’re seeing this: housekeeping reminder from your current inputs.
+                {hasShortcutAction ? " Using the action will auto-resolve this item." : ""}
+              </div>
+            )}
+            {!isV2 && !isV1 && isEng && (
               <div className="text-xs text-zinc-500">
                 Truth reminder from Engine{hasShortcutAction ? " — using the action will auto-resolve this item." : ""}
               </div>
@@ -876,7 +905,7 @@ export default function InboxPage() {
             {it.body && <div className="whitespace-pre-wrap text-sm text-zinc-800">{it.body}</div>}
 
             {/* ✅ Shortcut panel for insights digest */}
-            {insights && (
+            {insightsDigest && (
               <Card className="bg-white">
                 <CardContent>
                   <div className="flex flex-wrap items-center justify-between gap-3">
@@ -898,15 +927,15 @@ export default function InboxPage() {
               </Card>
             )}
 
-            {/* ✅ shortcut action (auto-resolve) */}
+            {/* Shortcut action */}
             {it.action_href && (
               <Button
                 variant="secondary"
                 onClick={async (e) => {
                   e.stopPropagation?.();
 
+                  // Auto-resolve the insight/reminder when using the action (guarded)
                   if (userId) {
-                    // Auto-resolve the insight/reminder when using the action (guard user)
                     await supabase
                       .from("decision_inbox")
                       .update({ status: "done", snoozed_until: null })
@@ -948,9 +977,7 @@ export default function InboxPage() {
                         </div>
                       )}
 
-                      {analysis.reasoning && (
-                        <div className="whitespace-pre-wrap text-sm leading-relaxed">{analysis.reasoning}</div>
-                      )}
+                      {analysis.reasoning && <div className="whitespace-pre-wrap text-sm leading-relaxed">{analysis.reasoning}</div>}
 
                       {Array.isArray(analysis.key_questions) && analysis.key_questions.length > 0 && (
                         <div className="text-sm">
@@ -1123,9 +1150,7 @@ export default function InboxPage() {
       <div className="space-y-3">
         <div className="flex items-end justify-between gap-3">
           <h2 className="m-0 text-lg font-semibold tracking-tight">Visible</h2>
-          <div className="text-xs text-zinc-500">
-            Insights are generated from your inputs — no forecasting. You can snooze or ignore anything.
-          </div>
+          <div className="text-xs text-zinc-500">Insights are generated from your inputs — no forecasting. Read & clear like notifications.</div>
         </div>
 
         <div className="grid gap-3">
@@ -1133,7 +1158,7 @@ export default function InboxPage() {
           <SectionHeader
             title="Insights (Engine v2)"
             count={buckets.v2.length}
-            description="Read & clear like notifications — higher-signal nudges & patterns based on current truth, not prediction."
+            description="Higher-signal nudges & patterns — based on current truth, not prediction."
             tone="sky"
             open={openV2}
             onToggle={() => setOpenV2((v) => !v)}
