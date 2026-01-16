@@ -150,6 +150,45 @@ function sortRows(list: Decision[]) {
   return copy;
 }
 
+/** -------------------- UI Prefs persistence (per-user, localStorage) -------------------- */
+type DecisionsUIPrefs = {
+  v: 1;
+  tab?: TabMode;
+  query?: string;
+  typeFilter?: TypeFilter;
+  stakesFilter?: StakesFilter;
+  suggestedFilter?: SuggestedFilter;
+  onlyWithAI?: boolean;
+  needsAttention?: boolean;
+  showAIJson?: boolean;
+  expanded?: Record<string, boolean>;
+};
+
+function prefsKey(uid: string) {
+  return `keystone:decisions:ui_prefs:v1:${uid}`;
+}
+
+function readPrefs(uid: string): DecisionsUIPrefs | null {
+  try {
+    const raw = window.localStorage.getItem(prefsKey(uid));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+    return parsed as DecisionsUIPrefs;
+  } catch {
+    return null;
+  }
+}
+
+function writePrefs(uid: string, next: DecisionsUIPrefs) {
+  try {
+    window.localStorage.setItem(prefsKey(uid), JSON.stringify(next));
+  } catch {
+    // ignore quota/private mode
+  }
+}
+/** -------------------------------------------------------------------------------------- */
+
 export default function DecisionsClient() {
   const { showToast } = useToast();
   const router = useRouter();
@@ -168,6 +207,9 @@ export default function DecisionsClient() {
 
   // ✅ keep current user id for realtime filtering (avoid cross-user noise)
   const userIdRef = useRef<string | null>(null);
+
+  // UI prefs hydrate once per user
+  const hydratedPrefsRef = useRef<string | null>(null);
 
   // fallback reload throttle (used only if realtime payload is missing)
   const loadRef = useRef<(opts?: { silent?: boolean }) => void>(() => {});
@@ -209,12 +251,29 @@ export default function DecisionsClient() {
 
   // ✅ URL -> tab sync (so /decisions?tab=review selects Review)
   useEffect(() => {
-    const urlTab = (searchParams.get("tab") || "all") as TabMode;
-    if (urlTab === "all" || urlTab === "review" || urlTab === "drafts") setTab(urlTab);
+    const urlTabRaw = searchParams.get("tab");
+    const urlTab = (urlTabRaw || "all") as TabMode;
+
+    // If URL explicitly sets tab, that wins.
+    if (urlTabRaw && (urlTab === "all" || urlTab === "review" || urlTab === "drafts")) {
+      setTab(urlTab);
+      return;
+    }
+
+    // Otherwise, if we already hydrated prefs for this user, keep current state.
+    // (Hydration happens inside load() once we know user id.)
   }, [searchParams]);
 
   const setTabAndUrl = (next: TabMode) => {
     setTab(next);
+
+    // persist tab preference (best-effort)
+    const uid = userIdRef.current;
+    if (uid) {
+      const current: DecisionsUIPrefs = readPrefs(uid) ?? { v: 1 };
+      writePrefs(uid, { ...current, v: 1, tab: next });
+    }
+
     const sp = new URLSearchParams(Array.from(searchParams.entries()));
     if (next === "all") sp.delete("tab");
     else sp.set("tab", next);
@@ -243,6 +302,29 @@ export default function DecisionsClient() {
     userIdRef.current = user.id;
     setEmail(user.email ?? "");
 
+    // ✅ Hydrate UI prefs once per user (after we know uid)
+    if (hydratedPrefsRef.current !== user.id) {
+      hydratedPrefsRef.current = user.id;
+      const p = readPrefs(user.id);
+
+      // Only apply stored tab if URL does not explicitly set tab.
+      const urlTabRaw = searchParams.get("tab");
+      if (!urlTabRaw) {
+        const t = p?.tab;
+        if (t === "all" || t === "review" || t === "drafts") setTab(t);
+      }
+
+      if (typeof p?.query === "string") setQuery(p.query);
+      if (p?.typeFilter) setTypeFilter(p.typeFilter);
+      if (p?.stakesFilter) setStakesFilter(p.stakesFilter);
+      if (p?.suggestedFilter) setSuggestedFilter(p.suggestedFilter);
+      if (typeof p?.onlyWithAI === "boolean") setOnlyWithAI(p.onlyWithAI);
+      if (typeof p?.needsAttention === "boolean") setNeedsAttention(p.needsAttention);
+      if (typeof p?.showAIJson === "boolean") setShowAIJson(p.showAIJson);
+
+      if (p?.expanded && typeof p.expanded === "object") setExpanded(p.expanded);
+    }
+
     const { data, error } = await supabase
       .from("decisions")
       .select(
@@ -261,9 +343,18 @@ export default function DecisionsClient() {
     // ✅ avoid flicker/status spam during silent fallback reloads
     if (!silent) setStatusLine(`Loaded ${data?.length ?? 0} decision(s).`);
 
+    // Keep expanded only for ids that still exist (but preserve persisted intent)
     setExpanded((prev) => {
       const next: Record<string, boolean> = {};
-      for (const r of data ?? []) if (prev[r.id]) next[r.id] = true;
+      for (const r of data ?? []) {
+        if (prev[r.id]) next[r.id] = true;
+      }
+      // persist pruned expanded map
+      const uid = userIdRef.current;
+      if (uid) {
+        const current: DecisionsUIPrefs = readPrefs(uid) ?? { v: 1 };
+        writePrefs(uid, { ...current, v: 1, expanded: next });
+      }
       return next;
     });
   };
@@ -286,6 +377,27 @@ export default function DecisionsClient() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ✅ Persist prefs whenever they change (best-effort, per-user)
+  useEffect(() => {
+    const uid = userIdRef.current;
+    if (!uid) return;
+
+    const current: DecisionsUIPrefs = readPrefs(uid) ?? { v: 1 };
+    writePrefs(uid, {
+      ...current,
+      v: 1,
+      tab,
+      query,
+      typeFilter,
+      stakesFilter,
+      suggestedFilter,
+      onlyWithAI,
+      needsAttention,
+      showAIJson,
+      expanded,
+    });
+  }, [tab, query, typeFilter, stakesFilter, suggestedFilter, onlyWithAI, needsAttention, showAIJson, expanded]);
+
   // ✅ Realtime: patch rows in-place (no full reload)
   // ✅ Avoid cross-user noise: ignore payloads not matching current user id (best-effort)
   useEffect(() => {
@@ -293,106 +405,100 @@ export default function DecisionsClient() {
 
     const channel = supabase
       .channel("decisions-realtime")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "decisions" },
-        (payload: any) => {
-          const eventType: string | undefined = payload?.eventType;
-          const newRow = payload?.new as any | undefined;
-          const oldRow = payload?.old as any | undefined;
+      .on("postgres_changes", { event: "*", schema: "public", table: "decisions" }, (payload: any) => {
+        const eventType: string | undefined = payload?.eventType;
+        const newRow = payload?.new as any | undefined;
+        const oldRow = payload?.old as any | undefined;
 
-          // ✅ filter by user_id when present (avoid cross-user noise)
-          const myUserId = userIdRef.current;
-          const payloadUserId =
-            (newRow && typeof newRow === "object" ? (newRow.user_id as string | undefined) : undefined) ??
-            (oldRow && typeof oldRow === "object" ? (oldRow.user_id as string | undefined) : undefined);
+        // ✅ filter by user_id when present (avoid cross-user noise)
+        const myUserId = userIdRef.current;
+        const payloadUserId =
+          (newRow && typeof newRow === "object" ? (newRow.user_id as string | undefined) : undefined) ??
+          (oldRow && typeof oldRow === "object" ? (oldRow.user_id as string | undefined) : undefined);
 
-          if (myUserId && payloadUserId && payloadUserId !== myUserId) {
-            return; // ignore other users
-          }
-
-          // If we don't have enough info, fallback to throttled (silent) reload
-          const idFromOld = oldRow?.id as string | undefined;
-          const idFromNew = newRow?.id as string | undefined;
-          const id = idFromNew || idFromOld;
-
-          if (!eventType || !id) {
-            scheduleReload();
-            return;
-          }
-
-          setRows((prev) => {
-            if (eventType === "INSERT") {
-              if (!newRow) return prev;
-
-              // map payload -> Decision shape (only fields we use)
-              const candidate: Decision = {
-                id: newRow.id,
-                inbox_item_id: newRow.inbox_item_id ?? null,
-                title: newRow.title ?? "",
-                context: newRow.context ?? null,
-                status: newRow.status ?? "decided",
-                decided_at: newRow.decided_at ?? null,
-                review_at: newRow.review_at ?? null,
-                created_at: newRow.created_at ?? new Date().toISOString(),
-
-                user_reasoning: newRow.user_reasoning ?? null,
-                confidence_level: newRow.confidence_level ?? null,
-                ai_summary: newRow.ai_summary ?? null,
-                ai_json: newRow.ai_json ?? null,
-
-                pinned: !!newRow.pinned,
-                reviewed_at: newRow.reviewed_at ?? null,
-
-                review_notes: newRow.review_notes ?? null,
-                review_history: Array.isArray(newRow.review_history) ? newRow.review_history : [],
-              };
-
-              // dedupe insert
-              const exists = prev.some((x) => x.id === candidate.id);
-              const merged = exists ? prev.map((x) => (x.id === candidate.id ? { ...x, ...candidate } : x)) : [candidate, ...prev];
-              return sortRows(merged);
-            }
-
-            if (eventType === "UPDATE") {
-              if (!newRow) return prev;
-
-              // patch only the fields we render/use
-              const patch: Partial<Decision> = {
-                inbox_item_id: newRow.inbox_item_id ?? null,
-                title: newRow.title ?? "",
-                context: newRow.context ?? null,
-                status: newRow.status ?? "decided",
-                decided_at: newRow.decided_at ?? null,
-                review_at: newRow.review_at ?? null,
-                created_at: newRow.created_at ?? undefined,
-
-                user_reasoning: newRow.user_reasoning ?? null,
-                confidence_level: newRow.confidence_level ?? null,
-                ai_summary: newRow.ai_summary ?? null,
-                ai_json: newRow.ai_json ?? null,
-
-                pinned: typeof newRow.pinned === "boolean" ? newRow.pinned : undefined,
-                reviewed_at: newRow.reviewed_at ?? null,
-
-                review_notes: newRow.review_notes ?? null,
-                review_history: Array.isArray(newRow.review_history) ? newRow.review_history : undefined,
-              };
-
-              const merged = prev.map((x) => (x.id === newRow.id ? { ...x, ...patch } : x));
-              return sortRows(merged);
-            }
-
-            if (eventType === "DELETE") {
-              return prev.filter((x) => x.id !== id);
-            }
-
-            // unknown type -> silent reload
-            scheduleReload();
-            return prev;
-          });
+        if (myUserId && payloadUserId && payloadUserId !== myUserId) {
+          return; // ignore other users
         }
-      )
+
+        // If we don't have enough info, fallback to throttled (silent) reload
+        const idFromOld = oldRow?.id as string | undefined;
+        const idFromNew = newRow?.id as string | undefined;
+        const id = idFromNew || idFromOld;
+
+        if (!eventType || !id) {
+          scheduleReload();
+          return;
+        }
+
+        setRows((prev) => {
+          if (eventType === "INSERT") {
+            if (!newRow) return prev;
+
+            const candidate: Decision = {
+              id: newRow.id,
+              inbox_item_id: newRow.inbox_item_id ?? null,
+              title: newRow.title ?? "",
+              context: newRow.context ?? null,
+              status: newRow.status ?? "decided",
+              decided_at: newRow.decided_at ?? null,
+              review_at: newRow.review_at ?? null,
+              created_at: newRow.created_at ?? new Date().toISOString(),
+
+              user_reasoning: newRow.user_reasoning ?? null,
+              confidence_level: newRow.confidence_level ?? null,
+              ai_summary: newRow.ai_summary ?? null,
+              ai_json: newRow.ai_json ?? null,
+
+              pinned: !!newRow.pinned,
+              reviewed_at: newRow.reviewed_at ?? null,
+
+              review_notes: newRow.review_notes ?? null,
+              review_history: Array.isArray(newRow.review_history) ? newRow.review_history : [],
+            };
+
+            const exists = prev.some((x) => x.id === candidate.id);
+            const merged = exists
+              ? prev.map((x) => (x.id === candidate.id ? { ...x, ...candidate } : x))
+              : [candidate, ...prev];
+            return sortRows(merged);
+          }
+
+          if (eventType === "UPDATE") {
+            if (!newRow) return prev;
+
+            const patch: Partial<Decision> = {
+              inbox_item_id: newRow.inbox_item_id ?? null,
+              title: newRow.title ?? "",
+              context: newRow.context ?? null,
+              status: newRow.status ?? "decided",
+              decided_at: newRow.decided_at ?? null,
+              review_at: newRow.review_at ?? null,
+              created_at: newRow.created_at ?? undefined,
+
+              user_reasoning: newRow.user_reasoning ?? null,
+              confidence_level: newRow.confidence_level ?? null,
+              ai_summary: newRow.ai_summary ?? null,
+              ai_json: newRow.ai_json ?? null,
+
+              pinned: typeof newRow.pinned === "boolean" ? newRow.pinned : undefined,
+              reviewed_at: newRow.reviewed_at ?? null,
+
+              review_notes: newRow.review_notes ?? null,
+              review_history: Array.isArray(newRow.review_history) ? newRow.review_history : undefined,
+            };
+
+            const merged = prev.map((x) => (x.id === newRow.id ? { ...x, ...patch } : x));
+            return sortRows(merged);
+          }
+
+          if (eventType === "DELETE") {
+            return prev.filter((x) => x.id !== id);
+          }
+
+          scheduleReload();
+          return prev;
+        });
+      })
       .subscribe((status) => {
         if (status === "SUBSCRIBED") setLiveStatus("live");
         else if (status === "CLOSED" || status === "CHANNEL_ERROR") setLiveStatus("offline");
@@ -447,7 +553,6 @@ export default function DecisionsClient() {
     return dueMs > nowMs && dueMs <= nowMs + soonWindowMs;
   };
 
-  const dueForReviewCount = useMemo(() => rows.filter(isDueForReview).length, [rows]);
   const reviewList = useMemo(() => rows.filter((d) => d.review_at != null), [rows]);
 
   const reviewSorted = useMemo(() => {
@@ -461,10 +566,7 @@ export default function DecisionsClient() {
   }, [reviewList]);
 
   const overdueCount = useMemo(() => reviewSorted.filter((d) => isDueForReview(d)).length, [reviewSorted]);
-  const dueSoonCount = useMemo(
-    () => reviewSorted.filter((d) => !isDueForReview(d) && isDueSoon(d)).length,
-    [reviewSorted]
-  );
+  const dueSoonCount = useMemo(() => reviewSorted.filter((d) => !isDueForReview(d) && isDueSoon(d)).length, [reviewSorted]);
   const scheduledCount = useMemo(() => reviewSorted.length, [reviewSorted]);
 
   // ---------- selection ----------
@@ -504,11 +606,7 @@ export default function DecisionsClient() {
     const explicitDays = shouldSetExplicit ? clampInt(nextDays, 1, 3650) : null;
 
     const shouldBumpDefault = !shouldSetExplicit && isOverdue;
-    const nextReviewAt = shouldSetExplicit
-      ? isoNowPlusDays(explicitDays!)
-      : shouldBumpDefault
-        ? isoNowPlusDays(DEFAULT_REVIEW_BUMP_DAYS)
-        : prevReviewAt;
+    const nextReviewAt = shouldSetExplicit ? isoNowPlusDays(explicitDays!) : shouldBumpDefault ? isoNowPlusDays(DEFAULT_REVIEW_BUMP_DAYS) : prevReviewAt;
 
     const payload: any = { reviewed_at: nowIso };
     if (shouldSetExplicit || shouldBumpDefault) payload.review_at = nextReviewAt;
@@ -521,11 +619,7 @@ export default function DecisionsClient() {
 
     setRows((prev) => prev.map((d) => (d.id === id ? { ...d, reviewed_at: nowIso, review_at: nextReviewAt } : d)));
 
-    const msg = shouldSetExplicit
-      ? `Reviewed ✅ (next in ${explicitDays}d)`
-      : shouldBumpDefault
-        ? `Reviewed ✅ (next in ${DEFAULT_REVIEW_BUMP_DAYS}d)`
-        : "Reviewed ✅";
+    const msg = shouldSetExplicit ? `Reviewed ✅ (next in ${explicitDays}d)` : shouldBumpDefault ? `Reviewed ✅ (next in ${DEFAULT_REVIEW_BUMP_DAYS}d)` : "Reviewed ✅";
 
     setStatusLine(msg);
 
@@ -536,19 +630,14 @@ export default function DecisionsClient() {
         onUndo: async () => {
           setStatusLine("Undoing review...");
 
-          const { error: undoErr } = await supabase
-            .from("decisions")
-            .update({ reviewed_at: prevReviewedAt, review_at: prevReviewAt })
-            .eq("id", id);
+          const { error: undoErr } = await supabase.from("decisions").update({ reviewed_at: prevReviewedAt, review_at: prevReviewAt }).eq("id", id);
 
           if (undoErr) {
             setStatusLine(`Undo failed: ${undoErr.message}`);
             return;
           }
 
-          setRows((prev) =>
-            prev.map((d) => (d.id === id ? { ...d, reviewed_at: prevReviewedAt, review_at: prevReviewAt } : d))
-          );
+          setRows((prev) => prev.map((d) => (d.id === id ? { ...d, reviewed_at: prevReviewedAt, review_at: prevReviewAt } : d)));
           setStatusLine("Undone ✅");
         },
       },
@@ -611,11 +700,7 @@ export default function DecisionsClient() {
     const explicitDays = shouldSetExplicit ? clampInt(nextDays, 1, 3650) : null;
 
     const shouldBumpDefault = !shouldSetExplicit && isOverdue;
-    const nextReviewAt = shouldSetExplicit
-      ? isoNowPlusDays(explicitDays!)
-      : shouldBumpDefault
-        ? isoNowPlusDays(DEFAULT_REVIEW_BUMP_DAYS)
-        : prevReviewAt;
+    const nextReviewAt = shouldSetExplicit ? isoNowPlusDays(explicitDays!) : shouldBumpDefault ? isoNowPlusDays(DEFAULT_REVIEW_BUMP_DAYS) : prevReviewAt;
 
     const payload: any = {
       review_history: nextHistory,
@@ -658,11 +743,7 @@ export default function DecisionsClient() {
       return copy;
     });
 
-    const msg = shouldSetExplicit
-      ? `Review note saved ✅ (next in ${explicitDays}d)`
-      : shouldBumpDefault
-        ? `Review note saved ✅ (next in ${DEFAULT_REVIEW_BUMP_DAYS}d)`
-        : "Review note saved ✅";
+    const msg = shouldSetExplicit ? `Review note saved ✅ (next in ${explicitDays}d)` : shouldBumpDefault ? `Review note saved ✅ (next in ${DEFAULT_REVIEW_BUMP_DAYS}d)` : "Review note saved ✅";
 
     setStatusLine(msg);
 
@@ -755,9 +836,7 @@ export default function DecisionsClient() {
 
     setRows((prev) =>
       prev.map((d) =>
-        ids.includes(d.id)
-          ? { ...d, reviewed_at: nowIso, review_at: overdueIds.includes(d.id) ? bumpIso : d.review_at }
-          : d
+        ids.includes(d.id) ? { ...d, reviewed_at: nowIso, review_at: overdueIds.includes(d.id) ? bumpIso : d.review_at } : d
       )
     );
 
@@ -772,10 +851,7 @@ export default function DecisionsClient() {
           setStatusLine("Undoing bulk review...");
 
           const tasks = ids.map((id) =>
-            supabase
-              .from("decisions")
-              .update({ reviewed_at: prevReviewedMap[id] ?? null, review_at: prevReviewAtMap[id] ?? null })
-              .eq("id", id)
+            supabase.from("decisions").update({ reviewed_at: prevReviewedMap[id] ?? null, review_at: prevReviewAtMap[id] ?? null }).eq("id", id)
           );
           const results = await Promise.all(tasks);
           const failed = results.find((r) => r.error);
@@ -786,9 +862,7 @@ export default function DecisionsClient() {
 
           setRows((prev) =>
             prev.map((d) =>
-              ids.includes(d.id)
-                ? { ...d, reviewed_at: prevReviewedMap[d.id] ?? null, review_at: prevReviewAtMap[d.id] ?? null }
-                : d
+              ids.includes(d.id) ? { ...d, reviewed_at: prevReviewedMap[d.id] ?? null, review_at: prevReviewAtMap[d.id] ?? null } : d
             )
           );
 
@@ -827,10 +901,7 @@ export default function DecisionsClient() {
 
     setStatusLine(`Marking selected as reviewed (next in ${safeDays}d)...`);
 
-    const { error } = await supabase
-      .from("decisions")
-      .update({ reviewed_at: nowIso, review_at: nextReviewIso })
-      .in("id", ids);
+    const { error } = await supabase.from("decisions").update({ reviewed_at: nowIso, review_at: nextReviewIso }).in("id", ids);
 
     if (error) {
       setStatusLine(`Bulk reviewed failed: ${error.message}`);
@@ -849,10 +920,7 @@ export default function DecisionsClient() {
           setStatusLine("Undoing bulk review...");
 
           const tasks = ids.map((id) =>
-            supabase
-              .from("decisions")
-              .update({ reviewed_at: prevReviewedMap[id] ?? null, review_at: prevReviewAtMap[id] ?? null })
-              .eq("id", id)
+            supabase.from("decisions").update({ reviewed_at: prevReviewedMap[id] ?? null, review_at: prevReviewAtMap[id] ?? null }).eq("id", id)
           );
 
           const results = await Promise.all(tasks);
@@ -864,9 +932,7 @@ export default function DecisionsClient() {
 
           setRows((prev) =>
             prev.map((d) =>
-              ids.includes(d.id)
-                ? { ...d, reviewed_at: prevReviewedMap[d.id] ?? null, review_at: prevReviewAtMap[d.id] ?? null }
-                : d
+              ids.includes(d.id) ? { ...d, reviewed_at: prevReviewedMap[d.id] ?? null, review_at: prevReviewAtMap[d.id] ?? null } : d
             )
           );
 
@@ -986,10 +1052,7 @@ export default function DecisionsClient() {
 
     let inboxClosedOk = false;
     if (d.inbox_item_id) {
-      const { error: inboxErr } = await supabase
-        .from("decision_inbox")
-        .update({ status: "done", snoozed_until: null })
-        .eq("id", d.inbox_item_id);
+      const { error: inboxErr } = await supabase.from("decision_inbox").update({ status: "done", snoozed_until: null }).eq("id", d.inbox_item_id);
 
       if (inboxErr) {
         setStatusLine(`Decided ✅ but couldn't close inbox item: ${inboxErr.message}`);
@@ -1029,10 +1092,7 @@ export default function DecisionsClient() {
           }
 
           if (d.inbox_item_id && inboxClosedOk) {
-            const { error: reopenErr } = await supabase
-              .from("decision_inbox")
-              .update({ status: "open", snoozed_until: null })
-              .eq("id", d.inbox_item_id);
+            const { error: reopenErr } = await supabase.from("decision_inbox").update({ status: "open", snoozed_until: null }).eq("id", d.inbox_item_id);
 
             if (reopenErr) {
               setStatusLine(`Undo partial (reopen inbox failed): ${reopenErr.message}`);
@@ -1056,7 +1116,6 @@ export default function DecisionsClient() {
 
     return rows.filter((d) => {
       if (tab === "review") {
-        // overdue OR due soon
         const due = isDueForReview(d);
         const soon = !due && isDueSoon(d);
         if (!due && !soon) return false;
@@ -1071,14 +1130,7 @@ export default function DecisionsClient() {
       const aiSuggested = ai?.suggested_default ?? null;
 
       if (q) {
-        const hay = [
-          d.title,
-          d.context ?? "",
-          d.user_reasoning ?? "",
-          d.ai_summary ?? "",
-          d.review_notes ?? "",
-          d.review_history ? JSON.stringify(d.review_history) : "",
-        ]
+        const hay = [d.title, d.context ?? "", d.user_reasoning ?? "", d.ai_summary ?? "", d.review_notes ?? "", d.review_history ? JSON.stringify(d.review_history) : ""]
           .join("\n")
           .toLowerCase();
 
@@ -1498,7 +1550,7 @@ export default function DecisionsClient() {
 
                           {isDraft && <Badge variant="muted">Draft</Badge>}
                           {due && <Badge variant="warning">Due for review</Badge>}
-                          {dueSoon && <Badge variant="muted">Due soon</Badge>}
+                                                    {dueSoon && <Badge variant="muted">Due soon</Badge>}
                           {conf && <Badge variant="muted">Confidence: {conf}</Badge>}
                           {suggested && <Badge variant="muted">AI: {suggested}</Badge>}
                           {isDraft && d.inbox_item_id && <Badge variant="muted">Linked to Inbox</Badge>}
@@ -1578,7 +1630,9 @@ export default function DecisionsClient() {
                           <div className="flex flex-wrap items-start justify-between gap-3">
                             <div>
                               <div className="text-sm font-semibold">Set next review</div>
-                              <div className="text-xs text-zinc-500">Marks reviewed now and schedules the next check-in.</div>
+                              <div className="text-xs text-zinc-500">
+                                Marks reviewed now and schedules the next check-in.
+                              </div>
                             </div>
 
                             <NextReviewControls
@@ -1597,229 +1651,239 @@ export default function DecisionsClient() {
                       review_at: {formatLocal(d.review_at)} • reviewed_at: {formatLocal(d.reviewed_at)}
                     </div>
 
-                      {(type || stakes || horizon || reversible) && (
-                        <div className="flex flex-wrap gap-2">
-                          {type && <Badge variant="muted">Type: {type}</Badge>}
-                          {stakes && <Badge variant="muted">{stakes}</Badge>}
-                          {horizon && <Badge variant="muted">Horizon: {horizon}</Badge>}
-                          {reversible && <Badge variant="muted">{reversible}</Badge>}
-                        </div>
-                      )}
+                    {(type || stakes || horizon || reversible) && (
+                      <div className="flex flex-wrap gap-2">
+                        {type && <Badge variant="muted">Type: {type}</Badge>}
+                        {stakes && <Badge variant="muted">{stakes}</Badge>}
+                        {horizon && <Badge variant="muted">Horizon: {horizon}</Badge>}
+                        {reversible && <Badge variant="muted">{reversible}</Badge>}
+                      </div>
+                    )}
 
-                      {d.context && (
-                        <Card className="bg-white">
-                          <CardContent>
-                            <div className="mb-2 text-xs text-zinc-500">Context</div>
-                            <div className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-800">{d.context}</div>
-                          </CardContent>
-                        </Card>
-                      )}
-
-                      {/* Draft finish UI */}
-                      {isDraft && (
-                        <Card className="border-zinc-200 bg-white">
-                          <CardContent>
-                            <div className="space-y-3">
-                              <div className="flex flex-wrap items-center justify-between gap-2">
-                                <div>
-                                  <div className="text-sm font-semibold">Finish this decision</div>
-                                  <div className="text-xs text-zinc-500">
-                                    Add your reasoning + confidence, optionally run AI, then mark decided.
-                                    {d.inbox_item_id ? " This will also close the linked Inbox item." : ""}
-                                  </div>
-                                </div>
-
-                                <div className="flex flex-wrap gap-2">
-                                  <Button
-                                    variant="secondary"
-                                    onClick={() => runAiForDraft(d)}
-                                    disabled={aiLoad}
-                                    title="Runs /api/analyze-decision and stores ai_summary + ai_json"
-                                  >
-                                    {aiLoad ? "Analyzing..." : d.ai_json ? "Re-analyze with AI" : "Analyze with AI"}
-                                  </Button>
-
-                                  <Button onClick={() => finishDraftDecision(d)} disabled={saving} title="Sets status=decided + decided_at">
-                                    {saving ? "Saving..." : "Decide Now ✅"}
-                                  </Button>
-                                </div>
-                              </div>
-
-                              {aiErr && <div className="text-xs text-red-700">AI error: {aiErr}</div>}
-
-                              <div className="space-y-2">
-                                <div className="text-xs text-zinc-500">How confident do you feel?</div>
-
-                                <div className="flex flex-wrap gap-4">
-                                  {[1, 2, 3].map((level) => (
-                                    <label
-                                      key={level}
-                                      className={`flex cursor-pointer items-center gap-2 text-sm ${
-                                        draftConfidence[d.id] === level ? "opacity-100" : "opacity-80"
-                                      }`}
-                                    >
-                                      <input
-                                        type="radio"
-                                        name={`draft-confidence-${d.id}`}
-                                        checked={draftConfidence[d.id] === level}
-                                        onChange={() =>
-                                          setDraftConfidence((prev) => ({
-                                            ...prev,
-                                            [d.id]: level,
-                                          }))
-                                        }
-                                      />
-                                      {level === 1 ? "Low" : level === 2 ? "Medium" : "High"}
-                                    </label>
-                                  ))}
-                                </div>
-
-                                <textarea
-                                  placeholder="Why did you decide this? (optional)"
-                                  value={draftReason[d.id] ?? d.user_reasoning ?? ""}
-                                  onChange={(e) =>
-                                    setDraftReason((prev) => ({
-                                      ...prev,
-                                      [d.id]: e.target.value,
-                                    }))
-                                  }
-                                  className="w-full min-h-[70px] rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
-                                />
-                              </div>
-                            </div>
-                          </CardContent>
-                        </Card>
-                      )}
-
-                      {d.user_reasoning && !isDraft && (
-                        <Card className="bg-zinc-50">
-                          <CardContent>
-                            <div className="mb-2 text-xs text-zinc-500">Your reasoning</div>
-                            <div className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-800">{d.user_reasoning}</div>
-                          </CardContent>
-                        </Card>
-                      )}
-
-                      {d.ai_summary && (
-                        <Card className="border-sky-200 bg-sky-50">
-                          <CardContent>
-                            <div className="mb-2 text-xs text-zinc-500">AI analysis</div>
-                            <div className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-800">{d.ai_summary}</div>
-                          </CardContent>
-                        </Card>
-                      )}
-
-                      {keyQuestions.length > 0 && (
-                        <Card className="bg-white">
-                          <CardContent>
-                            <div className="mb-2 text-xs text-zinc-500">Key questions to sanity-check</div>
-                            <ul className="list-disc pl-5 text-sm text-zinc-800">
-                              {keyQuestions.map((q, idx) => (
-                                <li key={`${d.id}-kq-${idx}`} className="mb-1">
-                                  {q}
-                                </li>
-                              ))}
-                            </ul>
-                          </CardContent>
-                        </Card>
-                      )}
-
-                      {/* Review notes */}
-                      <Card className="bg-zinc-50">
+                    {d.context && (
+                      <Card className="bg-white">
                         <CardContent>
-                          <div className="mb-2 text-xs text-zinc-500">Review notes</div>
+                          <div className="mb-2 text-xs text-zinc-500">Context</div>
+                          <div className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-800">{d.context}</div>
+                        </CardContent>
+                      </Card>
+                    )}
 
-                          {d.review_notes ? (
-                            <div className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-800">{d.review_notes}</div>
-                          ) : (
-                            <div className="text-sm text-zinc-500">No review notes yet.</div>
-                          )}
+                    {/* Draft finish UI */}
+                    {isDraft && (
+                      <Card className="border-zinc-200 bg-white">
+                        <CardContent>
+                          <div className="space-y-3">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div>
+                                <div className="text-sm font-semibold">Finish this decision</div>
+                                <div className="text-xs text-zinc-500">
+                                  Add your reasoning + confidence, optionally run AI, then mark decided.
+                                  {d.inbox_item_id ? " This will also close the linked Inbox item." : ""}
+                                </div>
+                              </div>
 
-                          <div className="mt-3 text-xs text-zinc-500">Add a new note (saved into history + marks reviewed)</div>
+                              <div className="flex flex-wrap gap-2">
+                                <Button
+                                  variant="secondary"
+                                  onClick={() => runAiForDraft(d)}
+                                  disabled={aiLoad}
+                                  title="Runs /api/analyze-decision and stores ai_summary + ai_json"
+                                >
+                                  {aiLoad ? "Analyzing..." : d.ai_json ? "Re-analyze with AI" : "Analyze with AI"}
+                                </Button>
 
-                          <textarea
-                            value={reviewDraft[d.id] ?? ""}
-                            onChange={(e) => setReviewDraft((prev) => ({ ...prev, [d.id]: e.target.value }))}
-                            placeholder="e.g. New info: vet quote came in lower, okay to proceed."
-                            className="mt-2 w-full min-h-[70px] rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
-                          />
-
-                          <div className="mt-3 flex flex-wrap items-start gap-3">
-                            <div className="flex flex-wrap gap-2">
-                              <Button onClick={() => saveReviewNote(d)} disabled={!(reviewDraft[d.id] ?? "").trim()}>
-                                💾 Save review note
-                              </Button>
-
-                              <Button
-                                variant="secondary"
-                                onClick={() =>
-                                  setReviewDraft((prev) => {
-                                    const copy = { ...prev };
-                                    delete copy[d.id];
-                                    return copy;
-                                  })
-                                }
-                                disabled={!(reviewDraft[d.id] ?? "").trim()}
-                              >
-                                Clear draft
-                              </Button>
+                                <Button onClick={() => finishDraftDecision(d)} disabled={saving} title="Sets status=decided + decided_at">
+                                  {saving ? "Saving..." : "Decide Now ✅"}
+                                </Button>
+                              </div>
                             </div>
 
-                            {/* ✅ New: optionally set next review while saving note */}
-                            {!isDraft && (
-                              <div className="min-w-[260px]">
-                                <NextReviewControls
-                                  decisionId={d.id}
-                                  onPickDays={(days) => {
-                                    saveReviewNote(d, days);
-                                  }}
-                                />
-                                <div className="mt-1 text-xs text-zinc-500">Optional — if not set, overdue bumps +{DEFAULT_REVIEW_BUMP_DAYS}d.</div>
+                            {aiErr && <div className="text-xs text-red-700">AI error: {aiErr}</div>}
+
+                            <div className="space-y-2">
+                              <div className="text-xs text-zinc-500">How confident do you feel?</div>
+
+                              <div className="flex flex-wrap gap-4">
+                                {[1, 2, 3].map((level) => (
+                                  <label
+                                    key={level}
+                                    className={`flex cursor-pointer items-center gap-2 text-sm ${
+                                      draftConfidence[d.id] === level ? "opacity-100" : "opacity-80"
+                                    }`}
+                                  >
+                                    <input
+                                      type="radio"
+                                      name={`draft-confidence-${d.id}`}
+                                      checked={draftConfidence[d.id] === level}
+                                      onChange={() =>
+                                        setDraftConfidence((prev) => ({
+                                          ...prev,
+                                          [d.id]: level,
+                                        }))
+                                      }
+                                    />
+                                    {level === 1 ? "Low" : level === 2 ? "Medium" : "High"}
+                                  </label>
+                                ))}
                               </div>
-                            )}
+
+                              <textarea
+                                placeholder="Why did you decide this? (optional)"
+                                value={draftReason[d.id] ?? d.user_reasoning ?? ""}
+                                onChange={(e) =>
+                                  setDraftReason((prev) => ({
+                                    ...prev,
+                                    [d.id]: e.target.value,
+                                  }))
+                                }
+                                className="w-full min-h-[70px] rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
+                              />
+                            </div>
                           </div>
                         </CardContent>
                       </Card>
+                    )}
 
-                      {history.length > 0 && (
-                        <Card className="bg-white">
-                          <CardContent>
-                            <div className="mb-2 text-xs text-zinc-500">Review history</div>
-                            <div className="grid gap-3">
-                              {history
-                                .slice()
-                                .reverse()
-                                .map((h, idx) => (
-                                  <div key={`${d.id}-rh-${idx}`} className="text-sm">
-                                    <div className="text-xs text-zinc-500">{formatLocal(h.at)}</div>
-                                    <div className="mt-1 whitespace-pre-wrap leading-relaxed text-zinc-800">{h.note}</div>
-                                  </div>
-                                ))}
+                    {d.user_reasoning && !isDraft && (
+                      <Card className="bg-zinc-50">
+                        <CardContent>
+                          <div className="mb-2 text-xs text-zinc-500">Your reasoning</div>
+                          <div className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-800">{d.user_reasoning}</div>
+                        </CardContent>
+                      </Card>
+                    )}
+
+                    {d.ai_summary && (
+                      <Card className="border-sky-200 bg-sky-50">
+                        <CardContent>
+                          <div className="mb-2 text-xs text-zinc-500">AI analysis</div>
+                          <div className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-800">{d.ai_summary}</div>
+                        </CardContent>
+                      </Card>
+                    )}
+
+                    {keyQuestions.length > 0 && (
+                      <Card className="bg-white">
+                        <CardContent>
+                          <div className="mb-2 text-xs text-zinc-500">Key questions to sanity-check</div>
+                          <ul className="list-disc pl-5 text-sm text-zinc-800">
+                            {keyQuestions.map((q, idx) => (
+                              <li key={`${d.id}-kq-${idx}`} className="mb-1">
+                                {q}
+                              </li>
+                            ))}
+                          </ul>
+                        </CardContent>
+                      </Card>
+                    )}
+
+                    {/* Review notes */}
+                    <Card className="bg-zinc-50">
+                      <CardContent>
+                        <div className="mb-2 text-xs text-zinc-500">Review notes</div>
+
+                        {d.review_notes ? (
+                          <div className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-800">{d.review_notes}</div>
+                        ) : (
+                          <div className="text-sm text-zinc-500">No review notes yet.</div>
+                        )}
+
+                        <div className="mt-3 text-xs text-zinc-500">
+                          Add a new note (saved into history + marks reviewed)
+                        </div>
+
+                        <textarea
+                          value={reviewDraft[d.id] ?? ""}
+                          onChange={(e) => setReviewDraft((prev) => ({ ...prev, [d.id]: e.target.value }))}
+                          placeholder="e.g. New info: vet quote came in lower, okay to proceed."
+                          className="mt-2 w-full min-h-[70px] rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
+                        />
+
+                        <div className="mt-3 flex flex-wrap items-start gap-3">
+                          <div className="flex flex-wrap gap-2">
+                            <Button onClick={() => saveReviewNote(d)} disabled={!(reviewDraft[d.id] ?? "").trim()}>
+                              💾 Save review note
+                            </Button>
+
+                            <Button
+                              variant="secondary"
+                              onClick={() =>
+                                setReviewDraft((prev) => {
+                                  const copy = { ...prev };
+                                  delete copy[d.id];
+                                  return copy;
+                                })
+                              }
+                              disabled={!(reviewDraft[d.id] ?? "").trim()}
+                            >
+                              Clear draft
+                            </Button>
+                          </div>
+
+                          {/* ✅ New: optionally set next review while saving note */}
+                          {!isDraft && (
+                            <div className="min-w-[260px]">
+                              <NextReviewControls
+                                decisionId={d.id}
+                                onPickDays={(days) => {
+                                  saveReviewNote(d, days);
+                                }}
+                              />
+                              <div className="mt-1 text-xs text-zinc-500">
+                                Optional — if not set, overdue bumps +{DEFAULT_REVIEW_BUMP_DAYS}d.
+                              </div>
                             </div>
-                          </CardContent>
-                        </Card>
-                      )}
+                          )}
+                        </div>
+                      </CardContent>
+                    </Card>
+                    {history.length > 0 && (
+                      <Card className="bg-white">
+                        <CardContent>
+                          <div className="mb-2 text-xs text-zinc-500">Review history</div>
+                          <div className="grid gap-3">
+                            {history
+                              .slice()
+                              .reverse()
+                              .map((h, idx) => (
+                                <div key={`${d.id}-rh-${idx}`} className="text-sm">
+                                  <div className="text-xs text-zinc-500">{formatLocal(h.at)}</div>
+                                  <div className="mt-1 whitespace-pre-wrap leading-relaxed text-zinc-800">
+                                    {h.note}
+                                  </div>
+                                </div>
+                              ))}
+                          </div>
+                        </CardContent>
+                      </Card>
+                    )}
 
-                      {showAIJson && d.ai_json && (
-                        <pre className="overflow-x-auto rounded-xl bg-zinc-900 p-3 text-xs text-zinc-100">
-                          {JSON.stringify(d.ai_json, null, 2)}
-                        </pre>
-                      )}
+                    {showAIJson && d.ai_json && (
+                      <pre className="overflow-x-auto rounded-xl bg-zinc-900 p-3 text-xs text-zinc-100">
+                        {JSON.stringify(d.ai_json, null, 2)}
+                      </pre>
+                    )}
 
-                      <div className="text-xs text-zinc-500">status: {d.status}</div>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            );
-          })}
+                    <div className="text-xs text-zinc-500">status: {d.status}</div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          );
+        })}
 
-          {filtered.length === 0 && (
-            <div className="text-sm text-zinc-600">
-              {tab === "review" ? "No reviews due (or due soon)." : tab === "drafts" ? "No drafts found." : "No decisions found."}
-            </div>
-          )}
-        </div>
-      </Page>
-    );
-  }
+        {filtered.length === 0 && (
+          <div className="text-sm text-zinc-600">
+            {tab === "review"
+              ? "No reviews due (or due soon)."
+              : tab === "drafts"
+              ? "No drafts found."
+              : "No decisions found."}
+          </div>
+        )}
+      </div>
+    </Page>
+  );
+}
+
