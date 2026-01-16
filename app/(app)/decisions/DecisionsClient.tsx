@@ -115,6 +115,8 @@ type TabMode = "all" | "review" | "drafts";
 
 const DEFAULT_REVIEW_BUMP_DAYS = 30;
 const REVIEW_PRESETS_DAYS = [14, 30, 60] as const;
+
+// ✅ single source of truth (used everywhere: logic + UI)
 const REVIEW_DUE_SOON_HOURS = 48;
 
 function isoNowPlusDays(days: number) {
@@ -164,13 +166,17 @@ export default function DecisionsClient() {
   // realtime status
   const [liveStatus, setLiveStatus] = useState<LiveStatus>("connecting");
 
+  // ✅ keep current user id for realtime filtering (avoid cross-user noise)
+  const userIdRef = useRef<string | null>(null);
+
   // fallback reload throttle (used only if realtime payload is missing)
-  const loadRef = useRef<() => void>(() => {});
+  const loadRef = useRef<(opts?: { silent?: boolean }) => void>(() => {});
   const reloadTimerRef = useRef<number | null>(null);
   const scheduleReload = () => {
     if (reloadTimerRef.current) window.clearTimeout(reloadTimerRef.current);
     reloadTimerRef.current = window.setTimeout(() => {
-      loadRef.current();
+      // ✅ silent fallback reload = no “Loading…” flicker
+      loadRef.current({ silent: true });
     }, 250);
   };
 
@@ -216,8 +222,11 @@ export default function DecisionsClient() {
     router.replace(qs ? `/decisions?${qs}` : "/decisions");
   };
 
-  const load = async () => {
-    setStatusLine("Loading...");
+  // ✅ load supports silent mode (used for realtime fallback reloads)
+  const load = async (opts?: { silent?: boolean }) => {
+    const silent = !!opts?.silent;
+
+    if (!silent) setStatusLine("Loading...");
 
     const { data: auth, error: authError } = await supabase.auth.getUser();
     if (authError) {
@@ -231,6 +240,7 @@ export default function DecisionsClient() {
       return;
     }
 
+    userIdRef.current = user.id;
     setEmail(user.email ?? "");
 
     const { data, error } = await supabase
@@ -247,7 +257,9 @@ export default function DecisionsClient() {
     }
 
     setRows(sortRows((data ?? []) as Decision[]));
-    setStatusLine(`Loaded ${data?.length ?? 0} decision(s).`);
+
+    // ✅ avoid flicker/status spam during silent fallback reloads
+    if (!silent) setStatusLine(`Loaded ${data?.length ?? 0} decision(s).`);
 
     setExpanded((prev) => {
       const next: Record<string, boolean> = {};
@@ -258,8 +270,8 @@ export default function DecisionsClient() {
 
   // keep a stable ref for fallback reloads
   useEffect(() => {
-    loadRef.current = () => {
-      load();
+    loadRef.current = (opts?: { silent?: boolean }) => {
+      load(opts);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -275,6 +287,7 @@ export default function DecisionsClient() {
   }, []);
 
   // ✅ Realtime: patch rows in-place (no full reload)
+  // ✅ Avoid cross-user noise: ignore payloads not matching current user id (best-effort)
   useEffect(() => {
     setLiveStatus("connecting");
 
@@ -285,12 +298,22 @@ export default function DecisionsClient() {
         { event: "*", schema: "public", table: "decisions" },
         (payload: any) => {
           const eventType: string | undefined = payload?.eventType;
-          const newRow = payload?.new as Decision | undefined;
-          const oldRow = payload?.old as Partial<Decision> | undefined;
+          const newRow = payload?.new as any | undefined;
+          const oldRow = payload?.old as any | undefined;
 
-          // If we don't have enough info, fallback to throttled reload
-          const idFromOld = (oldRow as any)?.id as string | undefined;
-          const idFromNew = (newRow as any)?.id as string | undefined;
+          // ✅ filter by user_id when present (avoid cross-user noise)
+          const myUserId = userIdRef.current;
+          const payloadUserId =
+            (newRow && typeof newRow === "object" ? (newRow.user_id as string | undefined) : undefined) ??
+            (oldRow && typeof oldRow === "object" ? (oldRow.user_id as string | undefined) : undefined);
+
+          if (myUserId && payloadUserId && payloadUserId !== myUserId) {
+            return; // ignore other users
+          }
+
+          // If we don't have enough info, fallback to throttled (silent) reload
+          const idFromOld = oldRow?.id as string | undefined;
+          const idFromNew = newRow?.id as string | undefined;
           const id = idFromNew || idFromOld;
 
           if (!eventType || !id) {
@@ -301,15 +324,62 @@ export default function DecisionsClient() {
           setRows((prev) => {
             if (eventType === "INSERT") {
               if (!newRow) return prev;
+
+              // map payload -> Decision shape (only fields we use)
+              const candidate: Decision = {
+                id: newRow.id,
+                inbox_item_id: newRow.inbox_item_id ?? null,
+                title: newRow.title ?? "",
+                context: newRow.context ?? null,
+                status: newRow.status ?? "decided",
+                decided_at: newRow.decided_at ?? null,
+                review_at: newRow.review_at ?? null,
+                created_at: newRow.created_at ?? new Date().toISOString(),
+
+                user_reasoning: newRow.user_reasoning ?? null,
+                confidence_level: newRow.confidence_level ?? null,
+                ai_summary: newRow.ai_summary ?? null,
+                ai_json: newRow.ai_json ?? null,
+
+                pinned: !!newRow.pinned,
+                reviewed_at: newRow.reviewed_at ?? null,
+
+                review_notes: newRow.review_notes ?? null,
+                review_history: Array.isArray(newRow.review_history) ? newRow.review_history : [],
+              };
+
               // dedupe insert
-              const exists = prev.some((x) => x.id === newRow.id);
-              const merged = exists ? prev.map((x) => (x.id === newRow.id ? { ...x, ...newRow } : x)) : [newRow, ...prev];
+              const exists = prev.some((x) => x.id === candidate.id);
+              const merged = exists ? prev.map((x) => (x.id === candidate.id ? { ...x, ...candidate } : x)) : [candidate, ...prev];
               return sortRows(merged);
             }
 
             if (eventType === "UPDATE") {
               if (!newRow) return prev;
-              const merged = prev.map((x) => (x.id === newRow.id ? { ...x, ...newRow } : x));
+
+              // patch only the fields we render/use
+              const patch: Partial<Decision> = {
+                inbox_item_id: newRow.inbox_item_id ?? null,
+                title: newRow.title ?? "",
+                context: newRow.context ?? null,
+                status: newRow.status ?? "decided",
+                decided_at: newRow.decided_at ?? null,
+                review_at: newRow.review_at ?? null,
+                created_at: newRow.created_at ?? undefined,
+
+                user_reasoning: newRow.user_reasoning ?? null,
+                confidence_level: newRow.confidence_level ?? null,
+                ai_summary: newRow.ai_summary ?? null,
+                ai_json: newRow.ai_json ?? null,
+
+                pinned: typeof newRow.pinned === "boolean" ? newRow.pinned : undefined,
+                reviewed_at: newRow.reviewed_at ?? null,
+
+                review_notes: newRow.review_notes ?? null,
+                review_history: Array.isArray(newRow.review_history) ? newRow.review_history : undefined,
+              };
+
+              const merged = prev.map((x) => (x.id === newRow.id ? { ...x, ...patch } : x));
               return sortRows(merged);
             }
 
@@ -317,7 +387,7 @@ export default function DecisionsClient() {
               return prev.filter((x) => x.id !== id);
             }
 
-            // unknown type -> reload
+            // unknown type -> silent reload
             scheduleReload();
             return prev;
           });
@@ -1160,7 +1230,7 @@ export default function DecisionsClient() {
             {liveStatus === "live" ? "Live" : liveStatus === "connecting" ? "Connecting…" : "Offline"}
           </Badge>
 
-          <Button onClick={load}>Refresh</Button>
+          <Button onClick={() => load({ silent: false })}>Refresh</Button>
 
           <Button variant="secondary" onClick={() => expandAll(filtered)}>
             Expand filtered
@@ -1187,12 +1257,10 @@ export default function DecisionsClient() {
         </Chip>
 
         <Chip active={tab === "review"} onClick={() => setTabAndUrl("review")} title="Decisions due or due soon for review">
-          Review {(overdueCount + dueSoonCount) > 0 ? `(${overdueCount + dueSoonCount})` : ""}
+          Review {overdueCount + dueSoonCount > 0 ? `(${overdueCount + dueSoonCount})` : ""}
         </Chip>
 
-        {tab === "review" && filtered.length === 0 && (
-          <div className="self-center text-sm text-zinc-600">Nothing is due (or due soon) 🎉</div>
-        )}
+        {tab === "review" && filtered.length === 0 && <div className="self-center text-sm text-zinc-600">Nothing is due (or due soon) 🎉</div>}
 
         {tab === "drafts" && draftCount === 0 && <div className="self-center text-sm text-zinc-600">No drafts right now 🎉</div>}
       </div>
@@ -1529,229 +1597,229 @@ export default function DecisionsClient() {
                       review_at: {formatLocal(d.review_at)} • reviewed_at: {formatLocal(d.reviewed_at)}
                     </div>
 
-                    {(type || stakes || horizon || reversible) && (
-                      <div className="flex flex-wrap gap-2">
-                        {type && <Badge variant="muted">Type: {type}</Badge>}
-                        {stakes && <Badge variant="muted">{stakes}</Badge>}
-                        {horizon && <Badge variant="muted">Horizon: {horizon}</Badge>}
-                        {reversible && <Badge variant="muted">{reversible}</Badge>}
-                      </div>
-                    )}
+                      {(type || stakes || horizon || reversible) && (
+                        <div className="flex flex-wrap gap-2">
+                          {type && <Badge variant="muted">Type: {type}</Badge>}
+                          {stakes && <Badge variant="muted">{stakes}</Badge>}
+                          {horizon && <Badge variant="muted">Horizon: {horizon}</Badge>}
+                          {reversible && <Badge variant="muted">{reversible}</Badge>}
+                        </div>
+                      )}
 
-                    {d.context && (
-                      <Card className="bg-white">
-                        <CardContent>
-                          <div className="mb-2 text-xs text-zinc-500">Context</div>
-                          <div className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-800">{d.context}</div>
-                        </CardContent>
-                      </Card>
-                    )}
+                      {d.context && (
+                        <Card className="bg-white">
+                          <CardContent>
+                            <div className="mb-2 text-xs text-zinc-500">Context</div>
+                            <div className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-800">{d.context}</div>
+                          </CardContent>
+                        </Card>
+                      )}
 
-                    {/* Draft finish UI */}
-                    {isDraft && (
-                      <Card className="border-zinc-200 bg-white">
-                        <CardContent>
-                          <div className="space-y-3">
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                              <div>
-                                <div className="text-sm font-semibold">Finish this decision</div>
-                                <div className="text-xs text-zinc-500">
-                                  Add your reasoning + confidence, optionally run AI, then mark decided.
-                                  {d.inbox_item_id ? " This will also close the linked Inbox item." : ""}
+                      {/* Draft finish UI */}
+                      {isDraft && (
+                        <Card className="border-zinc-200 bg-white">
+                          <CardContent>
+                            <div className="space-y-3">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <div>
+                                  <div className="text-sm font-semibold">Finish this decision</div>
+                                  <div className="text-xs text-zinc-500">
+                                    Add your reasoning + confidence, optionally run AI, then mark decided.
+                                    {d.inbox_item_id ? " This will also close the linked Inbox item." : ""}
+                                  </div>
+                                </div>
+
+                                <div className="flex flex-wrap gap-2">
+                                  <Button
+                                    variant="secondary"
+                                    onClick={() => runAiForDraft(d)}
+                                    disabled={aiLoad}
+                                    title="Runs /api/analyze-decision and stores ai_summary + ai_json"
+                                  >
+                                    {aiLoad ? "Analyzing..." : d.ai_json ? "Re-analyze with AI" : "Analyze with AI"}
+                                  </Button>
+
+                                  <Button onClick={() => finishDraftDecision(d)} disabled={saving} title="Sets status=decided + decided_at">
+                                    {saving ? "Saving..." : "Decide Now ✅"}
+                                  </Button>
                                 </div>
                               </div>
 
-                              <div className="flex flex-wrap gap-2">
-                                <Button
-                                  variant="secondary"
-                                  onClick={() => runAiForDraft(d)}
-                                  disabled={aiLoad}
-                                  title="Runs /api/analyze-decision and stores ai_summary + ai_json"
-                                >
-                                  {aiLoad ? "Analyzing..." : d.ai_json ? "Re-analyze with AI" : "Analyze with AI"}
-                                </Button>
+                              {aiErr && <div className="text-xs text-red-700">AI error: {aiErr}</div>}
 
-                                <Button onClick={() => finishDraftDecision(d)} disabled={saving} title="Sets status=decided + decided_at">
-                                  {saving ? "Saving..." : "Decide Now ✅"}
-                                </Button>
+                              <div className="space-y-2">
+                                <div className="text-xs text-zinc-500">How confident do you feel?</div>
+
+                                <div className="flex flex-wrap gap-4">
+                                  {[1, 2, 3].map((level) => (
+                                    <label
+                                      key={level}
+                                      className={`flex cursor-pointer items-center gap-2 text-sm ${
+                                        draftConfidence[d.id] === level ? "opacity-100" : "opacity-80"
+                                      }`}
+                                    >
+                                      <input
+                                        type="radio"
+                                        name={`draft-confidence-${d.id}`}
+                                        checked={draftConfidence[d.id] === level}
+                                        onChange={() =>
+                                          setDraftConfidence((prev) => ({
+                                            ...prev,
+                                            [d.id]: level,
+                                          }))
+                                        }
+                                      />
+                                      {level === 1 ? "Low" : level === 2 ? "Medium" : "High"}
+                                    </label>
+                                  ))}
+                                </div>
+
+                                <textarea
+                                  placeholder="Why did you decide this? (optional)"
+                                  value={draftReason[d.id] ?? d.user_reasoning ?? ""}
+                                  onChange={(e) =>
+                                    setDraftReason((prev) => ({
+                                      ...prev,
+                                      [d.id]: e.target.value,
+                                    }))
+                                  }
+                                  className="w-full min-h-[70px] rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
+                                />
                               </div>
                             </div>
+                          </CardContent>
+                        </Card>
+                      )}
 
-                            {aiErr && <div className="text-xs text-red-700">AI error: {aiErr}</div>}
+                      {d.user_reasoning && !isDraft && (
+                        <Card className="bg-zinc-50">
+                          <CardContent>
+                            <div className="mb-2 text-xs text-zinc-500">Your reasoning</div>
+                            <div className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-800">{d.user_reasoning}</div>
+                          </CardContent>
+                        </Card>
+                      )}
 
-                            <div className="space-y-2">
-                              <div className="text-xs text-zinc-500">How confident do you feel?</div>
+                      {d.ai_summary && (
+                        <Card className="border-sky-200 bg-sky-50">
+                          <CardContent>
+                            <div className="mb-2 text-xs text-zinc-500">AI analysis</div>
+                            <div className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-800">{d.ai_summary}</div>
+                          </CardContent>
+                        </Card>
+                      )}
 
-                              <div className="flex flex-wrap gap-4">
-                                {[1, 2, 3].map((level) => (
-                                  <label
-                                    key={level}
-                                    className={`flex cursor-pointer items-center gap-2 text-sm ${
-                                      draftConfidence[d.id] === level ? "opacity-100" : "opacity-80"
-                                    }`}
-                                  >
-                                    <input
-                                      type="radio"
-                                      name={`draft-confidence-${d.id}`}
-                                      checked={draftConfidence[d.id] === level}
-                                      onChange={() =>
-                                        setDraftConfidence((prev) => ({
-                                          ...prev,
-                                          [d.id]: level,
-                                        }))
-                                      }
-                                    />
-                                    {level === 1 ? "Low" : level === 2 ? "Medium" : "High"}
-                                  </label>
-                                ))}
-                              </div>
+                      {keyQuestions.length > 0 && (
+                        <Card className="bg-white">
+                          <CardContent>
+                            <div className="mb-2 text-xs text-zinc-500">Key questions to sanity-check</div>
+                            <ul className="list-disc pl-5 text-sm text-zinc-800">
+                              {keyQuestions.map((q, idx) => (
+                                <li key={`${d.id}-kq-${idx}`} className="mb-1">
+                                  {q}
+                                </li>
+                              ))}
+                            </ul>
+                          </CardContent>
+                        </Card>
+                      )}
 
-                              <textarea
-                                placeholder="Why did you decide this? (optional)"
-                                value={draftReason[d.id] ?? d.user_reasoning ?? ""}
-                                onChange={(e) =>
-                                  setDraftReason((prev) => ({
-                                    ...prev,
-                                    [d.id]: e.target.value,
-                                  }))
-                                }
-                                className="w-full min-h-[70px] rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
-                              />
-                            </div>
-                          </div>
-                        </CardContent>
-                      </Card>
-                    )}
-
-                    {d.user_reasoning && !isDraft && (
+                      {/* Review notes */}
                       <Card className="bg-zinc-50">
                         <CardContent>
-                          <div className="mb-2 text-xs text-zinc-500">Your reasoning</div>
-                          <div className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-800">{d.user_reasoning}</div>
-                        </CardContent>
-                      </Card>
-                    )}
+                          <div className="mb-2 text-xs text-zinc-500">Review notes</div>
 
-                    {d.ai_summary && (
-                      <Card className="border-sky-200 bg-sky-50">
-                        <CardContent>
-                          <div className="mb-2 text-xs text-zinc-500">AI analysis</div>
-                          <div className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-800">{d.ai_summary}</div>
-                        </CardContent>
-                      </Card>
-                    )}
-
-                    {keyQuestions.length > 0 && (
-                      <Card className="bg-white">
-                        <CardContent>
-                          <div className="mb-2 text-xs text-zinc-500">Key questions to sanity-check</div>
-                          <ul className="list-disc pl-5 text-sm text-zinc-800">
-                            {keyQuestions.map((q, idx) => (
-                              <li key={`${d.id}-kq-${idx}`} className="mb-1">
-                                {q}
-                              </li>
-                            ))}
-                          </ul>
-                        </CardContent>
-                      </Card>
-                    )}
-
-                    {/* Review notes */}
-                    <Card className="bg-zinc-50">
-                      <CardContent>
-                        <div className="mb-2 text-xs text-zinc-500">Review notes</div>
-
-                        {d.review_notes ? (
-                          <div className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-800">{d.review_notes}</div>
-                        ) : (
-                          <div className="text-sm text-zinc-500">No review notes yet.</div>
-                        )}
-
-                        <div className="mt-3 text-xs text-zinc-500">Add a new note (saved into history + marks reviewed)</div>
-
-                        <textarea
-                          value={reviewDraft[d.id] ?? ""}
-                          onChange={(e) => setReviewDraft((prev) => ({ ...prev, [d.id]: e.target.value }))}
-                          placeholder="e.g. New info: vet quote came in lower, okay to proceed."
-                          className="mt-2 w-full min-h-[70px] rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
-                        />
-
-                        <div className="mt-3 flex flex-wrap items-start gap-3">
-                          <div className="flex flex-wrap gap-2">
-                            <Button onClick={() => saveReviewNote(d)} disabled={!(reviewDraft[d.id] ?? "").trim()}>
-                              💾 Save review note
-                            </Button>
-
-                            <Button
-                              variant="secondary"
-                              onClick={() =>
-                                setReviewDraft((prev) => {
-                                  const copy = { ...prev };
-                                  delete copy[d.id];
-                                  return copy;
-                                })
-                              }
-                              disabled={!(reviewDraft[d.id] ?? "").trim()}
-                            >
-                              Clear draft
-                            </Button>
-                          </div>
-
-                          {/* ✅ New: optionally set next review while saving note */}
-                          {!isDraft && (
-                            <div className="min-w-[260px]">
-                              <NextReviewControls
-                                decisionId={d.id}
-                                onPickDays={(days) => {
-                                  saveReviewNote(d, days);
-                                }}
-                              />
-                              <div className="mt-1 text-xs text-zinc-500">Optional — if not set, overdue bumps +{DEFAULT_REVIEW_BUMP_DAYS}d.</div>
-                            </div>
+                          {d.review_notes ? (
+                            <div className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-800">{d.review_notes}</div>
+                          ) : (
+                            <div className="text-sm text-zinc-500">No review notes yet.</div>
                           )}
-                        </div>
-                      </CardContent>
-                    </Card>
 
-                    {history.length > 0 && (
-                      <Card className="bg-white">
-                        <CardContent>
-                          <div className="mb-2 text-xs text-zinc-500">Review history</div>
-                          <div className="grid gap-3">
-                            {history
-                              .slice()
-                              .reverse()
-                              .map((h, idx) => (
-                                <div key={`${d.id}-rh-${idx}`} className="text-sm">
-                                  <div className="text-xs text-zinc-500">{formatLocal(h.at)}</div>
-                                  <div className="mt-1 whitespace-pre-wrap leading-relaxed text-zinc-800">{h.note}</div>
-                                </div>
-                              ))}
+                          <div className="mt-3 text-xs text-zinc-500">Add a new note (saved into history + marks reviewed)</div>
+
+                          <textarea
+                            value={reviewDraft[d.id] ?? ""}
+                            onChange={(e) => setReviewDraft((prev) => ({ ...prev, [d.id]: e.target.value }))}
+                            placeholder="e.g. New info: vet quote came in lower, okay to proceed."
+                            className="mt-2 w-full min-h-[70px] rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
+                          />
+
+                          <div className="mt-3 flex flex-wrap items-start gap-3">
+                            <div className="flex flex-wrap gap-2">
+                              <Button onClick={() => saveReviewNote(d)} disabled={!(reviewDraft[d.id] ?? "").trim()}>
+                                💾 Save review note
+                              </Button>
+
+                              <Button
+                                variant="secondary"
+                                onClick={() =>
+                                  setReviewDraft((prev) => {
+                                    const copy = { ...prev };
+                                    delete copy[d.id];
+                                    return copy;
+                                  })
+                                }
+                                disabled={!(reviewDraft[d.id] ?? "").trim()}
+                              >
+                                Clear draft
+                              </Button>
+                            </div>
+
+                            {/* ✅ New: optionally set next review while saving note */}
+                            {!isDraft && (
+                              <div className="min-w-[260px]">
+                                <NextReviewControls
+                                  decisionId={d.id}
+                                  onPickDays={(days) => {
+                                    saveReviewNote(d, days);
+                                  }}
+                                />
+                                <div className="mt-1 text-xs text-zinc-500">Optional — if not set, overdue bumps +{DEFAULT_REVIEW_BUMP_DAYS}d.</div>
+                              </div>
+                            )}
                           </div>
                         </CardContent>
                       </Card>
-                    )}
 
-                    {showAIJson && d.ai_json && (
-                      <pre className="overflow-x-auto rounded-xl bg-zinc-900 p-3 text-xs text-zinc-100">
-                        {JSON.stringify(d.ai_json, null, 2)}
-                      </pre>
-                    )}
+                      {history.length > 0 && (
+                        <Card className="bg-white">
+                          <CardContent>
+                            <div className="mb-2 text-xs text-zinc-500">Review history</div>
+                            <div className="grid gap-3">
+                              {history
+                                .slice()
+                                .reverse()
+                                .map((h, idx) => (
+                                  <div key={`${d.id}-rh-${idx}`} className="text-sm">
+                                    <div className="text-xs text-zinc-500">{formatLocal(h.at)}</div>
+                                    <div className="mt-1 whitespace-pre-wrap leading-relaxed text-zinc-800">{h.note}</div>
+                                  </div>
+                                ))}
+                            </div>
+                          </CardContent>
+                        </Card>
+                      )}
 
-                    <div className="text-xs text-zinc-500">status: {d.status}</div>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          );
-        })}
+                      {showAIJson && d.ai_json && (
+                        <pre className="overflow-x-auto rounded-xl bg-zinc-900 p-3 text-xs text-zinc-100">
+                          {JSON.stringify(d.ai_json, null, 2)}
+                        </pre>
+                      )}
 
-        {filtered.length === 0 && (
-          <div className="text-sm text-zinc-600">
-            {tab === "review" ? "No reviews due (or due soon)." : tab === "drafts" ? "No drafts found." : "No decisions found."}
-          </div>
-        )}
-      </div>
-    </Page>
-  );
-}
+                      <div className="text-xs text-zinc-500">status: {d.status}</div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            );
+          })}
+
+          {filtered.length === 0 && (
+            <div className="text-sm text-zinc-600">
+              {tab === "review" ? "No reviews due (or due soon)." : tab === "drafts" ? "No drafts found." : "No decisions found."}
+            </div>
+          )}
+        </div>
+      </Page>
+    );
+  }
