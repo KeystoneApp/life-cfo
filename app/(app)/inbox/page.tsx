@@ -7,7 +7,6 @@ import { supabase } from "@/lib/supabaseClient";
 import { Badge, Button, Card, CardContent, useToast, Chip } from "@/components/ui";
 import { Page } from "@/components/Page";
 
-
 // ---- CONFIG ----
 const PROMOTED_STATUS: "decided" | "draft" = "decided";
 
@@ -25,6 +24,8 @@ type InboxItem = {
   snoozed_until: string | null;
   created_at: string | null;
   updated_at: string | null;
+  action_label: string | null;
+  action_href: string | null;
 
   // ✅ important for insights actions
   dedupe_key?: string | null;
@@ -502,7 +503,7 @@ export default function InboxPage() {
           review_notes: null,
           review_history: [],
         })
-        .select("id")
+        .select("id,user_id,type,title,body,severity,status,snoozed_until,created_at,run_id,dedupe_key,action_label,action_href")
         .single();
 
       if (insertError) {
@@ -595,7 +596,7 @@ export default function InboxPage() {
           review_notes: null,
           review_history: [],
         })
-        .select("id")
+        .select("id,user_id,type,title,body,severity,status,snoozed_until,created_at,run_id,dedupe_key,action_label,action_href")
         .single();
 
       if (insertError) {
@@ -688,28 +689,26 @@ export default function InboxPage() {
       title="Inbox"
       subtitle={headerSubtitle}
       right={
-  <div className="flex items-center gap-2">
-    <Badge variant={badge.variant}>● {badge.text}</Badge>
+        <div className="flex items-center gap-2">
+          <Badge variant={badge.variant}>● {badge.text}</Badge>
 
-    <Button onClick={() => loadRef.current()}>
-      Refresh
-    </Button>
+          <Button onClick={() => loadRef.current()}>Refresh</Button>
 
-    <Button variant="secondary" onClick={() => router.push("/decisions?tab=review")}>
-      Review now
-    </Button>
+          <Button variant="secondary" onClick={() => router.push("/decisions?tab=review")}>
+            Review now
+          </Button>
 
-    <Button variant="secondary" onClick={() => router.push("/engine")}>
-      Insights
-    </Button>
+          <Button variant="secondary" onClick={() => router.push("/engine")}>
+            Insights
+          </Button>
 
-    {process.env.NODE_ENV === "development" && (
-      <Button variant="secondary" onClick={forceUnsnoozeAll}>
-        Force Unsnooze (dev)
-      </Button>
-    )}
-  </div>
-}
+          {process.env.NODE_ENV === "development" && (
+            <Button variant="secondary" onClick={forceUnsnoozeAll}>
+              Force Unsnooze (dev)
+            </Button>
+          )}
+        </div>
+      }
     >
       {affirmation && (
         <Card className="border-emerald-200 bg-emerald-50">
@@ -823,6 +822,27 @@ export default function InboxPage() {
                           </div>
                         </CardContent>
                       </Card>
+                    )}
+
+                    {/* ✅ FIX: this block must use `it`, not `item` */}
+                    {it.action_href && (
+                      <Button
+                        variant="secondary"
+                        onClick={async (e) => {
+                          e.stopPropagation?.();
+
+                          // Auto-resolve the insight/reminder when using the action
+                          await supabase
+                            .from("decision_inbox")
+                            .update({ status: "done", snoozed_until: null })
+                            .eq("id", it.id);
+
+                          router.push(it.action_href!);
+                        }}
+                        title="Use this insight and jump to the right place"
+                      >
+                        {it.action_label ?? "Open"}
+                      </Button>
                     )}
 
                     <div className="space-y-2">
