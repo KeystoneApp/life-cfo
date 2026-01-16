@@ -7,6 +7,7 @@ import { supabase } from "@/lib/supabaseClient";
 import { Badge, Button, Card, CardContent, useToast, Chip } from "@/components/ui";
 import { Page } from "@/components/Page";
 
+
 // ---- CONFIG ----
 const PROMOTED_STATUS: "decided" | "draft" = "decided";
 
@@ -687,18 +688,28 @@ export default function InboxPage() {
       title="Inbox"
       subtitle={headerSubtitle}
       right={
-        <div className="flex items-center gap-2">
-          <Badge variant={badge.variant} title="Realtime connection status">
-            ● {badge.text}
-          </Badge>
-          <Button onClick={() => loadRef.current()}>Refresh</Button>
-          {process.env.NODE_ENV === "development" && (
-            <Button variant="secondary" onClick={forceUnsnoozeAll}>
-              Force Unsnooze (dev)
-            </Button>
-          )}
-        </div>
-      }
+  <div className="flex items-center gap-2">
+    <Badge variant={badge.variant}>● {badge.text}</Badge>
+
+    <Button onClick={() => loadRef.current()}>
+      Refresh
+    </Button>
+
+    <Button variant="secondary" onClick={() => router.push("/decisions?tab=review")}>
+      Review now
+    </Button>
+
+    <Button variant="secondary" onClick={() => router.push("/engine")}>
+      Insights
+    </Button>
+
+    {process.env.NODE_ENV === "development" && (
+      <Button variant="secondary" onClick={forceUnsnoozeAll}>
+        Force Unsnooze (dev)
+      </Button>
+    )}
+  </div>
+}
     >
       {affirmation && (
         <Card className="border-emerald-200 bg-emerald-50">
