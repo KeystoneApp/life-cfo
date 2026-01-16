@@ -494,7 +494,12 @@ export default function InboxPage() {
     }
 
     setAffirmation(null);
-    setStatusLine("Dismissing v2 insights...");
+
+    // Optimistic UI
+    const prevItems = items;
+    setItems((prev) => prev.map((it) => (ids.includes(it.id) ? { ...it, status: "done", snoozed_until: null } : it)));
+    ids.forEach((id) => clearPerItemInputs(id));
+    setStatusLine(`Dismissed ${ids.length} insight(s) ✅`);
 
     const { error } = await supabase
       .from("decision_inbox")
@@ -503,15 +508,43 @@ export default function InboxPage() {
       .eq("user_id", userId);
 
     if (error) {
+      // Revert
+      setItems(prevItems);
       setStatusLine(`Dismiss failed: ${error.message}`);
+      showToast({ message: `Dismiss failed: ${error.message}` }, 5000);
       return;
     }
 
-    setItems((prev) => prev.map((it) => (ids.includes(it.id) ? { ...it, status: "done", snoozed_until: null } : it)));
-    ids.forEach((id) => clearPerItemInputs(id));
+    showToast(
+      {
+        message: `Dismissed ${ids.length} insight(s) ✅`,
+        undoLabel: "Undo",
+        onUndo: async () => {
+          setStatusLine("Undoing dismiss...");
+          // Optimistic reopen
+          const prev2 = items;
+          setItems((prev) =>
+            prev.map((it) => (ids.includes(it.id) ? { ...it, status: "open", snoozed_until: null } : it))
+          );
 
-    setStatusLine("Dismissed ✅");
-    showToast({ message: "Insights dismissed ✅" }, 4000);
+          const { error: undoErr } = await supabase
+            .from("decision_inbox")
+            .update({ status: "open", snoozed_until: null })
+            .in("id", ids)
+            .eq("user_id", userId);
+
+          if (undoErr) {
+            setItems(prev2);
+            setStatusLine(`Undo failed: ${undoErr.message}`);
+            showToast({ message: `Undo failed: ${undoErr.message}` }, 5000);
+            return;
+          }
+
+          setStatusLine("Undone ✅");
+        },
+      },
+      8000
+    );
   };
 
   const decideNowAndCloseInboxItem = async (item: InboxItem) => {
@@ -785,9 +818,7 @@ export default function InboxPage() {
               <span className="text-xs text-zinc-500">{open ? "Hide" : "Show"}</span>
             </button>
 
-            <div className="flex flex-wrap items-center justify-end gap-2">
-              {actions}
-            </div>
+            <div className="flex flex-wrap items-center justify-end gap-2">{actions}</div>
           </div>
 
           {description && <div className="mt-2 text-xs text-zinc-600">{description}</div>}
