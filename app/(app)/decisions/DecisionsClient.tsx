@@ -113,6 +113,7 @@ type SuggestedFilter = "all" | "decide_now" | "delay" | "gather_info";
 type TabMode = "all" | "review" | "drafts";
 
 const DEFAULT_REVIEW_BUMP_DAYS = 30;
+const REVIEW_PRESETS_DAYS = [14, 30, 60] as const;
 
 function isoNowPlusDays(days: number) {
   return new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
@@ -122,6 +123,11 @@ function parseMs(dt: string | null) {
   if (!dt) return null;
   const ms = Date.parse(dt);
   return Number.isNaN(ms) ? null : ms;
+}
+
+function clampInt(n: number, min: number, max: number) {
+  if (!Number.isFinite(n)) return min;
+  return Math.max(min, Math.min(max, Math.trunc(n)));
 }
 
 export default function DecisionsClient() {
@@ -152,6 +158,10 @@ export default function DecisionsClient() {
 
   // review drafts
   const [reviewDraft, setReviewDraft] = useState<Record<string, string>>({});
+
+  // review cadence UI (per decision)
+  const [showCustomNextReview, setShowCustomNextReview] = useState<Record<string, boolean>>({});
+  const [customNextReviewDays, setCustomNextReviewDays] = useState<Record<string, string>>({});
 
   // draft finishing inputs
   const [draftReason, setDraftReason] = useState<Record<string, string>>({});
@@ -298,10 +308,12 @@ export default function DecisionsClient() {
   };
 
   /**
-   * ✅ Mark reviewed and, if the item was overdue, bump review_at forward by DEFAULT_REVIEW_BUMP_DAYS.
+   * ✅ Mark reviewed now.
+   * - If nextDays is provided: set review_at = now + nextDays (always)
+   * - Else: if overdue, bump review_at by DEFAULT_REVIEW_BUMP_DAYS
    * Undo restores BOTH reviewed_at and review_at.
    */
-  const markReviewedNow = async (id: string) => {
+  const markReviewedNow = async (id: string, nextDays?: number) => {
     const row = rows.find((x) => x.id === id);
     if (!row) return;
 
@@ -309,12 +321,22 @@ export default function DecisionsClient() {
     const prevReviewAt = row.review_at ?? null;
 
     const nowIso = new Date().toISOString();
+
     const reviewAtMs = parseMs(row.review_at);
-    const shouldBump = reviewAtMs != null && reviewAtMs <= Date.now();
-    const nextReviewAt = shouldBump ? isoNowPlusDays(DEFAULT_REVIEW_BUMP_DAYS) : prevReviewAt;
+    const isOverdue = reviewAtMs != null && reviewAtMs <= Date.now();
+
+    const shouldSetExplicit = typeof nextDays === "number" && Number.isFinite(nextDays) && nextDays > 0;
+    const explicitDays = shouldSetExplicit ? clampInt(nextDays, 1, 3650) : null;
+
+    const shouldBumpDefault = !shouldSetExplicit && isOverdue;
+    const nextReviewAt = shouldSetExplicit
+      ? isoNowPlusDays(explicitDays!)
+      : shouldBumpDefault
+        ? isoNowPlusDays(DEFAULT_REVIEW_BUMP_DAYS)
+        : prevReviewAt;
 
     const payload: any = { reviewed_at: nowIso };
-    if (shouldBump) payload.review_at = nextReviewAt;
+    if (shouldSetExplicit || shouldBumpDefault) payload.review_at = nextReviewAt;
 
     const { error } = await supabase.from("decisions").update(payload).eq("id", id);
     if (error) {
@@ -322,15 +344,19 @@ export default function DecisionsClient() {
       return;
     }
 
-    setRows((prev) =>
-      prev.map((d) => (d.id === id ? { ...d, reviewed_at: nowIso, review_at: nextReviewAt } : d))
-    );
+    setRows((prev) => prev.map((d) => (d.id === id ? { ...d, reviewed_at: nowIso, review_at: nextReviewAt } : d)));
 
-    setStatusLine(shouldBump ? `Reviewed ✅ (next in ${DEFAULT_REVIEW_BUMP_DAYS}d)` : "Reviewed ✅");
+    const msg = shouldSetExplicit
+      ? `Reviewed ✅ (next in ${explicitDays}d)`
+      : shouldBumpDefault
+        ? `Reviewed ✅ (next in ${DEFAULT_REVIEW_BUMP_DAYS}d)`
+        : "Reviewed ✅";
+
+    setStatusLine(msg);
 
     showToast(
       {
-        message: shouldBump ? `Reviewed ✅ (next in ${DEFAULT_REVIEW_BUMP_DAYS}d)` : "Reviewed ✅",
+        message: msg,
         undoLabel: "Undo",
         onUndo: async () => {
           setStatusLine("Undoing review...");
@@ -345,10 +371,7 @@ export default function DecisionsClient() {
             return;
           }
 
-          setRows((prev) =>
-            prev.map((d) => (d.id === id ? { ...d, reviewed_at: prevReviewedAt, review_at: prevReviewAt } : d))
-          );
-
+          setRows((prev) => prev.map((d) => (d.id === id ? { ...d, reviewed_at: prevReviewedAt, review_at: prevReviewAt } : d)));
           setStatusLine("Undone ✅");
         },
       },
@@ -387,9 +410,11 @@ export default function DecisionsClient() {
    * - Adds note to history
    * - Sets review_notes = latest
    * - Sets reviewed_at = now
-   * - If currently overdue, bumps review_at forward by DEFAULT_REVIEW_BUMP_DAYS
+   * - If nextDays is provided: set review_at = now + nextDays (always)
+   * - Else: if currently overdue, bumps review_at forward by DEFAULT_REVIEW_BUMP_DAYS
+   * Undo restores reviewed_at, review_at, review_notes, review_history.
    */
-  const saveReviewNote = async (d: Decision) => {
+  const saveReviewNote = async (d: Decision, nextDays?: number) => {
     const note = (reviewDraft[d.id] ?? "").trim();
     if (!note) return;
 
@@ -403,15 +428,24 @@ export default function DecisionsClient() {
     const nextReviewNotes = note;
 
     const reviewAtMs = parseMs(d.review_at);
-    const shouldBump = reviewAtMs != null && reviewAtMs <= Date.now();
-    const nextReviewAt = shouldBump ? isoNowPlusDays(DEFAULT_REVIEW_BUMP_DAYS) : prevReviewAt;
+    const isOverdue = reviewAtMs != null && reviewAtMs <= Date.now();
+
+    const shouldSetExplicit = typeof nextDays === "number" && Number.isFinite(nextDays) && nextDays > 0;
+    const explicitDays = shouldSetExplicit ? clampInt(nextDays, 1, 3650) : null;
+
+    const shouldBumpDefault = !shouldSetExplicit && isOverdue;
+    const nextReviewAt = shouldSetExplicit
+      ? isoNowPlusDays(explicitDays!)
+      : shouldBumpDefault
+        ? isoNowPlusDays(DEFAULT_REVIEW_BUMP_DAYS)
+        : prevReviewAt;
 
     const payload: any = {
       review_history: nextHistory,
       review_notes: nextReviewNotes,
       reviewed_at: at,
     };
-    if (shouldBump) payload.review_at = nextReviewAt;
+    if (shouldSetExplicit || shouldBumpDefault) payload.review_at = nextReviewAt;
 
     const { error } = await supabase.from("decisions").update(payload).eq("id", d.id);
 
@@ -440,11 +474,24 @@ export default function DecisionsClient() {
       return copy;
     });
 
-    setStatusLine(shouldBump ? `Review note saved ✅ (next in ${DEFAULT_REVIEW_BUMP_DAYS}d)` : "Review note saved ✅");
+    setShowCustomNextReview((prev) => ({ ...prev, [d.id]: false }));
+    setCustomNextReviewDays((prev) => {
+      const copy = { ...prev };
+      delete copy[d.id];
+      return copy;
+    });
+
+    const msg = shouldSetExplicit
+      ? `Review note saved ✅ (next in ${explicitDays}d)`
+      : shouldBumpDefault
+        ? `Review note saved ✅ (next in ${DEFAULT_REVIEW_BUMP_DAYS}d)`
+        : "Review note saved ✅";
+
+    setStatusLine(msg);
 
     showToast(
       {
-        message: shouldBump ? `Review note saved ✅ (next in ${DEFAULT_REVIEW_BUMP_DAYS}d)` : "Review note saved ✅",
+        message: msg,
         undoLabel: "Undo",
         onUndo: async () => {
           setStatusLine("Undoing review note...");
@@ -525,7 +572,6 @@ export default function DecisionsClient() {
       const { error: bumpErr } = await supabase.from("decisions").update({ review_at: bumpIso }).in("id", overdueIds);
       if (bumpErr) {
         setStatusLine(`Reviewed ✅ but bump failed: ${bumpErr.message}`);
-        // still update local for reviewed_at only
         setRows((prev) => prev.map((d) => (ids.includes(d.id) ? { ...d, reviewed_at: nowIso } : d)));
         clearSelection();
         return;
@@ -551,7 +597,10 @@ export default function DecisionsClient() {
           setStatusLine("Undoing bulk review...");
 
           const tasks = ids.map((id) =>
-            supabase.from("decisions").update({ reviewed_at: prevReviewedMap[id] ?? null, review_at: prevReviewAtMap[id] ?? null }).eq("id", id)
+            supabase
+              .from("decisions")
+              .update({ reviewed_at: prevReviewedMap[id] ?? null, review_at: prevReviewAtMap[id] ?? null })
+              .eq("id", id)
           );
           const results = await Promise.all(tasks);
           const failed = results.find((r) => r.error);
@@ -647,7 +696,9 @@ export default function DecisionsClient() {
       }
 
       setRows((prev) =>
-        prev.map((x) => (x.id === d.id ? { ...x, ai_summary: analysis?.reasoning ?? null, ai_json: analysis ?? null } : x))
+        prev.map((x) =>
+          x.id === d.id ? { ...x, ai_summary: analysis?.reasoning ?? null, ai_json: analysis ?? null } : x
+        )
       );
     } catch (e: any) {
       setDraftAiError((prev) => ({ ...prev, [d.id]: e?.message ?? "AI analysis failed" }));
@@ -729,7 +780,10 @@ export default function DecisionsClient() {
           }
 
           if (d.inbox_item_id && inboxClosedOk) {
-            const { error: reopenErr } = await supabase.from("decision_inbox").update({ status: "open", snoozed_until: null }).eq("id", d.inbox_item_id);
+            const { error: reopenErr } = await supabase
+              .from("decision_inbox")
+              .update({ status: "open", snoozed_until: null })
+              .eq("id", d.inbox_item_id);
 
             if (reopenErr) {
               setStatusLine(`Undo partial (reopen inbox failed): ${reopenErr.message}`);
@@ -817,6 +871,97 @@ export default function DecisionsClient() {
     if (s === "decided") return "green";
     if (s === "draft") return "#71717a";
     return "gray";
+  };
+
+  const NextReviewControls = ({
+    decisionId,
+    onPickDays,
+    compact = false,
+  }: {
+    decisionId: string;
+    onPickDays: (days: number) => void;
+    compact?: boolean;
+  }) => {
+    const showCustom = !!showCustomNextReview[decisionId];
+    const customStr = customNextReviewDays[decisionId] ?? "";
+
+    return (
+      <div className={compact ? "flex flex-wrap items-center gap-2" : "space-y-2"}>
+        {!compact && <div className="text-xs text-zinc-500">Next review</div>}
+
+        <div className="flex flex-wrap items-center gap-2">
+          {REVIEW_PRESETS_DAYS.map((days) => (
+            <Button
+              key={`${decisionId}-nr-${days}`}
+              variant="secondary"
+              onClick={(e) => {
+                e.stopPropagation();
+                onPickDays(days);
+              }}
+              title={`Mark reviewed and set next review in ${days} days`}
+            >
+              {days}d
+            </Button>
+          ))}
+
+          <Button
+            variant="secondary"
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowCustomNextReview((prev) => ({ ...prev, [decisionId]: !prev[decisionId] }));
+            }}
+            title="Pick a custom number of days"
+          >
+            Custom…
+          </Button>
+        </div>
+
+        {showCustom && (
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              value={customStr}
+              onChange={(e) => setCustomNextReviewDays((prev) => ({ ...prev, [decisionId]: e.target.value }))}
+              placeholder="e.g. 5"
+              inputMode="numeric"
+              className="w-[140px] rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  const n = Number(customStr);
+                  if (Number.isFinite(n) && n > 0) onPickDays(clampInt(n, 1, 3650));
+                }
+              }}
+            />
+
+            <div className="text-sm text-zinc-600">days</div>
+
+            <Button
+              onClick={(e) => {
+                e.stopPropagation();
+                const n = Number(customStr);
+                if (!Number.isFinite(n) || n <= 0) return;
+                onPickDays(clampInt(n, 1, 3650));
+              }}
+              disabled={!customStr.trim()}
+              title="Apply custom cadence"
+            >
+              Set
+            </Button>
+
+            <Button
+              variant="secondary"
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowCustomNextReview((prev) => ({ ...prev, [decisionId]: false }));
+              }}
+            >
+              Cancel
+            </Button>
+
+            <div className="text-xs text-zinc-500">Max 3650 days.</div>
+          </div>
+        )}
+      </div>
+    );
   };
 
   // ---------- UI ----------
@@ -1027,10 +1172,10 @@ export default function DecisionsClient() {
                 isDraft
                   ? "border-zinc-200 bg-zinc-50"
                   : due
-                  ? "border-amber-200 bg-amber-50"
-                  : dueSoon
-                  ? "border-yellow-200 bg-yellow-50"
-                  : "bg-white"
+                    ? "border-amber-200 bg-amber-50"
+                    : dueSoon
+                      ? "border-yellow-200 bg-yellow-50"
+                      : "bg-white"
               }
             >
               <CardContent>
@@ -1152,6 +1297,28 @@ export default function DecisionsClient() {
                       </Button>
                     </div>
 
+                    {/* ✅ New: pick next review cadence right here */}
+                    {!isDraft && (
+                      <Card className="bg-white">
+                        <CardContent>
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div>
+                              <div className="text-sm font-semibold">Set next review</div>
+                              <div className="text-xs text-zinc-500">Marks reviewed now and schedules the next check-in.</div>
+                            </div>
+
+                            <NextReviewControls
+                              decisionId={d.id}
+                              onPickDays={(days) => {
+                                markReviewedNow(d.id, days);
+                              }}
+                              compact
+                            />
+                          </div>
+                        </CardContent>
+                      </Card>
+                    )}
+
                     <div className="text-xs text-zinc-500">
                       review_at: {formatLocal(d.review_at)} • reviewed_at: {formatLocal(d.reviewed_at)}
                     </div>
@@ -1213,7 +1380,9 @@ export default function DecisionsClient() {
                                 {[1, 2, 3].map((level) => (
                                   <label
                                     key={level}
-                                    className={`flex cursor-pointer items-center gap-2 text-sm ${draftConfidence[d.id] === level ? "opacity-100" : "opacity-80"}`}
+                                    className={`flex cursor-pointer items-center gap-2 text-sm ${
+                                      draftConfidence[d.id] === level ? "opacity-100" : "opacity-80"
+                                    }`}
                                   >
                                     <input
                                       type="radio"
@@ -1292,9 +1461,7 @@ export default function DecisionsClient() {
                           <div className="text-sm text-zinc-500">No review notes yet.</div>
                         )}
 
-                        <div className="mt-3 text-xs text-zinc-500">
-                          Add a new note (saved into history + marks reviewed{d.review_at ? `; bumps overdue +${DEFAULT_REVIEW_BUMP_DAYS}d` : ""})
-                        </div>
+                        <div className="mt-3 text-xs text-zinc-500">Add a new note (saved into history + marks reviewed)</div>
 
                         <textarea
                           value={reviewDraft[d.id] ?? ""}
@@ -1303,24 +1470,39 @@ export default function DecisionsClient() {
                           className="mt-2 w-full min-h-[70px] rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
                         />
 
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          <Button onClick={() => saveReviewNote(d)} disabled={!(reviewDraft[d.id] ?? "").trim()}>
-                            💾 Save review note
-                          </Button>
+                        <div className="mt-3 flex flex-wrap items-start gap-3">
+                          <div className="flex flex-wrap gap-2">
+                            <Button onClick={() => saveReviewNote(d)} disabled={!(reviewDraft[d.id] ?? "").trim()}>
+                              💾 Save review note
+                            </Button>
 
-                          <Button
-                            variant="secondary"
-                            onClick={() =>
-                              setReviewDraft((prev) => {
-                                const copy = { ...prev };
-                                delete copy[d.id];
-                                return copy;
-                              })
-                            }
-                            disabled={!(reviewDraft[d.id] ?? "").trim()}
-                          >
-                            Clear draft
-                          </Button>
+                            <Button
+                              variant="secondary"
+                              onClick={() =>
+                                setReviewDraft((prev) => {
+                                  const copy = { ...prev };
+                                  delete copy[d.id];
+                                  return copy;
+                                })
+                              }
+                              disabled={!(reviewDraft[d.id] ?? "").trim()}
+                            >
+                              Clear draft
+                            </Button>
+                          </div>
+
+                          {/* ✅ New: optionally set next review while saving note */}
+                          {!isDraft && (
+                            <div className="min-w-[260px]">
+                              <NextReviewControls
+                                decisionId={d.id}
+                                onPickDays={(days) => {
+                                  saveReviewNote(d, days);
+                                }}
+                              />
+                              <div className="mt-1 text-xs text-zinc-500">Optional — if not set, overdue bumps +{DEFAULT_REVIEW_BUMP_DAYS}d.</div>
+                            </div>
+                          )}
                         </div>
                       </CardContent>
                     </Card>
