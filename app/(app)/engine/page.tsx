@@ -44,18 +44,6 @@ type RecurringIncome = {
   updated_at: string;
 };
 
-type DecisionRow = {
-  id: string;
-  status: string;
-  created_at: string;
-  decided_at: string | null;
-  reviewed_at: string | null;
-  review_at: string | null;
-  confidence_level: number | null; // decision-time confidence (1-3)
-  review_history: any[] | null; // jsonb array
-  ai_json: any | null; // object or string
-};
-
 function formatMoneyFromCents(cents: number, currency = "AUD") {
   const value = (cents || 0) / 100;
   try {
@@ -163,357 +151,12 @@ function computeTotals(accounts: Account[], bills: RecurringBill[], income: Recu
   };
 }
 
-// ----------------------
-// Insights helpers (v2)
-// ----------------------
-
-function safeMs(iso: string | null): number | null {
-  if (!iso) return null;
-  const ms = Date.parse(iso);
-  if (Number.isNaN(ms)) return null;
-  return ms;
-}
-
-function getAI(ai_json: any | null) {
-  if (!ai_json) return null;
-  if (typeof ai_json === "string") {
-    try {
-      return JSON.parse(ai_json);
-    } catch {
-      return null;
-    }
-  }
-  if (typeof ai_json === "object") return ai_json;
-  return null;
-}
-
-type ReviewHistoryEntry = {
-  reviewed_at?: string;
-  notes?: string;
-  outcome?: string;
-  confidence_level?: number | null; // review-time confidence (0-100)
-  at?: string; // legacy
-  note?: string; // legacy
-};
-
-function normalizeReviewHistory(input: any): ReviewHistoryEntry[] {
-  if (!Array.isArray(input)) return [];
-  return input.filter((x) => x && typeof x === "object");
-}
-
-function pickReviewConfidence100(history: ReviewHistoryEntry[]): number | null {
-  for (let i = history.length - 1; i >= 0; i--) {
-    const v = history[i]?.confidence_level;
-    if (typeof v === "number" && Number.isFinite(v)) return v;
-  }
-  return null;
-}
-
-function decisionConfTo100(v: number | null): number | null {
-  if (v === 1) return 33;
-  if (v === 2) return 67;
-  if (v === 3) return 100;
-  return null;
-}
-
-function daysBetween(aMs: number, bMs: number) {
-  return (bMs - aMs) / (1000 * 60 * 60 * 24);
-}
-
-function pct(n: number) {
-  return `${Math.round(n * 100)}%`;
-}
-
-function bucketLabel(type: any) {
-  if (type === "spending") return "Spending";
-  if (type === "time") return "Time";
-  if (type === "relationship") return "Relationship";
-  if (type === "health") return "Health";
-  if (type === "other") return "Other";
-  return "Unknown";
-}
-
-type Insight = {
+type EngineInsight = {
+  key: string; // used for dedupe_key
   title: string;
   body: string;
-  tone?: "neutral" | "warning" | "positive";
+  severity: 1 | 2 | 3;
 };
-
-type InsightsPack = {
-  headline: string;
-  insights: Insight[];
-  stats: {
-    total: number;
-    reviewed: number;
-    scheduled: number;
-    overdueNow: number;
-  };
-};
-
-function buildInsightsV2(decisions: DecisionRow[]): InsightsPack {
-  const now = Date.now();
-
-  const scheduled = decisions.filter((d) => d.review_at != null);
-  const reviewed = decisions.filter((d) => !!safeMs(d.reviewed_at));
-
-  const overdueNow = scheduled.filter((d) => {
-    const ra = safeMs(d.review_at);
-    if (!ra) return false;
-    if (ra > now) return false;
-    const rv = safeMs(d.reviewed_at);
-    if (!rv) return true;
-    return rv < ra;
-  });
-
-  // Lateness among reviewed decisions (where review_at exists)
-  const reviewedWithSchedule = reviewed.filter((d) => safeMs(d.review_at) != null);
-  const latenessDaysAll: number[] = [];
-  const lateReviewedIds = new Set<string>();
-
-  for (const d of reviewedWithSchedule) {
-    const ra = safeMs(d.review_at)!;
-    const rv = safeMs(d.reviewed_at)!;
-    const diff = daysBetween(ra, rv);
-    if (diff > 0.05) {
-      latenessDaysAll.push(diff);
-      lateReviewedIds.add(d.id);
-    }
-  }
-
-  const lateRate = reviewedWithSchedule.length ? lateReviewedIds.size / reviewedWithSchedule.length : 0;
-  const avgLateDays =
-    latenessDaysAll.length > 0 ? latenessDaysAll.reduce((a, b) => a + b, 0) / latenessDaysAll.length : 0;
-
-  // High-stakes avoidance: overdue rate in high vs non-high (scheduled only)
-  const high = scheduled.filter((d) => getAI(d.ai_json)?.stakes === "high");
-  const nonHigh = scheduled.filter((d) => getAI(d.ai_json)?.stakes !== "high");
-
-  const overdueSet = new Set(overdueNow.map((d) => d.id));
-  const highOverdue = high.filter((d) => overdueSet.has(d.id));
-  const nonHighOverdue = nonHigh.filter((d) => overdueSet.has(d.id));
-
-  const highOverdueRate = high.length ? highOverdue.length / high.length : null;
-  const nonHighOverdueRate = nonHigh.length ? nonHighOverdue.length / nonHigh.length : null;
-
-  // Type skew: avg lateness by decision_type (reviewed+scheduled only)
-  // We compute lateness for reviewed decisions that had a review_at date.
-  const latenessByType: Record<string, { total: number; lateCount: number; lateDaysSum: number }> = {};
-  for (const d of reviewedWithSchedule) {
-    const ai = getAI(d.ai_json);
-    const t = ai?.decision_type ?? "unknown";
-    const ra = safeMs(d.review_at);
-    const rv = safeMs(d.reviewed_at);
-    if (!ra || !rv) continue;
-
-    const diff = daysBetween(ra, rv);
-    if (!latenessByType[t]) latenessByType[t] = { total: 0, lateCount: 0, lateDaysSum: 0 };
-    latenessByType[t].total += 1;
-
-    if (diff > 0.05) {
-      latenessByType[t].lateCount += 1;
-      latenessByType[t].lateDaysSum += diff;
-    }
-  }
-
-  const typeStats = Object.entries(latenessByType)
-    .filter(([, v]) => v.total >= 2)
-    .map(([k, v]) => ({
-      type: k,
-      total: v.total,
-      lateRate: v.total ? v.lateCount / v.total : 0,
-      avgLateDays: v.lateCount ? v.lateDaysSum / v.lateCount : 0,
-    }))
-    .sort((a, b) => b.lateRate - a.lateRate);
-
-  const mostLateType = typeStats[0] ?? null;
-  const leastLateType = typeStats[typeStats.length - 1] ?? null;
-
-  // Confidence drift specifically after late reviews
-  const driftAfterLate: number[] = [];
-  for (const d of reviewedWithSchedule) {
-    if (!lateReviewedIds.has(d.id)) continue;
-
-    const dec100 = decisionConfTo100(d.confidence_level);
-    const history = normalizeReviewHistory(d.review_history);
-    const rev100 = pickReviewConfidence100(history);
-    if (dec100 == null || rev100 == null) continue;
-
-    driftAfterLate.push(rev100 - dec100);
-  }
-
-  const driftLateAvg =
-    driftAfterLate.length >= 3 ? driftAfterLate.reduce((a, b) => a + b, 0) / driftAfterLate.length : null;
-
-  // Learning velocity: reviews in last 30 / 90 days
-  const cutoff30 = now - 30 * 24 * 60 * 60 * 1000;
-  const cutoff90 = now - 90 * 24 * 60 * 60 * 1000;
-
-  const reviews30 = reviewed.filter((d) => {
-    const rv = safeMs(d.reviewed_at);
-    return rv != null && rv >= cutoff30;
-  }).length;
-
-  const reviews90 = reviewed.filter((d) => {
-    const rv = safeMs(d.reviewed_at);
-    return rv != null && rv >= cutoff90;
-  }).length;
-
-  // Build insights list (prioritized)
-  const insights: Insight[] = [];
-
-  // (A) Overdue now
-  if (scheduled.length === 0) {
-    insights.push({
-      title: "No reviews scheduled yet",
-      tone: "neutral",
-      body: "Add a review date to any decision to activate Keystone’s learning loop.",
-    });
-  } else if (overdueNow.length > 0) {
-    insights.push({
-      title: "You have reviews overdue right now",
-      tone: "warning",
-      body: `There are ${overdueNow.length} decision(s) past their review date. Clearing even one will reduce mental load and sharpen Keystone’s patterns.`,
-    });
-  } else {
-    insights.push({
-      title: "Your review loop is on track",
-      tone: "positive",
-      body: "Nothing is overdue right now. Keystone’s feedback loop is staying healthy.",
-    });
-  }
-
-  // (B) Review timeliness pattern (only if enough data)
-  if (reviewedWithSchedule.length >= 3) {
-    if (lateRate >= 0.3) {
-      insights.push({
-        title: "You often review after the planned date",
-        tone: "warning",
-        body: `${pct(lateRate)} of reviewed decisions were completed late (avg lateness: ${avgLateDays.toFixed(
-          1
-        )} days, when late).`,
-      });
-    } else if (lateRate > 0) {
-      insights.push({
-        title: "Review timing is mostly on time",
-        tone: "neutral",
-        body: `${pct(lateRate)} of reviewed decisions were late. When late, the average was ${avgLateDays.toFixed(1)} days.`,
-      });
-    } else {
-      insights.push({
-        title: "You review on time",
-        tone: "positive",
-        body: "So far, your reviewed decisions have been on time vs their planned review date.",
-      });
-    }
-  } else {
-    insights.push({
-      title: "Timing patterns are still forming",
-      tone: "neutral",
-      body: "Keystone needs ~3 reviewed decisions with a scheduled review date to detect timing patterns reliably.",
-    });
-  }
-
-  // (C) High-stakes avoidance (only if both buckets exist with enough items)
-  if (high.length >= 2 && nonHigh.length >= 2 && highOverdueRate != null && nonHighOverdueRate != null) {
-    const gap = highOverdueRate - nonHighOverdueRate;
-
-    if (gap >= 0.25 && highOverdueRate >= 0.3) {
-      insights.push({
-        title: "High-stakes decisions are harder to revisit",
-        tone: "warning",
-        body: `High-stakes decisions are overdue at ${pct(highOverdueRate)} vs ${pct(nonHighOverdueRate)} for other decisions.`,
-      });
-    } else if (gap <= -0.25 && nonHighOverdueRate >= 0.3) {
-      insights.push({
-        title: "You revisit high-stakes decisions relatively well",
-        tone: "positive",
-        body: `High-stakes overdue rate is ${pct(highOverdueRate)} vs ${pct(nonHighOverdueRate)} for other decisions.`,
-      });
-    } else {
-      insights.push({
-        title: "Stakes vs delay looks mixed (for now)",
-        tone: "neutral",
-        body: `High-stakes overdue: ${pct(highOverdueRate)} • Other overdue: ${pct(nonHighOverdueRate)}.`,
-      });
-    }
-  } else {
-    insights.push({
-      title: "High-stakes insight needs more data",
-      tone: "neutral",
-      body: "Keystone needs several scheduled high-stakes decisions (and non-high ones) to compare overdue rates.",
-    });
-  }
-
-  // (D) Type skew (only if we can compare at least 2 types)
-  if (typeStats.length >= 2 && mostLateType && leastLateType) {
-    const gapRate = mostLateType.lateRate - leastLateType.lateRate;
-
-    if (gapRate >= 0.25 && mostLateType.lateRate >= 0.3) {
-      insights.push({
-        title: "Some decision types get delayed more than others",
-        tone: "warning",
-        body: `${bucketLabel(mostLateType.type)} decisions are reviewed late more often (${pct(
-          mostLateType.lateRate
-        )}) vs ${bucketLabel(leastLateType.type)} (${pct(leastLateType.lateRate)}).`,
-      });
-    } else {
-      insights.push({
-        title: "No strong type-delay signal yet",
-        tone: "neutral",
-        body: `Top late bucket: ${bucketLabel(mostLateType.type)} (${pct(mostLateType.lateRate)}).`,
-      });
-    }
-  } else {
-    insights.push({
-      title: "Type-based patterns need more volume",
-      tone: "neutral",
-      body: "Keystone needs multiple reviewed decisions per type (with review dates) to compare delay patterns.",
-    });
-  }
-
-  // (E) Confidence drift after lateness (only when review confidence exists)
-  if (driftLateAvg != null) {
-    const dir = driftLateAvg >= 0 ? "up" : "down";
-    const amt = Math.abs(driftLateAvg).toFixed(0);
-    insights.push({
-      title: "Confidence drift after late reviews",
-      tone: dir === "down" ? "warning" : "positive",
-      body: `When a review is late, your confidence tends to shift ${dir} by ~${amt} points (based on ${driftAfterLate.length} review(s) with confidence data).`,
-    });
-  } else {
-    insights.push({
-      title: "Confidence drift is locked (for now)",
-      tone: "neutral",
-      body: "Add confidence (0–100) when reviewing decisions to unlock confidence drift insights.",
-    });
-  }
-
-  // (F) Learning velocity
-  insights.push({
-    title: "Learning velocity",
-    tone: reviews30 >= 5 ? "positive" : "neutral",
-    body: `You reviewed ${reviews30} decision(s) in the last 30 days (${reviews90} in the last 90 days). Every review compounds Keystone’s usefulness.`,
-  });
-
-  // Headline (short, human, motivating)
-  const headline =
-    overdueNow.length > 0
-      ? "Keystone is learning — and a few reviews are overdue."
-      : reviews30 > 0
-      ? "Keystone is learning your instincts over time."
-      : "Keystone is ready to learn as you review decisions.";
-
-  return {
-    headline,
-    insights,
-    stats: {
-      total: decisions.length,
-      reviewed: reviewed.length,
-      scheduled: scheduled.length,
-      overdueNow: overdueNow.length,
-    },
-  };
-}
 
 export default function EnginePage() {
   const { showToast } = useToast();
@@ -531,10 +174,6 @@ export default function EnginePage() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [bills, setBills] = useState<RecurringBill[]>([]);
   const [income, setIncome] = useState<RecurringIncome[]>([]);
-
-  // Decisions for insights
-  const [decisions, setDecisions] = useState<DecisionRow[]>([]);
-  const [insightsLoading, setInsightsLoading] = useState(true);
 
   // Step 1: last ran indicator (local-only)
   const [lastRanAt, setLastRanAt] = useState<string | null>(null);
@@ -557,7 +196,6 @@ export default function EnginePage() {
 
       setUserId(data.user.id);
       await loadAll(data.user.id);
-      await loadDecisionsForInsights(data.user.id);
       setLoading(false);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -595,35 +233,10 @@ export default function EnginePage() {
     return { accounts: a, bills: b, income: i };
   }
 
-  async function loadDecisionsForInsights(uid: string) {
-  setInsightsLoading(true);
-  try {
-    const { data, error } = await supabase
-      .from("decisions")
-      .select("id,status,created_at,decided_at,reviewed_at,review_at,confidence_level,review_history,ai_json")
-      .eq("user_id", uid)
-      .order("created_at", { ascending: false });
-
-    if (error) {
-      setError(error.message);
-      setDecisions([]);
-      return [] as DecisionRow[];
-    }
-
-    const decisionRows = (data ?? []) as DecisionRow[];
-    setDecisions(decisionRows);
-    return decisionRows;
-  } finally {
-    setInsightsLoading(false);
-  }
-}
-
   const activeBills = useMemo(() => bills.filter((b) => b.active), [bills]);
   const activeIncome = useMemo(() => income.filter((i) => i.active), [income]);
 
   const totals = useMemo(() => computeTotals(accounts, bills, income), [accounts, bills, income]);
-
-  const insightsPack = useMemo(() => buildInsightsV2(decisions), [decisions]);
 
   function buildUpcomingBillsBody(t: ComputedTotals) {
     if (t.bills14.length === 0) {
@@ -640,9 +253,7 @@ export default function EnginePage() {
     const lines = t.bills14.map((b) => {
       const flags = [b.autopay ? "autopay" : null].filter(Boolean).join(", ");
       const flagText = flags ? ` (${flags})` : "";
-      return `• ${b.name}: ${formatMoneyFromCents(b.amount_cents, b.currency)} — due ${fmtDateTime(
-        b.next_due_at
-      )}${flagText}`;
+      return `• ${b.name}: ${formatMoneyFromCents(b.amount_cents, b.currency)} — due ${fmtDateTime(b.next_due_at)}${flagText}`;
     });
 
     return [
@@ -717,7 +328,7 @@ export default function EnginePage() {
           body: opts.body,
           severity: opts.severity,
           status: "open",
-          snoozed_until: null, // Step 3: always clear snooze on engine refresh
+          snoozed_until: null,
           dedupe_key: opts.dedupe_key,
         },
       ],
@@ -727,31 +338,143 @@ export default function EnginePage() {
     if (upErr) throw upErr;
   }
 
-async function writeInsightsDigest(runId: string, decisionRows: DecisionRow[]) {
-  const pack = buildInsightsV2(decisionRows);
+  async function upsertInsights(runId: string, insights: EngineInsight[]) {
+    if (!userId) return;
 
-  const top = pack.insights.slice(0, 5);
+    const payload = insights.map((x) => ({
+      user_id: userId,
+      run_id: runId,
+      type: "engine",
+      title: x.title,
+      body: x.body,
+      severity: x.severity,
+      status: "open",
+      snoozed_until: null,
+      dedupe_key: x.key,
+    }));
 
-  const body = [
-    pack.headline,
-    "",
-    ...top.map((x) => `• ${x.title}\n  ${x.body}`),
-    "",
-    `Stats: Decisions ${pack.stats.total} • Reviewed ${pack.stats.reviewed} • Scheduled ${pack.stats.scheduled} • Overdue ${pack.stats.overdueNow}`,
-    "",
-    "Tip: Reviewing (and adding confidence 0–100) makes Keystone’s patterns sharper.",
-  ].join("\n");
+    const { error: upErr } = await supabase.from("decision_inbox").upsert(payload, {
+      onConflict: "user_id,dedupe_key",
+    });
 
-  const severity = pack.stats.overdueNow > 0 ? 2 : 1;
+    if (upErr) throw upErr;
+  }
 
-  await writeSingleReminder({
-    runId,
-    dedupe_key: "engine_insights_v2_digest",
-    title: "Keystone noticed (patterns)",
-    body,
-    severity,
-  });
-}
+  function computeInsights(t: ComputedTotals, freshBills: RecurringBill[], freshIncome: RecurringIncome[], freshAccounts: Account[]) {
+    const list: EngineInsight[] = [];
+
+    // Missing inputs: we keep these as insights too (in addition to v1 reminders)
+    if (freshAccounts.length === 0) {
+      list.push({
+        key: "engine_v2_missing_accounts",
+        title: "Insight: Add accounts to compute safe-to-spend",
+        severity: 2,
+        body: [
+          "Keystone can’t compute safe-to-spend yet because there are no accounts.",
+          "",
+          "Next step:",
+          "Go to Accounts and add at least one account balance.",
+        ].join("\n"),
+      });
+      return list; // if no accounts, other insights are meaningless
+    }
+
+    if (freshBills.length === 0) {
+      list.push({
+        key: "engine_v2_missing_bills",
+        title: "Insight: Add bills so reminders are real",
+        severity: 2,
+        body: [
+          "Keystone can’t warn you about upcoming obligations yet because there are no bills.",
+          "",
+          "Next step:",
+          "Go to Bills and add recurring obligations (rent, internet, insurance…).",
+        ].join("\n"),
+      });
+    }
+
+    if (freshIncome.length === 0) {
+      list.push({
+        key: "engine_v2_missing_income",
+        title: "Insight: Add income so safe-to-spend is truthful",
+        severity: 2,
+        body: [
+          "Keystone can’t include income in safe-to-spend yet because there is no recurring income.",
+          "",
+          "Next step:",
+          "Go to Income and add your recurring pay / benefits / transfers (if applicable).",
+        ].join("\n"),
+      });
+    }
+
+    // Insight 1: Safe-to-spend is zero/low
+    const safeDollars = t.safeToSpendWeek / 100;
+    if (safeDollars <= 0) {
+      list.push({
+        key: "engine_v2_safe_to_spend_zero",
+        title: "Insight: Safe-to-spend is $0 this week",
+        severity: 1,
+        body: [
+          `Balance now: ${formatMoneyFromCents(t.balance)}`,
+          `Income due (7d): ${formatMoneyFromCents(t.income7Total)}`,
+          `Bills due (7d): ${formatMoneyFromCents(t.bills7Total)}`,
+          "",
+          `Safe-to-spend (7d): ${formatMoneyFromCents(t.safeToSpendWeek)}`,
+          "",
+          "Truth reminder:",
+          "safe_to_spend = balance + income_due_7d - bills_due_7d (floored at 0).",
+        ].join("\n"),
+      });
+    } else if (safeDollars < 200) {
+      list.push({
+        key: "engine_v2_safe_to_spend_low",
+        title: "Insight: Safe-to-spend is low this week",
+        severity: 2,
+        body: [
+          `Safe-to-spend (7d): ${formatMoneyFromCents(t.safeToSpendWeek)}`,
+          "",
+          "This is not a forecast — it’s just what’s currently true based on your inputs.",
+        ].join("\n"),
+      });
+    }
+
+    // Insight 2: 14d bills exceed balance
+    if (t.bills14Total > t.balance) {
+      list.push({
+        key: "engine_v2_bills_exceed_balance_14d",
+        title: "Insight: Bills due in 14 days exceed balance",
+        severity: 1,
+        body: [
+          `Balance now: ${formatMoneyFromCents(t.balance)}`,
+          `Bills due (14d): ${formatMoneyFromCents(t.bills14Total)}`,
+          "",
+          "Bills list:",
+          ...t.bills14.map((b) => `• ${b.name}: ${formatMoneyFromCents(b.amount_cents, b.currency)} — due ${fmtDateTime(b.next_due_at)}`),
+        ].join("\n"),
+      });
+    }
+
+    // Insight 3: Autopay OFF on a soon bill (within 7 days)
+    const soonManual = t.bills7.filter((b) => !b.autopay);
+    if (soonManual.length > 0) {
+      const b = soonManual[0];
+      list.push({
+        key: "engine_v2_autopay_off_bill_due_soon",
+        title: "Insight: A bill is due soon and autopay is OFF",
+        severity: 2,
+        body: [
+          `Bill: ${b.name}`,
+          `Amount: ${formatMoneyFromCents(b.amount_cents, b.currency)}`,
+          `Due: ${fmtDateTime(b.next_due_at)}`,
+          "",
+          "If this is meant to be manual, ignore.",
+          "If it should be autopay, flip it on in Bills so Engine can relax.",
+        ].join("\n"),
+      });
+    }
+
+    return list;
+  }
 
   async function runEngineV1() {
     if (!userId) return;
@@ -853,8 +576,7 @@ async function writeInsightsDigest(runId: string, decisionRows: DecisionRow[]) {
       const billsBody = buildUpcomingBillsBody(freshTotals);
       const incomeBody = buildUpcomingIncomeBody(freshTotals);
 
-      // Step 3: always write "open" and clear snooze
-      const rows: any[] = [
+      const upsertRows: any[] = [
         {
           user_id: userId,
           run_id: runId,
@@ -877,7 +599,6 @@ async function writeInsightsDigest(runId: string, decisionRows: DecisionRow[]) {
           snoozed_until: null,
           dedupe_key: "engine_upcoming_bills_14d",
         },
-        // Step 4: upcoming income (14d)
         {
           user_id: userId,
           run_id: runId,
@@ -891,7 +612,7 @@ async function writeInsightsDigest(runId: string, decisionRows: DecisionRow[]) {
         },
       ];
 
-      const { error: upErr } = await supabase.from("decision_inbox").upsert(rows, {
+      const { error: upErr } = await supabase.from("decision_inbox").upsert(upsertRows, {
         onConflict: "user_id,dedupe_key",
       });
 
@@ -903,10 +624,6 @@ async function writeInsightsDigest(runId: string, decisionRows: DecisionRow[]) {
         .update({ status: "done", snoozed_until: null })
         .eq("user_id", userId)
         .in("dedupe_key", ["engine_missing_bills", "engine_missing_income"]);
-
-      // refresh decisions insights too (they may have changed)
-      const decisionRows = await loadDecisionsForInsights(userId);
-await writeInsightsDigest(runId, decisionRows);
 
       setLastRanAt(new Date().toLocaleString());
       notify({
@@ -920,10 +637,55 @@ await writeInsightsDigest(runId, decisionRows);
     }
   }
 
+  async function runEngineV2() {
+    if (!userId) return;
+
+    const now = Date.now();
+    if (cooldownUntil && now < cooldownUntil) {
+      const secs = Math.ceil((cooldownUntil - now) / 1000);
+      notify({ title: "Please wait", description: `Engine cooldown: ${secs}s` });
+      return;
+    }
+
+    setRunning(true);
+    setCooldownUntil(now + COOLDOWN_MS);
+
+    try {
+      const fresh = await loadAll(userId);
+      const freshTotals = computeTotals(fresh.accounts, fresh.bills, fresh.income);
+      const runId = crypto.randomUUID();
+
+      const insights = computeInsights(freshTotals, fresh.bills, fresh.income, fresh.accounts);
+
+      if (insights.length === 0) {
+        // optional: you can choose to write a "no issues" insight, but we’ll keep it quiet for now
+        setLastRanAt(new Date().toLocaleString());
+        notify({ title: "Engine v2 ran", description: "No new insights (nice!)." });
+        return;
+      }
+
+      await upsertInsights(runId, insights);
+
+      setLastRanAt(new Date().toLocaleString());
+      notify({ title: "Engine v2 ran", description: `Wrote ${insights.length} insight(s) into Inbox (deduped).` });
+    } catch (e: any) {
+      notify({ title: "Engine v2 error", description: e?.message ?? "Failed to run Engine v2." });
+    } finally {
+      setRunning(false);
+    }
+  }
+
   const cooldownSeconds = cooldownUntil ? Math.max(0, Math.ceil((cooldownUntil - Date.now()) / 1000)) : 0;
 
+  const insightsPreview = useMemo(() => {
+    // preview computed from current loaded inputs (no writes)
+    const list = computeInsights(totals, bills, income, accounts);
+    return list;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [totals, bills, income, accounts]);
+
   return (
-    <Page title="Engine" subtitle="Manual simulation harness. Engine v1 reads your truths and writes reminders to Inbox.">
+    <Page title="Engine" subtitle="Manual simulation harness. Engine reads your truths and writes reminders/insights to Inbox.">
       <div className="grid gap-4">
         <Card>
           <CardContent>
@@ -939,66 +701,15 @@ await writeInsightsDigest(runId, decisionRows);
                 <Button onClick={() => userId && loadAll(userId)} disabled={!userId || loading || running}>
                   Refresh inputs
                 </Button>
+
                 <Button onClick={runEngineV1} disabled={!userId || loading || running || cooldownSeconds > 0}>
                   {running ? "Running…" : "Run Engine v1"}
                 </Button>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
 
-        {/* ✅ Engine v2: What Keystone has noticed */}
-        <Card className="bg-zinc-50">
-          <CardContent>
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <div className="font-semibold">What Keystone has noticed (v2)</div>
-                <div className="text-sm opacity-70">{insightsPack.headline}</div>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="secondary"
-                  onClick={() => userId && loadDecisionsForInsights(userId)}
-                  disabled={!userId || insightsLoading}
-                >
-                  {insightsLoading ? "Refreshing…" : "Refresh insights"}
+                <Button variant="secondary" onClick={runEngineV2} disabled={!userId || loading || running || cooldownSeconds > 0}>
+                  {running ? "Running…" : "Run Engine v2 (Insights)"}
                 </Button>
               </div>
-            </div>
-
-            <div className="mt-3 flex flex-wrap gap-2">
-              <Badge>Decisions: {insightsPack.stats.total}</Badge>
-              <Badge>Reviewed: {insightsPack.stats.reviewed}</Badge>
-              <Badge>Scheduled: {insightsPack.stats.scheduled}</Badge>
-              <Badge>Overdue now: {insightsPack.stats.overdueNow}</Badge>
-            </div>
-
-            <div className="mt-4 grid gap-3">
-              {insightsLoading ? (
-                <div className="text-sm opacity-70">Loading insights…</div>
-              ) : (
-                insightsPack.insights.map((x, idx) => (
-                  <div
-                    key={`ins-${idx}`}
-                    className={`rounded-lg border p-3 ${
-                      x.tone === "warning"
-                        ? "border-amber-200 bg-amber-50"
-                        : x.tone === "positive"
-                        ? "border-emerald-200 bg-emerald-50"
-                        : "border-zinc-200 bg-white"
-                    }`}
-                  >
-                    <div className="font-semibold">{x.title}</div>
-                    <div className="text-sm opacity-80 mt-1 whitespace-pre-wrap">{x.body}</div>
-                  </div>
-                ))
-              )}
-            </div>
-
-            <div className="text-xs opacity-60 mt-3">
-              Tip: Add confidence (0–100) when reviewing decisions to unlock richer confidence drift insights.
-              (Decision confidence is currently 1–3.)
             </div>
           </CardContent>
         </Card>
@@ -1011,6 +722,32 @@ await writeInsightsDigest(runId, decisionRows);
               <Badge>Bills (active): {activeBills.length}</Badge>
               <Badge>Income (active): {activeIncome.length}</Badge>
               <Chip>Balance: {formatMoneyFromCents(totals.balance)}</Chip>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardContent>
+            <div className="font-semibold mb-2">Engine v2 insights (preview)</div>
+
+            {insightsPreview.length === 0 ? (
+              <div className="text-sm text-zinc-600">No insights right now — looks calm ✅</div>
+            ) : (
+              <div className="grid gap-2">
+                {insightsPreview.map((x) => (
+                  <div key={x.key} className="rounded-lg border p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="font-semibold">{x.title}</div>
+                      <div className="text-xs text-zinc-500">severity {x.severity}</div>
+                    </div>
+                    <div className="mt-2 whitespace-pre-wrap text-sm text-zinc-700">{x.body}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="text-sm opacity-70 mt-3">
+              Preview is computed locally from current inputs. Clicking “Run Engine v2” writes these as deduped Inbox items.
             </div>
           </CardContent>
         </Card>
@@ -1055,7 +792,7 @@ await writeInsightsDigest(runId, decisionRows);
             </div>
 
             <div className="text-sm opacity-70 mt-3">
-              Engine v1 writes deduped truth reminders to Inbox. No graphs. No guessing. Cooldown prevents spam runs.
+              Engine v1 writes baseline reminders. Engine v2 writes higher-signal insights. Cooldown prevents spam runs.
             </div>
           </CardContent>
         </Card>
