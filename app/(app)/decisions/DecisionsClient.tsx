@@ -1,7 +1,7 @@
 // app/(app)/decisions/DecisionsClient.tsx
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { Badge, Button, Card, CardContent, Chip, useToast } from "@/components/ui";
@@ -130,6 +130,8 @@ function clampInt(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, Math.trunc(n)));
 }
 
+type LiveStatus = "connecting" | "live" | "offline";
+
 export default function DecisionsClient() {
   const { showToast } = useToast();
   const router = useRouter();
@@ -142,6 +144,21 @@ export default function DecisionsClient() {
 
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [showAIJson, setShowAIJson] = useState(false);
+
+  // ✅ realtime state
+  const [liveStatus, setLiveStatus] = useState<LiveStatus>("connecting");
+  const reloadTimerRef = useRef<number | null>(null);
+  const loadRef = useRef<() => void>(() => {});
+
+  // store user id (helps filter realtime changes)
+  const [userId, setUserId] = useState<string>("");
+
+  const scheduleReload = () => {
+    if (reloadTimerRef.current) window.clearTimeout(reloadTimerRef.current);
+    reloadTimerRef.current = window.setTimeout(() => {
+      loadRef.current();
+    }, 250);
+  };
 
   // filters
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
@@ -200,6 +217,7 @@ export default function DecisionsClient() {
       return;
     }
 
+    setUserId(user.id);
     setEmail(user.email ?? "");
 
     const { data, error } = await supabase
@@ -225,10 +243,44 @@ export default function DecisionsClient() {
     });
   };
 
+  // keep the latest load in a ref (for realtime callbacks)
+  loadRef.current = () => {
+    load();
+  };
+
   useEffect(() => {
     load();
+
+    return () => {
+      if (reloadTimerRef.current) window.clearTimeout(reloadTimerRef.current);
+      reloadTimerRef.current = null;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ✅ realtime subscription (safe reload throttle, no polling)
+  useEffect(() => {
+    setLiveStatus("connecting");
+
+    // if we don't have a user yet, we still subscribe; once userId arrives, effect reruns with filter
+    const filter = userId ? `user_id=eq.${userId}` : undefined;
+
+    const channel = supabase
+      .channel(`decisions-realtime${userId ? `-${userId}` : ""}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "decisions", filter }, () => {
+        scheduleReload();
+      })
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") setLiveStatus("live");
+        else if (status === "CLOSED" || status === "CHANNEL_ERROR") setLiveStatus("offline");
+      });
+
+    return () => {
+      supabase.removeChannel(channel);
+      setLiveStatus("offline");
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
 
   const decidedCount = useMemo(() => rows.filter((d) => d.status === "decided").length, [rows]);
   const draftCount = useMemo(() => rows.filter((d) => d.status === "draft").length, [rows]);
@@ -654,19 +706,14 @@ export default function DecisionsClient() {
 
     setStatusLine(`Marking selected as reviewed (next in ${safeDays}d)...`);
 
-    const { error } = await supabase
-      .from("decisions")
-      .update({ reviewed_at: nowIso, review_at: nextReviewIso })
-      .in("id", ids);
+    const { error } = await supabase.from("decisions").update({ reviewed_at: nowIso, review_at: nextReviewIso }).in("id", ids);
 
     if (error) {
       setStatusLine(`Bulk reviewed failed: ${error.message}`);
       return;
     }
 
-    setRows((prev) =>
-      prev.map((d) => (ids.includes(d.id) ? { ...d, reviewed_at: nowIso, review_at: nextReviewIso } : d))
-    );
+    setRows((prev) => prev.map((d) => (ids.includes(d.id) ? { ...d, reviewed_at: nowIso, review_at: nextReviewIso } : d)));
 
     setStatusLine(`Reviewed ${ids.length} ✅ (next in ${safeDays}d)`);
 
@@ -817,10 +864,7 @@ export default function DecisionsClient() {
 
     let inboxClosedOk = false;
     if (d.inbox_item_id) {
-      const { error: inboxErr } = await supabase
-        .from("decision_inbox")
-        .update({ status: "done", snoozed_until: null })
-        .eq("id", d.inbox_item_id);
+      const { error: inboxErr } = await supabase.from("decision_inbox").update({ status: "done", snoozed_until: null }).eq("id", d.inbox_item_id);
 
       if (inboxErr) {
         setStatusLine(`Decided ✅ but couldn't close inbox item: ${inboxErr.message}`);
@@ -860,10 +904,7 @@ export default function DecisionsClient() {
           }
 
           if (d.inbox_item_id && inboxClosedOk) {
-            const { error: reopenErr } = await supabase
-              .from("decision_inbox")
-              .update({ status: "open", snoozed_until: null })
-              .eq("id", d.inbox_item_id);
+            const { error: reopenErr } = await supabase.from("decision_inbox").update({ status: "open", snoozed_until: null }).eq("id", d.inbox_item_id);
 
             if (reopenErr) {
               setStatusLine(`Undo partial (reopen inbox failed): ${reopenErr.message}`);
@@ -1044,6 +1085,17 @@ export default function DecisionsClient() {
     );
   };
 
+  const LiveBadge = () => {
+    const label = liveStatus === "live" ? "Live" : liveStatus === "connecting" ? "Connecting…" : "Offline";
+    const dot = liveStatus === "live" ? "#16a34a" : liveStatus === "connecting" ? "#f59e0b" : "#dc2626";
+    return (
+      <Badge variant="muted" title="Realtime status">
+        <span className="mr-2 inline-block h-2 w-2 rounded-full" style={{ background: dot }} />
+        {label}
+      </Badge>
+    );
+  };
+
   // ---------- UI ----------
   return (
     <Page
@@ -1051,6 +1103,7 @@ export default function DecisionsClient() {
       subtitle={headerSubtitle}
       right={
         <div className="flex flex-wrap items-center gap-2">
+          <LiveBadge />
           <Button onClick={load}>Refresh</Button>
           <Button variant="secondary" onClick={() => expandAll(filtered)}>
             Expand filtered
@@ -1621,7 +1674,9 @@ export default function DecisionsClient() {
                     )}
 
                     {showAIJson && d.ai_json && (
-                      <pre className="overflow-x-auto rounded-xl bg-zinc-900 p-3 text-xs text-zinc-100">{JSON.stringify(d.ai_json, null, 2)}</pre>
+                      <pre className="overflow-x-auto rounded-xl bg-zinc-900 p-3 text-xs text-zinc-100">
+                        {JSON.stringify(d.ai_json, null, 2)}
+                      </pre>
                     )}
 
                     <div className="text-xs text-zinc-500">status: {d.status}</div>
