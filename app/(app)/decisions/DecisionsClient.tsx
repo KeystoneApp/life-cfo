@@ -1077,7 +1077,7 @@ export default function DecisionsClient() {
         </Chip>
 
         <Chip active={tab === "review"} onClick={() => setTabAndUrl("review")} title="Decisions due for review">
-          Review {dueForReviewCount > 0 ? `(${dueForReviewCount})` : ""}
+          Review {(overdueCount + dueSoonCount) > 0 ? `(${overdueCount + dueSoonCount})` : ""}
         </Chip>
 
         {tab === "review" && dueForReviewCount === 0 && <div className="self-center text-sm text-zinc-600">Nothing is due right now 🎉</div>}
