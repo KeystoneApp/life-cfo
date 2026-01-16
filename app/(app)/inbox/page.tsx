@@ -60,7 +60,6 @@ export default function InboxPage() {
 
   // refresh tracking
   const [lastLoadedAt, setLastLoadedAt] = useState<Date | null>(null);
-  const [tick, setTick] = useState(0);
 
   // per-item inputs
   const [decisionReason, setDecisionReason] = useState<Record<string, string>>({});
@@ -81,6 +80,26 @@ export default function InboxPage() {
 
   const loadRef = useRef<(opts?: { silent?: boolean }) => void>(() => {});
   const reloadTimerRef = useRef<number | null>(null);
+
+  // "minutes ago" display without polling: we update a lightweight clock only when the page is visible
+  const [clock, setClock] = useState<number>(() => Date.now());
+  useEffect(() => {
+    const onVisibility = () => {
+      // nudge the clock when returning to tab
+      if (!document.hidden) setClock(Date.now());
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+
+    // small UI-only clock (no network) while visible
+    const t = window.setInterval(() => {
+      if (!document.hidden) setClock(Date.now());
+    }, 15_000);
+
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.clearInterval(t);
+    };
+  }, []);
 
   const scheduleReload = () => {
     if (reloadTimerRef.current) window.clearTimeout(reloadTimerRef.current);
@@ -245,8 +264,7 @@ export default function InboxPage() {
   function engineCardClasses(base: { border: string; bg: string }, kind: "v2" | "v1" | null) {
     if (!kind) return `${base.border} ${base.bg}`;
 
-    const left =
-      kind === "v2" ? "border-l-4 border-l-sky-400 bg-zinc-50" : "border-l-4 border-l-amber-400 bg-zinc-50";
+    const left = kind === "v2" ? "border-l-4 border-l-sky-400 bg-zinc-50" : "border-l-4 border-l-amber-400 bg-zinc-50";
 
     return `${base.border} ${left}`;
   }
@@ -321,6 +339,7 @@ export default function InboxPage() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
   // Realtime subscription: decision_inbox changes for this user
   useEffect(() => {
     if (!userId) return;
@@ -370,11 +389,16 @@ export default function InboxPage() {
 
           setItems((prev) => {
             if (eventType === "INSERT") {
-              if (!newRow) return prev;
+              if (!newRow) {
+                scheduleReload();
+                return prev;
+              }
               const candidate = toInboxItem(newRow);
 
               const exists = prev.some((x) => x.id === candidate.id);
-              const merged = exists ? prev.map((x) => (x.id === candidate.id ? { ...x, ...candidate } : x)) : [candidate, ...prev];
+              const merged = exists
+                ? prev.map((x) => (x.id === candidate.id ? { ...x, ...candidate } : x))
+                : [candidate, ...prev];
 
               // keep newest-first (created_at desc) like load()
               merged.sort((a, b) => {
@@ -389,7 +413,10 @@ export default function InboxPage() {
             }
 
             if (eventType === "UPDATE") {
-              if (!newRow) return prev;
+              if (!newRow) {
+                scheduleReload();
+                return prev;
+              }
               const patch = toInboxItem(newRow);
 
               const exists = prev.some((x) => x.id === patch.id);
@@ -431,14 +458,12 @@ export default function InboxPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId]);
 
-  // ticker + focus refresh (no polling)
+  // Focus refresh (silent) — no polling
   useEffect(() => {
-    const ticker = setInterval(() => setTick((t) => t + 1), 10_000);
     const onFocus = () => loadRef.current({ silent: true });
     window.addEventListener("focus", onFocus);
 
     return () => {
-      clearInterval(ticker);
       window.removeEventListener("focus", onFocus);
     };
   }, []);
@@ -541,11 +566,7 @@ export default function InboxPage() {
     setAffirmation(null);
     setStatusLine("Unsnoozing all snoozed items...");
 
-    const { error } = await supabase
-      .from("decision_inbox")
-      .update({ status: "open", snoozed_until: null })
-      .eq("user_id", userId)
-      .eq("status", "snoozed");
+    const { error } = await supabase.from("decision_inbox").update({ status: "open", snoozed_until: null }).eq("user_id", userId).eq("status", "snoozed");
 
     if (error) {
       setStatusLine(`Force unsnooze failed: ${error.message}`);
@@ -579,11 +600,7 @@ export default function InboxPage() {
     setAffirmation(null);
     setStatusLine("Marking done...");
 
-    const { error } = await supabase
-      .from("decision_inbox")
-      .update({ status: "done", snoozed_until: null })
-      .eq("id", id)
-      .eq("user_id", userId);
+    const { error } = await supabase.from("decision_inbox").update({ status: "done", snoozed_until: null }).eq("id", id).eq("user_id", userId);
 
     if (error) {
       setStatusLine(`Done failed: ${error.message}`);
@@ -627,11 +644,7 @@ export default function InboxPage() {
     setAffirmation(null);
     setStatusLine("Re-opening...");
 
-    const { error } = await supabase
-      .from("decision_inbox")
-      .update({ status: "open", snoozed_until: null })
-      .eq("id", id)
-      .eq("user_id", userId);
+    const { error } = await supabase.from("decision_inbox").update({ status: "open", snoozed_until: null }).eq("id", id).eq("user_id", userId);
 
     if (error) {
       setStatusLine(`Undo failed: ${error.message}`);
@@ -655,11 +668,7 @@ export default function InboxPage() {
     clearPerItemInputs(it.id);
     setLastLoadedAt(new Date());
 
-    const { error } = await supabase
-      .from("decision_inbox")
-      .update({ status: "done", snoozed_until: null })
-      .eq("id", it.id)
-      .eq("user_id", userId);
+    const { error } = await supabase.from("decision_inbox").update({ status: "done", snoozed_until: null }).eq("id", it.id).eq("user_id", userId);
 
     if (error) {
       setStatusLine(`Auto-resolve failed: ${error.message}`);
@@ -710,11 +719,7 @@ export default function InboxPage() {
     ids.forEach((id) => clearPerItemInputs(id));
     setLastLoadedAt(new Date());
 
-    const { error } = await supabase
-      .from("decision_inbox")
-      .update({ status: "done", snoozed_until: null })
-      .in("id", ids)
-      .eq("user_id", userId);
+    const { error } = await supabase.from("decision_inbox").update({ status: "done", snoozed_until: null }).in("id", ids).eq("user_id", userId);
 
     if (error) {
       setStatusLine(`Dismiss failed: ${error.message}`);
@@ -761,7 +766,7 @@ export default function InboxPage() {
 
       const userReason = (decisionReason[item.id] ?? "").trim() ? (decisionReason[item.id] ?? "").trim() : null;
 
-      // ✅ Bundle C: default confidence to Medium if not set
+      // ✅ default confidence to Medium if not set
       const confidenceLevel = decisionConfidence[item.id] ?? 2;
 
       let ai: any = null;
@@ -818,11 +823,7 @@ export default function InboxPage() {
         return;
       }
 
-      const { error: closeError } = await supabase
-        .from("decision_inbox")
-        .update({ status: "done", snoozed_until: null })
-        .eq("id", item.id)
-        .eq("user_id", userId);
+      const { error: closeError } = await supabase.from("decision_inbox").update({ status: "done", snoozed_until: null }).eq("id", item.id).eq("user_id", userId);
 
       if (closeError) {
         setStatusLine(`Saved decision, but couldn't close inbox item: ${closeError.message}`);
@@ -848,11 +849,7 @@ export default function InboxPage() {
               return;
             }
 
-            const { error: reopenErr } = await supabase
-              .from("decision_inbox")
-              .update({ status: "open", snoozed_until: null })
-              .eq("id", item.id)
-              .eq("user_id", userId);
+            const { error: reopenErr } = await supabase.from("decision_inbox").update({ status: "open", snoozed_until: null }).eq("id", item.id).eq("user_id", userId);
 
             if (reopenErr) {
               setStatusLine(`Undo partial (reopen failed): ${reopenErr.message}`);
@@ -913,11 +910,7 @@ export default function InboxPage() {
         return;
       }
 
-      const { error: closeError } = await supabase
-        .from("decision_inbox")
-        .update({ status: "done", snoozed_until: null })
-        .eq("id", item.id)
-        .eq("user_id", userId);
+      const { error: closeError } = await supabase.from("decision_inbox").update({ status: "done", snoozed_until: null }).eq("id", item.id).eq("user_id", userId);
 
       if (closeError) {
         setStatusLine(`Promoted, but couldn't close inbox item: ${closeError.message}`);
@@ -943,11 +936,7 @@ export default function InboxPage() {
               return;
             }
 
-            const { error: reopenErr } = await supabase
-              .from("decision_inbox")
-              .update({ status: "open", snoozed_until: null })
-              .eq("id", item.id)
-              .eq("user_id", userId);
+            const { error: reopenErr } = await supabase.from("decision_inbox").update({ status: "open", snoozed_until: null }).eq("id", item.id).eq("user_id", userId);
 
             if (reopenErr) {
               setStatusLine(`Undo partial (reopen failed): ${reopenErr.message}`);
@@ -966,7 +955,7 @@ export default function InboxPage() {
     }
   };
 
-  const minutesAgo = lastLoadedAt ? Math.floor((Date.now() - lastLoadedAt.getTime() + tick * 0) / 60000) : null;
+  const minutesAgo = lastLoadedAt ? Math.floor((clock - lastLoadedAt.getTime()) / 60000) : null;
 
   const liveBadge = () => {
     if (liveStatus === "live") return { text: "Live", variant: "success" as const };
@@ -998,8 +987,8 @@ export default function InboxPage() {
       tone === "sky"
         ? "border-sky-200 bg-sky-50"
         : tone === "amber"
-          ? "border-amber-200 bg-amber-50"
-          : "border-zinc-200 bg-zinc-50";
+        ? "border-amber-200 bg-amber-50"
+        : "border-zinc-200 bg-zinc-50";
 
     return (
       <Card className={toneClasses}>
@@ -1200,9 +1189,7 @@ export default function InboxPage() {
                 {[1, 2, 3].map((level) => (
                   <label
                     key={level}
-                    className={`flex cursor-pointer items-center gap-2 text-sm ${
-                      decisionConfidence[it.id] === level ? "opacity-100" : "opacity-80"
-                    }`}
+                    className={`flex cursor-pointer items-center gap-2 text-sm ${decisionConfidence[it.id] === level ? "opacity-100" : "opacity-80"}`}
                   >
                     <input
                       type="radio"
@@ -1248,19 +1235,11 @@ export default function InboxPage() {
                 </Button>
               )}
 
-              <Button
-                variant="secondary"
-                onClick={() => updateSeverity(it.id, (it.severity ?? 2) - 1)}
-                title="Raise priority (towards 1)"
-              >
+              <Button variant="secondary" onClick={() => updateSeverity(it.id, (it.severity ?? 2) - 1)} title="Raise priority (towards 1)">
                 ↑ Priority
               </Button>
 
-              <Button
-                variant="secondary"
-                onClick={() => updateSeverity(it.id, (it.severity ?? 2) + 1)}
-                title="Lower priority (towards 3)"
-              >
+              <Button variant="secondary" onClick={() => updateSeverity(it.id, (it.severity ?? 2) + 1)} title="Lower priority (towards 3)">
                 ↓ Priority
               </Button>
             </div>
@@ -1274,6 +1253,9 @@ export default function InboxPage() {
     );
   };
 
+  const minutesAgoText =
+    !lastLoadedAt ? "" : minutesAgo !== null && minutesAgo < 1 ? "just now" : `${minutesAgo ?? 0}m ago`;
+
   // ---------- UI ----------
   return (
     <Page
@@ -1282,11 +1264,7 @@ export default function InboxPage() {
         <div className="space-y-1">
           {email && <div>Signed in as: {email}</div>}
           <div className="text-zinc-700">{statusLine}</div>
-          {lastLoadedAt && (
-            <div className="text-xs text-zinc-500">
-              Updated {minutesAgo !== null && minutesAgo < 1 ? "just now" : `${minutesAgo ?? 0}m ago`}
-            </div>
-          )}
+          {lastLoadedAt && <div className="text-xs text-zinc-500">Updated {minutesAgoText}</div>}
         </div>
       }
       right={
@@ -1344,9 +1322,7 @@ export default function InboxPage() {
       <div className="space-y-3">
         <div className="flex items-end justify-between gap-3">
           <h2 className="m-0 text-lg font-semibold tracking-tight">Visible</h2>
-          <div className="text-xs text-zinc-500">
-            Insights are generated from your inputs — no forecasting. Read & clear like notifications.
-          </div>
+          <div className="text-xs text-zinc-500">Insights are generated from your inputs — no forecasting. Read & clear like notifications.</div>
         </div>
 
         <div className="grid gap-3">
