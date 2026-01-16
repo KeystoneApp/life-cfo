@@ -1,6 +1,7 @@
+// app/(app)/decisions/DecisionsClient.tsx
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { Badge, Button, Card, CardContent, Chip, useToast } from "@/components/ui";
@@ -111,6 +112,18 @@ type StakesFilter = "all" | "high";
 type SuggestedFilter = "all" | "decide_now" | "delay" | "gather_info";
 type TabMode = "all" | "review" | "drafts";
 
+const DEFAULT_REVIEW_BUMP_DAYS = 30;
+
+function isoNowPlusDays(days: number) {
+  return new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+}
+
+function parseMs(dt: string | null) {
+  if (!dt) return null;
+  const ms = Date.parse(dt);
+  return Number.isNaN(ms) ? null : ms;
+}
+
 export default function DecisionsClient() {
   const { showToast } = useToast();
   const router = useRouter();
@@ -133,9 +146,6 @@ export default function DecisionsClient() {
 
   // tabs
   const [tab, setTab] = useState<TabMode>("all");
-
-  // review tab: optionally include due-soon
-  const [includeDueSoonInReview, setIncludeDueSoonInReview] = useState(false);
 
   // bulk selection (Review tab)
   const [selected, setSelected] = useState<Record<string, boolean>>({});
@@ -220,7 +230,6 @@ export default function DecisionsClient() {
     setExpanded(next);
   };
   const collapseAll = () => setExpanded({});
-
   const clearFilters = () => {
     setTypeFilter("all");
     setStakesFilter("all");
@@ -273,21 +282,6 @@ export default function DecisionsClient() {
   );
   const scheduledCount = useMemo(() => reviewSorted.length, [reviewSorted]);
 
-  const nextDue = useMemo(() => reviewSorted.find((d) => isDueForReview(d)) ?? null, [reviewSorted]);
-  const nextDueSoon = useMemo(
-    () => reviewSorted.find((d) => !isDueForReview(d) && isDueSoon(d)) ?? null,
-    [reviewSorted]
-  );
-
-  const expandAndScrollTo = (id: string) => {
-    setExpanded((prev) => ({ ...prev, [id]: true }));
-    // allow state paint, then scroll
-    window.setTimeout(() => {
-      const el = document.getElementById(`decision-${id}`);
-      el?.scrollIntoView({ behavior: "smooth", block: "start" });
-    }, 50);
-  };
-
   // ---------- selection ----------
   const selectedIds = useMemo(() => Object.keys(selected).filter((id) => selected[id]), [selected]);
   const toggleSelected = (id: string) => setSelected((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -303,30 +297,58 @@ export default function DecisionsClient() {
     setRows((prev) => prev.map((d) => (d.id === id ? { ...d, pinned: next } : d)));
   };
 
+  /**
+   * ✅ Mark reviewed and, if the item was overdue, bump review_at forward by DEFAULT_REVIEW_BUMP_DAYS.
+   * Undo restores BOTH reviewed_at and review_at.
+   */
   const markReviewedNow = async (id: string) => {
-    const prevReviewedAt = rows.find((x) => x.id === id)?.reviewed_at ?? null;
-    const nowIso = new Date().toISOString();
+    const row = rows.find((x) => x.id === id);
+    if (!row) return;
 
-    const { error } = await supabase.from("decisions").update({ reviewed_at: nowIso }).eq("id", id);
+    const prevReviewedAt = row.reviewed_at ?? null;
+    const prevReviewAt = row.review_at ?? null;
+
+    const nowIso = new Date().toISOString();
+    const reviewAtMs = parseMs(row.review_at);
+    const shouldBump = reviewAtMs != null && reviewAtMs <= Date.now();
+    const nextReviewAt = shouldBump ? isoNowPlusDays(DEFAULT_REVIEW_BUMP_DAYS) : prevReviewAt;
+
+    const payload: any = { reviewed_at: nowIso };
+    if (shouldBump) payload.review_at = nextReviewAt;
+
+    const { error } = await supabase.from("decisions").update(payload).eq("id", id);
     if (error) {
       setStatusLine(`Mark reviewed failed: ${error.message}`);
       return;
     }
 
-    setRows((prev) => prev.map((d) => (d.id === id ? { ...d, reviewed_at: nowIso } : d)));
-    setStatusLine("Reviewed ✅");
+    setRows((prev) =>
+      prev.map((d) => (d.id === id ? { ...d, reviewed_at: nowIso, review_at: nextReviewAt } : d))
+    );
+
+    setStatusLine(shouldBump ? `Reviewed ✅ (next in ${DEFAULT_REVIEW_BUMP_DAYS}d)` : "Reviewed ✅");
 
     showToast(
       {
-        message: "Reviewed ✅",
+        message: shouldBump ? `Reviewed ✅ (next in ${DEFAULT_REVIEW_BUMP_DAYS}d)` : "Reviewed ✅",
         undoLabel: "Undo",
         onUndo: async () => {
-          const { error: undoErr } = await supabase.from("decisions").update({ reviewed_at: prevReviewedAt }).eq("id", id);
+          setStatusLine("Undoing review...");
+
+          const { error: undoErr } = await supabase
+            .from("decisions")
+            .update({ reviewed_at: prevReviewedAt, review_at: prevReviewAt })
+            .eq("id", id);
+
           if (undoErr) {
             setStatusLine(`Undo failed: ${undoErr.message}`);
             return;
           }
-          setRows((prev) => prev.map((d) => (d.id === id ? { ...d, reviewed_at: prevReviewedAt } : d)));
+
+          setRows((prev) =>
+            prev.map((d) => (d.id === id ? { ...d, reviewed_at: prevReviewedAt, review_at: prevReviewAt } : d))
+          );
+
           setStatusLine("Undone ✅");
         },
       },
@@ -360,23 +382,38 @@ export default function DecisionsClient() {
     setStatusLine("Cleared ✅");
   };
 
+  /**
+   * ✅ Save review note:
+   * - Adds note to history
+   * - Sets review_notes = latest
+   * - Sets reviewed_at = now
+   * - If currently overdue, bumps review_at forward by DEFAULT_REVIEW_BUMP_DAYS
+   */
   const saveReviewNote = async (d: Decision) => {
     const note = (reviewDraft[d.id] ?? "").trim();
     if (!note) return;
 
+    const prevReviewedAt = d.reviewed_at ?? null;
+    const prevReviewAt = d.review_at ?? null;
+    const prevReviewNotes = d.review_notes ?? null;
+    const prevHistory = normalizeHistory(d.review_history);
+
     const at = new Date().toISOString();
-    const history = normalizeHistory(d.review_history);
-    const nextHistory: ReviewEntry[] = [...history, { at, note }];
+    const nextHistory: ReviewEntry[] = [...prevHistory, { at, note }];
     const nextReviewNotes = note;
 
-    const { error } = await supabase
-      .from("decisions")
-      .update({
-        review_history: nextHistory,
-        review_notes: nextReviewNotes,
-        reviewed_at: at,
-      })
-      .eq("id", d.id);
+    const reviewAtMs = parseMs(d.review_at);
+    const shouldBump = reviewAtMs != null && reviewAtMs <= Date.now();
+    const nextReviewAt = shouldBump ? isoNowPlusDays(DEFAULT_REVIEW_BUMP_DAYS) : prevReviewAt;
+
+    const payload: any = {
+      review_history: nextHistory,
+      review_notes: nextReviewNotes,
+      reviewed_at: at,
+    };
+    if (shouldBump) payload.review_at = nextReviewAt;
+
+    const { error } = await supabase.from("decisions").update(payload).eq("id", d.id);
 
     if (error) {
       setStatusLine(`Save review note failed: ${error.message}`);
@@ -385,7 +422,15 @@ export default function DecisionsClient() {
 
     setRows((prev) =>
       prev.map((x) =>
-        x.id === d.id ? { ...x, review_history: nextHistory, review_notes: nextReviewNotes, reviewed_at: at } : x
+        x.id === d.id
+          ? {
+              ...x,
+              review_history: nextHistory,
+              review_notes: nextReviewNotes,
+              reviewed_at: at,
+              review_at: nextReviewAt,
+            }
+          : x
       )
     );
 
@@ -395,36 +440,118 @@ export default function DecisionsClient() {
       return copy;
     });
 
-    setStatusLine("Review note saved ✅");
+    setStatusLine(shouldBump ? `Review note saved ✅ (next in ${DEFAULT_REVIEW_BUMP_DAYS}d)` : "Review note saved ✅");
+
+    showToast(
+      {
+        message: shouldBump ? `Review note saved ✅ (next in ${DEFAULT_REVIEW_BUMP_DAYS}d)` : "Review note saved ✅",
+        undoLabel: "Undo",
+        onUndo: async () => {
+          setStatusLine("Undoing review note...");
+
+          const { error: undoErr } = await supabase
+            .from("decisions")
+            .update({
+              reviewed_at: prevReviewedAt,
+              review_at: prevReviewAt,
+              review_notes: prevReviewNotes,
+              review_history: prevHistory,
+            })
+            .eq("id", d.id);
+
+          if (undoErr) {
+            setStatusLine(`Undo failed: ${undoErr.message}`);
+            return;
+          }
+
+          setRows((prev) =>
+            prev.map((x) =>
+              x.id === d.id
+                ? {
+                    ...x,
+                    reviewed_at: prevReviewedAt,
+                    review_at: prevReviewAt,
+                    review_notes: prevReviewNotes,
+                    review_history: prevHistory,
+                  }
+                : x
+            )
+          );
+
+          setStatusLine("Undone ✅");
+        },
+      },
+      8000
+    );
   };
 
+  /**
+   * ✅ Bulk mark reviewed:
+   * - Sets reviewed_at=now for all selected
+   * - For any that are overdue, also bumps review_at forward by DEFAULT_REVIEW_BUMP_DAYS
+   * Undo restores reviewed_at + review_at per-id.
+   */
   const bulkMarkReviewed = async () => {
     const ids = selectedIds;
     if (ids.length === 0) return;
 
-    const prevMap: Record<string, string | null> = {};
-    for (const d of rows) if (ids.includes(d.id)) prevMap[d.id] = d.reviewed_at ?? null;
+    const prevReviewedMap: Record<string, string | null> = {};
+    const prevReviewAtMap: Record<string, string | null> = {};
+
+    const nowIso = new Date().toISOString();
+    const bumpIso = isoNowPlusDays(DEFAULT_REVIEW_BUMP_DAYS);
+
+    const overdueIds: string[] = [];
+    for (const d of rows) {
+      if (!ids.includes(d.id)) continue;
+      prevReviewedMap[d.id] = d.reviewed_at ?? null;
+      prevReviewAtMap[d.id] = d.review_at ?? null;
+
+      const ms = parseMs(d.review_at);
+      if (ms != null && ms <= Date.now()) overdueIds.push(d.id);
+    }
 
     setStatusLine("Marking selected as reviewed...");
-    const nowIso = new Date().toISOString();
 
-    const { error } = await supabase.from("decisions").update({ reviewed_at: nowIso }).in("id", ids);
-    if (error) {
-      setStatusLine(`Bulk reviewed failed: ${error.message}`);
+    // 1) reviewed_at for all
+    const { error: baseErr } = await supabase.from("decisions").update({ reviewed_at: nowIso }).in("id", ids);
+    if (baseErr) {
+      setStatusLine(`Bulk reviewed failed: ${baseErr.message}`);
       return;
     }
 
-    setRows((prev) => prev.map((d) => (ids.includes(d.id) ? { ...d, reviewed_at: nowIso } : d)));
-    setStatusLine(`Reviewed ${ids.length} ✅`);
+    // 2) bump review_at for overdue subset
+    if (overdueIds.length > 0) {
+      const { error: bumpErr } = await supabase.from("decisions").update({ review_at: bumpIso }).in("id", overdueIds);
+      if (bumpErr) {
+        setStatusLine(`Reviewed ✅ but bump failed: ${bumpErr.message}`);
+        // still update local for reviewed_at only
+        setRows((prev) => prev.map((d) => (ids.includes(d.id) ? { ...d, reviewed_at: nowIso } : d)));
+        clearSelection();
+        return;
+      }
+    }
+
+    setRows((prev) =>
+      prev.map((d) =>
+        ids.includes(d.id)
+          ? { ...d, reviewed_at: nowIso, review_at: overdueIds.includes(d.id) ? bumpIso : d.review_at }
+          : d
+      )
+    );
+
+    const bumpedN = overdueIds.length;
+    setStatusLine(bumpedN > 0 ? `Reviewed ${ids.length} ✅ (bumped ${bumpedN})` : `Reviewed ${ids.length} ✅`);
 
     showToast(
       {
-        message: `Reviewed ${ids.length} ✅`,
+        message: bumpedN > 0 ? `Reviewed ${ids.length} ✅ (bumped ${bumpedN})` : `Reviewed ${ids.length} ✅`,
         undoLabel: "Undo",
         onUndo: async () => {
           setStatusLine("Undoing bulk review...");
+
           const tasks = ids.map((id) =>
-            supabase.from("decisions").update({ reviewed_at: prevMap[id] ?? null }).eq("id", id)
+            supabase.from("decisions").update({ reviewed_at: prevReviewedMap[id] ?? null, review_at: prevReviewAtMap[id] ?? null }).eq("id", id)
           );
           const results = await Promise.all(tasks);
           const failed = results.find((r) => r.error);
@@ -432,7 +559,15 @@ export default function DecisionsClient() {
             setStatusLine(`Undo failed: ${failed.error.message}`);
             return;
           }
-          setRows((prev) => prev.map((d) => (ids.includes(d.id) ? { ...d, reviewed_at: prevMap[d.id] ?? null } : d)));
+
+          setRows((prev) =>
+            prev.map((d) =>
+              ids.includes(d.id)
+                ? { ...d, reviewed_at: prevReviewedMap[d.id] ?? null, review_at: prevReviewAtMap[d.id] ?? null }
+                : d
+            )
+          );
+
           setStatusLine("Undone ✅");
         },
       },
@@ -586,10 +721,7 @@ export default function DecisionsClient() {
         onUndo: async () => {
           setStatusLine("Undoing...");
 
-          const { error: undoErr } = await supabase
-            .from("decisions")
-            .update({ status: "draft", decided_at: null })
-            .eq("id", d.id);
+          const { error: undoErr } = await supabase.from("decisions").update({ status: "draft", decided_at: null }).eq("id", d.id);
 
           if (undoErr) {
             setStatusLine(`Undo failed: ${undoErr.message}`);
@@ -597,10 +729,7 @@ export default function DecisionsClient() {
           }
 
           if (d.inbox_item_id && inboxClosedOk) {
-            const { error: reopenErr } = await supabase
-              .from("decision_inbox")
-              .update({ status: "open", snoozed_until: null })
-              .eq("id", d.inbox_item_id);
+            const { error: reopenErr } = await supabase.from("decision_inbox").update({ status: "open", snoozed_until: null }).eq("id", d.inbox_item_id);
 
             if (reopenErr) {
               setStatusLine(`Undo partial (reopen inbox failed): ${reopenErr.message}`);
@@ -608,10 +737,7 @@ export default function DecisionsClient() {
             }
           }
 
-          setRows((prev) =>
-            prev.map((x) => (x.id === d.id ? { ...x, status: prevStatus, decided_at: prevDecidedAt ?? null } : x))
-          );
-
+          setRows((prev) => prev.map((x) => (x.id === d.id ? { ...x, status: prevStatus, decided_at: prevDecidedAt ?? null } : x)));
           setStatusLine("Undone ✅");
         },
       },
@@ -627,9 +753,7 @@ export default function DecisionsClient() {
 
     return rows.filter((d) => {
       if (tab === "review") {
-        const due = isDueForReview(d);
-        const soon = !due && isDueSoon(d);
-        if (!due && !(includeDueSoonInReview && soon)) return false;
+        if (!isDueForReview(d)) return false;
       }
       if (tab === "drafts") {
         if (d.status !== "draft") return false;
@@ -667,7 +791,7 @@ export default function DecisionsClient() {
 
       return true;
     });
-  }, [rows, query, onlyWithAI, typeFilter, stakesFilter, suggestedFilter, needsAttention, tab, includeDueSoonInReview]);
+  }, [rows, query, onlyWithAI, typeFilter, stakesFilter, suggestedFilter, needsAttention, tab]);
 
   const activeFiltersCount = useMemo(() => {
     let n = 0;
@@ -685,11 +809,7 @@ export default function DecisionsClient() {
       <div className="text-zinc-700">
         <strong>{decidedCount}</strong> handled • <strong>{draftCount}</strong> drafts • {statusLine}
       </div>
-      <div className="text-sm text-zinc-600">
-        {tab === "review"
-          ? "Review is how Keystone stays true over time. Keep it light: confirm, update, or reschedule."
-          : "You’re building a trail of clarity — one decision at a time."}
-      </div>
+      <div>You’re building a trail of clarity — one decision at a time.</div>
     </div>
   );
 
@@ -707,7 +827,6 @@ export default function DecisionsClient() {
       right={
         <div className="flex flex-wrap items-center gap-2">
           <Button onClick={load}>Refresh</Button>
-
           <Button variant="secondary" onClick={() => expandAll(filtered)}>
             Expand filtered
           </Button>
@@ -736,56 +855,24 @@ export default function DecisionsClient() {
           Review {dueForReviewCount > 0 ? `(${dueForReviewCount})` : ""}
         </Chip>
 
-        {tab === "review" && dueForReviewCount === 0 && (
-          <div className="self-center text-sm text-zinc-600">Nothing is overdue 🎉</div>
-        )}
+        {tab === "review" && dueForReviewCount === 0 && <div className="self-center text-sm text-zinc-600">Nothing is due right now 🎉</div>}
 
         {tab === "drafts" && draftCount === 0 && <div className="self-center text-sm text-zinc-600">No drafts right now 🎉</div>}
       </div>
 
-      {/* Review queue (tab only) */}
-      {tab === "review" && (
-        <Card className="border-amber-200 bg-amber-50">
-          <CardContent>
-            <div className="space-y-3">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div className="space-y-1">
-                  <div className="text-sm font-semibold">Review queue</div>
-                  <div className="text-xs text-zinc-600">
-                    Confirm what’s still true. Add a note if needed. Otherwise: mark reviewed or reschedule.
-                  </div>
-                </div>
-
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    onClick={() => {
-                      const target = nextDue ?? (includeDueSoonInReview ? nextDueSoon : null);
-                      if (target) expandAndScrollTo(target.id);
-                    }}
-                    disabled={!nextDue && !(includeDueSoonInReview && nextDueSoon)}
-                    title="Expand and jump to the next item in the queue"
-                  >
-                    Review next
-                  </Button>
-
-                  <Button
-                    variant="secondary"
-                    onClick={() => setIncludeDueSoonInReview((v) => !v)}
-                    title="Include items due soon (within ~48h) in this queue"
-                  >
-                    {includeDueSoonInReview ? "Showing due soon" : "Include due soon"}
-                  </Button>
-                </div>
-              </div>
-
+      {/* Review summary + bulk controls */}
+      <Card className="bg-zinc-50">
+        <CardContent>
+          <div className="space-y-3">
+            <div className="flex flex-wrap justify-between gap-3">
               <div className="flex flex-wrap items-center gap-2">
+                <Badge variant="muted">Scheduled: {scheduledCount}</Badge>
                 <Badge variant="warning">Overdue: {overdueCount}</Badge>
                 <Badge variant="muted">Due soon: {dueSoonCount}</Badge>
-                <Badge variant="muted">Scheduled total: {scheduledCount}</Badge>
-                {selectedIds.length > 0 && <Badge variant="muted">Selected: {selectedIds.length}</Badge>}
+                {tab === "review" && selectedIds.length > 0 && <Badge variant="muted">Selected: {selectedIds.length}</Badge>}
               </div>
 
-              <div className="flex flex-wrap items-center justify-between gap-2">
+              {tab === "review" && (
                 <div className="flex flex-wrap gap-2">
                   <Button
                     variant="secondary"
@@ -801,40 +888,42 @@ export default function DecisionsClient() {
                     Clear selection
                   </Button>
                 </div>
-
-                <div className="flex flex-wrap gap-2">
-                  <Button onClick={bulkMarkReviewed} disabled={selectedIds.length === 0}>
-                    ✅ Mark reviewed
-                  </Button>
-
-                  <Button variant="secondary" onClick={() => bulkScheduleMinutes(60 * 24 * 3)} disabled={selectedIds.length === 0}>
-                    ⏳ +3d
-                  </Button>
-
-                  <Button variant="secondary" onClick={() => bulkScheduleMinutes(60 * 24 * 7)} disabled={selectedIds.length === 0}>
-                    ⏳ +7d
-                  </Button>
-
-                  <Button variant="secondary" onClick={() => bulkScheduleMinutes(60 * 24 * 30)} disabled={selectedIds.length === 0}>
-                    ⏳ +30d
-                  </Button>
-
-                  <Button variant="secondary" onClick={bulkClearReviewAt} disabled={selectedIds.length === 0}>
-                    🧹 Clear dates
-                  </Button>
-                </div>
-              </div>
+              )}
             </div>
-          </CardContent>
-        </Card>
-      )}
+
+            {tab === "review" && (
+              <div className="flex flex-wrap gap-2">
+                <Button onClick={bulkMarkReviewed} disabled={selectedIds.length === 0}>
+                  ✅ Mark reviewed (bump overdue +{DEFAULT_REVIEW_BUMP_DAYS}d)
+                </Button>
+
+                <Button variant="secondary" onClick={() => bulkScheduleMinutes(60 * 24 * 3)} disabled={selectedIds.length === 0}>
+                  ⏳ Review in 3 days
+                </Button>
+
+                <Button variant="secondary" onClick={() => bulkScheduleMinutes(60 * 24 * 7)} disabled={selectedIds.length === 0}>
+                  ⏳ Review in 7 days
+                </Button>
+
+                <Button variant="secondary" onClick={() => bulkScheduleMinutes(60 * 24 * 30)} disabled={selectedIds.length === 0}>
+                  ⏳ Review in 30 days
+                </Button>
+
+                <Button variant="secondary" onClick={bulkClearReviewAt} disabled={selectedIds.length === 0}>
+                  🧹 Clear review date
+                </Button>
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Search */}
       <div className="flex flex-wrap gap-2">
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder={tab === "review" ? "Search review items..." : tab === "drafts" ? "Search drafts..." : "Search decisions..."}
+          placeholder={tab === "review" ? "Search reviews..." : tab === "drafts" ? "Search drafts..." : "Search decisions..."}
           className="min-w-[260px] flex-1 rounded-xl border border-zinc-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
         />
       </div>
@@ -934,7 +1023,6 @@ export default function DecisionsClient() {
           return (
             <Card
               key={d.id}
-              id={`decision-${d.id}`}
               className={
                 isDraft
                   ? "border-zinc-200 bg-zinc-50"
@@ -990,12 +1078,13 @@ export default function DecisionsClient() {
                           </strong>
 
                           {isDraft && <Badge variant="muted">Draft</Badge>}
-                          {due && <Badge variant="warning">Due now</Badge>}
+                          {due && <Badge variant="warning">Due for review</Badge>}
                           {dueSoon && <Badge variant="muted">Due soon</Badge>}
                           {conf && <Badge variant="muted">Confidence: {conf}</Badge>}
                           {suggested && <Badge variant="muted">AI: {suggested}</Badge>}
                           {isDraft && d.inbox_item_id && <Badge variant="muted">Linked to Inbox</Badge>}
 
+                          {/* One-click review link (only when due) */}
                           {!isDraft && due && (
                             <Button
                               variant="secondary"
@@ -1039,22 +1128,23 @@ export default function DecisionsClient() {
                             e.stopPropagation();
                             markReviewedNow(d.id);
                           }}
+                          title={`Marks reviewed now; if overdue, bumps next review +${DEFAULT_REVIEW_BUMP_DAYS} days`}
                         >
                           ✅ Reviewed
                         </Button>
                       )}
 
                       <Button variant="secondary" onClick={() => reviewIn1Day(d.id)}>
-                        ⏳ +1d
+                        ⏳ Review in 1 day
                       </Button>
                       <Button variant="secondary" onClick={() => reviewIn3Days(d.id)}>
-                        ⏳ +3d
+                        ⏳ Review in 3 days
                       </Button>
                       <Button variant="secondary" onClick={() => reviewIn7Days(d.id)}>
-                        ⏳ +7d
+                        ⏳ Review in 7 days
                       </Button>
                       <Button variant="secondary" onClick={() => reviewIn30Days(d.id)}>
-                        ⏳ +30d
+                        ⏳ Review in 30 days
                       </Button>
 
                       <Button variant="secondary" onClick={() => clearReviewAt(d.id)}>
@@ -1123,9 +1213,7 @@ export default function DecisionsClient() {
                                 {[1, 2, 3].map((level) => (
                                   <label
                                     key={level}
-                                    className={`flex cursor-pointer items-center gap-2 text-sm ${
-                                      draftConfidence[d.id] === level ? "opacity-100" : "opacity-80"
-                                    }`}
+                                    className={`flex cursor-pointer items-center gap-2 text-sm ${draftConfidence[d.id] === level ? "opacity-100" : "opacity-80"}`}
                                   >
                                     <input
                                       type="radio"
@@ -1204,7 +1292,9 @@ export default function DecisionsClient() {
                           <div className="text-sm text-zinc-500">No review notes yet.</div>
                         )}
 
-                        <div className="mt-3 text-xs text-zinc-500">Add a new note (saved into history + marks reviewed)</div>
+                        <div className="mt-3 text-xs text-zinc-500">
+                          Add a new note (saved into history + marks reviewed{d.review_at ? `; bumps overdue +${DEFAULT_REVIEW_BUMP_DAYS}d` : ""})
+                        </div>
 
                         <textarea
                           value={reviewDraft[d.id] ?? ""}
@@ -1255,9 +1345,7 @@ export default function DecisionsClient() {
                     )}
 
                     {showAIJson && d.ai_json && (
-                      <pre className="overflow-x-auto rounded-xl bg-zinc-900 p-3 text-xs text-zinc-100">
-                        {JSON.stringify(d.ai_json, null, 2)}
-                      </pre>
+                      <pre className="overflow-x-auto rounded-xl bg-zinc-900 p-3 text-xs text-zinc-100">{JSON.stringify(d.ai_json, null, 2)}</pre>
                     )}
 
                     <div className="text-xs text-zinc-500">status: {d.status}</div>
@@ -1269,9 +1357,7 @@ export default function DecisionsClient() {
         })}
 
         {filtered.length === 0 && (
-          <div className="text-sm text-zinc-600">
-            {tab === "review" ? "No review items found for this queue." : tab === "drafts" ? "No drafts found." : "No decisions found."}
-          </div>
+          <div className="text-sm text-zinc-600">{tab === "review" ? "No reviews due." : tab === "drafts" ? "No drafts found." : "No decisions found."}</div>
         )}
       </div>
     </Page>
