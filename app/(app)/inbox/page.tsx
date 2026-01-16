@@ -36,6 +36,26 @@ function isoNowPlusMinutes(mins: number) {
   return d.toISOString();
 }
 
+function isoNowPlusHours(hours: number) {
+  return isoNowPlusMinutes(hours * 60);
+}
+
+function isoNowPlusDays(days: number) {
+  return isoNowPlusHours(days * 24);
+}
+
+function safeParseMs(iso: string | null | undefined) {
+  if (!iso) return null;
+  const ms = Date.parse(iso);
+  return Number.isNaN(ms) ? null : ms;
+}
+
+function formatWhen(iso: string | null) {
+  const ms = safeParseMs(iso);
+  if (!ms) return "";
+  return new Date(ms).toLocaleString();
+}
+
 const clamp = (n: number, min = 1, max = 3) => Math.max(min, Math.min(max, n));
 type LiveStatus = "connecting" | "live" | "offline";
 
@@ -279,6 +299,12 @@ export default function InboxPage() {
       return "Already promoted/decided for this inbox item.";
     }
     return msg || "Something went wrong.";
+  };
+
+  const isActivelySnoozed = (it: InboxItem, nowMs: number) => {
+    const ms = safeParseMs(it.snoozed_until);
+    if (!ms) return false;
+    return ms > nowMs;
   };
 
   // ---------- auth + load ----------
@@ -566,7 +592,11 @@ export default function InboxPage() {
     setAffirmation(null);
     setStatusLine("Unsnoozing all snoozed items...");
 
-    const { error } = await supabase.from("decision_inbox").update({ status: "open", snoozed_until: null }).eq("user_id", userId).eq("status", "snoozed");
+    const { error } = await supabase
+      .from("decision_inbox")
+      .update({ status: "open", snoozed_until: null })
+      .eq("user_id", userId)
+      .eq("status", "snoozed");
 
     if (error) {
       setStatusLine(`Force unsnooze failed: ${error.message}`);
@@ -600,7 +630,11 @@ export default function InboxPage() {
     setAffirmation(null);
     setStatusLine("Marking done...");
 
-    const { error } = await supabase.from("decision_inbox").update({ status: "done", snoozed_until: null }).eq("id", id).eq("user_id", userId);
+    const { error } = await supabase
+      .from("decision_inbox")
+      .update({ status: "done", snoozed_until: null })
+      .eq("id", id)
+      .eq("user_id", userId);
 
     if (error) {
       setStatusLine(`Done failed: ${error.message}`);
@@ -613,17 +647,15 @@ export default function InboxPage() {
     setStatusLine("Done ✅");
   };
 
-  const snoozeItemMinutes = async (id: string, mins: number) => {
+  const snoozeItemUntil = async (id: string, untilIso: string, label: string) => {
     if (!userId) return;
 
-    const until = isoNowPlusMinutes(mins);
-
     setAffirmation(null);
-    setStatusLine(`Snoozing for ${mins} minute(s)...`);
+    setStatusLine(`Snoozing (${label})...`);
 
     const { error } = await supabase
       .from("decision_inbox")
-      .update({ status: "snoozed", snoozed_until: until })
+      .update({ status: "snoozed", snoozed_until: untilIso })
       .eq("id", id)
       .eq("user_id", userId);
 
@@ -632,29 +664,53 @@ export default function InboxPage() {
       return;
     }
 
-    setItems((prev) => prev.map((it) => (it.id === id ? { ...it, status: "snoozed", snoozed_until: until } : it)));
+    setItems((prev) => prev.map((it) => (it.id === id ? { ...it, status: "snoozed", snoozed_until: untilIso } : it)));
     clearPerItemInputs(id);
     setLastLoadedAt(new Date());
-    setStatusLine(`Snoozed ✅ (${mins} min)`);
+    setStatusLine(`Snoozed ✅ (${label})`);
   };
 
-  const undoToOpen = async (id: string) => {
+  const snoozeItemMinutes = async (id: string, mins: number) => {
+    const until = isoNowPlusMinutes(mins);
+    return snoozeItemUntil(id, until, `${mins}m`);
+  };
+
+  const snooze24h = async (id: string) => {
+    const until = isoNowPlusHours(24);
+    return snoozeItemUntil(id, until, "24h");
+  };
+
+  const snooze7d = async (id: string) => {
+    const until = isoNowPlusDays(7);
+    return snoozeItemUntil(id, until, "7d");
+  };
+
+  const unsnoozeToOpen = async (id: string) => {
     if (!userId) return;
 
     setAffirmation(null);
-    setStatusLine("Re-opening...");
+    setStatusLine("Unsnoozing...");
 
-    const { error } = await supabase.from("decision_inbox").update({ status: "open", snoozed_until: null }).eq("id", id).eq("user_id", userId);
+    const { error } = await supabase
+      .from("decision_inbox")
+      .update({ status: "open", snoozed_until: null })
+      .eq("id", id)
+      .eq("user_id", userId);
 
     if (error) {
-      setStatusLine(`Undo failed: ${error.message}`);
+      setStatusLine(`Unsnooze failed: ${error.message}`);
       return;
     }
 
     setItems((prev) => prev.map((it) => (it.id === id ? { ...it, status: "open", snoozed_until: null } : it)));
     clearPerItemInputs(id);
     setLastLoadedAt(new Date());
-    setStatusLine("Open ✅");
+    setStatusLine("Unsnoozed ✅");
+  };
+
+  const undoToOpen = async (id: string) => {
+    // kept for compatibility with existing UI (“Undo → Open”)
+    return unsnoozeToOpen(id);
   };
 
   const autoResolveWithUndo = async (it: InboxItem, message = "Marked done ✅") => {
@@ -668,7 +724,11 @@ export default function InboxPage() {
     clearPerItemInputs(it.id);
     setLastLoadedAt(new Date());
 
-    const { error } = await supabase.from("decision_inbox").update({ status: "done", snoozed_until: null }).eq("id", it.id).eq("user_id", userId);
+    const { error } = await supabase
+      .from("decision_inbox")
+      .update({ status: "done", snoozed_until: null })
+      .eq("id", it.id)
+      .eq("user_id", userId);
 
     if (error) {
       setStatusLine(`Auto-resolve failed: ${error.message}`);
@@ -719,7 +779,11 @@ export default function InboxPage() {
     ids.forEach((id) => clearPerItemInputs(id));
     setLastLoadedAt(new Date());
 
-    const { error } = await supabase.from("decision_inbox").update({ status: "done", snoozed_until: null }).in("id", ids).eq("user_id", userId);
+    const { error } = await supabase
+      .from("decision_inbox")
+      .update({ status: "done", snoozed_until: null })
+      .in("id", ids)
+      .eq("user_id", userId);
 
     if (error) {
       setStatusLine(`Dismiss failed: ${error.message}`);
@@ -823,7 +887,11 @@ export default function InboxPage() {
         return;
       }
 
-      const { error: closeError } = await supabase.from("decision_inbox").update({ status: "done", snoozed_until: null }).eq("id", item.id).eq("user_id", userId);
+      const { error: closeError } = await supabase
+        .from("decision_inbox")
+        .update({ status: "done", snoozed_until: null })
+        .eq("id", item.id)
+        .eq("user_id", userId);
 
       if (closeError) {
         setStatusLine(`Saved decision, but couldn't close inbox item: ${closeError.message}`);
@@ -849,7 +917,11 @@ export default function InboxPage() {
               return;
             }
 
-            const { error: reopenErr } = await supabase.from("decision_inbox").update({ status: "open", snoozed_until: null }).eq("id", item.id).eq("user_id", userId);
+            const { error: reopenErr } = await supabase
+              .from("decision_inbox")
+              .update({ status: "open", snoozed_until: null })
+              .eq("id", item.id)
+              .eq("user_id", userId);
 
             if (reopenErr) {
               setStatusLine(`Undo partial (reopen failed): ${reopenErr.message}`);
@@ -910,7 +982,11 @@ export default function InboxPage() {
         return;
       }
 
-      const { error: closeError } = await supabase.from("decision_inbox").update({ status: "done", snoozed_until: null }).eq("id", item.id).eq("user_id", userId);
+      const { error: closeError } = await supabase
+        .from("decision_inbox")
+        .update({ status: "done", snoozed_until: null })
+        .eq("id", item.id)
+        .eq("user_id", userId);
 
       if (closeError) {
         setStatusLine(`Promoted, but couldn't close inbox item: ${closeError.message}`);
@@ -936,7 +1012,11 @@ export default function InboxPage() {
               return;
             }
 
-            const { error: reopenErr } = await supabase.from("decision_inbox").update({ status: "open", snoozed_until: null }).eq("id", item.id).eq("user_id", userId);
+            const { error: reopenErr } = await supabase
+              .from("decision_inbox")
+              .update({ status: "open", snoozed_until: null })
+              .eq("id", item.id)
+              .eq("user_id", userId);
 
             if (reopenErr) {
               setStatusLine(`Undo partial (reopen failed): ${reopenErr.message}`);
@@ -1034,6 +1114,8 @@ export default function InboxPage() {
 
     const hasShortcutAction = !!it.action_href;
 
+    const activelySnoozed = isActivelySnoozed(it, now);
+
     return (
       <Card key={it.id} className={engineCardClasses(s, kind)}>
         <CardContent>
@@ -1047,8 +1129,14 @@ export default function InboxPage() {
                 {isV1 && <Chip>Reminder</Chip>}
                 {!isV2 && !isV1 && isEng && <Chip>Engine</Chip>}
 
+                {activelySnoozed && <Chip>Snoozed</Chip>}
+
                 {insightsDigest && (
-                  <Chip active={false} onClick={() => router.push("/engine")} title="Open Engine (insights are generated there)">
+                  <Chip
+                    active={false}
+                    onClick={() => router.push("/engine")}
+                    title="Open Engine (insights are generated there)"
+                  >
                     Digest
                   </Chip>
                 )}
@@ -1056,7 +1144,7 @@ export default function InboxPage() {
 
               <div className="text-xs text-zinc-500">
                 {it.status}
-                {it.snoozed_until ? ` (until ${it.snoozed_until})` : ""}
+                {activelySnoozed ? ` • until ${formatWhen(it.snoozed_until)}` : ""}
               </div>
             </div>
 
@@ -1108,12 +1196,7 @@ export default function InboxPage() {
                         Open Engine
                       </Button>
 
-                      <Button
-                        variant="secondary"
-                        onClick={async () => {
-                          await snoozeItemMinutes(it.id, 60 * 24);
-                        }}
-                      >
+                      <Button variant="secondary" onClick={() => snooze24h(it.id)}>
                         Snooze 24h
                       </Button>
                     </div>
@@ -1221,25 +1304,43 @@ export default function InboxPage() {
                 Done
               </Button>
 
-              <Button variant="secondary" onClick={() => snoozeItemMinutes(it.id, 1)}>
-                Snooze 1 min
+              <Button variant="secondary" onClick={() => snooze24h(it.id)}>
+                Snooze 24h
               </Button>
 
-              <Button variant="secondary" onClick={() => snoozeItemMinutes(it.id, 10)}>
-                Snooze 10 min
+              <Button variant="secondary" onClick={() => snooze7d(it.id)}>
+                Snooze 7d
               </Button>
 
-              {(it.status === "done" || it.status === "snoozed") && (
+              <Button variant="secondary" onClick={() => snoozeItemMinutes(it.id, 10)} title="Short snooze (testing / quick defer)">
+                Snooze 10m
+              </Button>
+
+              {activelySnoozed && (
+                <Button variant="secondary" onClick={() => unsnoozeToOpen(it.id)}>
+                  Unsnooze
+                </Button>
+              )}
+
+              {(it.status === "done" || it.status === "snoozed") && !activelySnoozed && (
                 <Button variant="secondary" onClick={() => undoToOpen(it.id)}>
                   Undo → Open
                 </Button>
               )}
 
-              <Button variant="secondary" onClick={() => updateSeverity(it.id, (it.severity ?? 2) - 1)} title="Raise priority (towards 1)">
+              <Button
+                variant="secondary"
+                onClick={() => updateSeverity(it.id, (it.severity ?? 2) - 1)}
+                title="Raise priority (towards 1)"
+              >
                 ↑ Priority
               </Button>
 
-              <Button variant="secondary" onClick={() => updateSeverity(it.id, (it.severity ?? 2) + 1)} title="Lower priority (towards 3)">
+              <Button
+                variant="secondary"
+                onClick={() => updateSeverity(it.id, (it.severity ?? 2) + 1)}
+                title="Lower priority (towards 3)"
+              >
                 ↓ Priority
               </Button>
             </div>
@@ -1322,7 +1423,9 @@ export default function InboxPage() {
       <div className="space-y-3">
         <div className="flex items-end justify-between gap-3">
           <h2 className="m-0 text-lg font-semibold tracking-tight">Visible</h2>
-          <div className="text-xs text-zinc-500">Insights are generated from your inputs — no forecasting. Read & clear like notifications.</div>
+          <div className="text-xs text-zinc-500">
+            Snoozed items hide until they’re due. Insights are generated from your inputs — no forecasting.
+          </div>
         </div>
 
         <div className="grid gap-3">
