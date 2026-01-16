@@ -69,6 +69,11 @@ export default function InboxPage() {
   // Live indicator
   const [liveStatus, setLiveStatus] = useState<LiveStatus>("connecting");
 
+  // Collapsible sections (UI only)
+  const [openV2, setOpenV2] = useState(true);
+  const [openV1, setOpenV1] = useState(true);
+  const [openManual, setOpenManual] = useState(true);
+
   const loadRef = useRef<() => void>(() => {});
   const reloadTimerRef = useRef<number | null>(null);
 
@@ -128,13 +133,6 @@ export default function InboxPage() {
     });
   };
 
-  const priorityValue = (sev: number | null) => {
-    if (sev === 1) return 0;
-    if (sev === 2) return 1;
-    if (sev === 3) return 2;
-    return 1;
-  };
-
   const analyzeItem = async (item: InboxItem) => {
     setAiError((prev) => ({ ...prev, [item.id]: "" }));
     setAiLoading((prev) => ({ ...prev, [item.id]: true }));
@@ -166,7 +164,8 @@ export default function InboxPage() {
 
   // Engine v2: digest + (optional) other v2 items (safe heuristic)
   const isInsightsDigest = (it: InboxItem) => isEngineItem(it) && (it.dedupe_key ?? "") === INSIGHTS_DEDUPE_KEY;
-  const isEngineV2Insight = (it: InboxItem) => isInsightsDigest(it) || (isEngineItem(it) && String(it.dedupe_key ?? "").includes("engine_insights_v2"));
+  const isEngineV2Insight = (it: InboxItem) =>
+    isInsightsDigest(it) || (isEngineItem(it) && String(it.dedupe_key ?? "").includes("engine_insights_v2"));
   const isEngineV1Reminder = (it: InboxItem) => isEngineItem(it) && !isEngineV2Insight(it);
 
   function engineCardClasses(base: { border: string; bg: string }, isEngine: boolean) {
@@ -312,6 +311,18 @@ export default function InboxPage() {
     return { v2, v1, manual };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visibleItems]);
+
+  // Auto-collapse Engine v1 when it gets noisy (UI only)
+  const didInitSectionsRef = useRef(false);
+  useEffect(() => {
+    if (didInitSectionsRef.current) return;
+    didInitSectionsRef.current = true;
+
+    setOpenV2(true);
+    setOpenManual(true);
+    setOpenV1(buckets.v1.length <= 3);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [buckets.v1.length]);
 
   // ---------- manual add ----------
   const addManualInboxItem = async () => {
@@ -709,11 +720,15 @@ export default function InboxPage() {
     count,
     description,
     tone = "zinc",
+    open,
+    onToggle,
   }: {
     title: string;
     count: number;
     description?: string;
     tone?: "zinc" | "sky" | "amber";
+    open: boolean;
+    onToggle: () => void;
   }) => {
     const toneClasses =
       tone === "sky"
@@ -725,13 +740,27 @@ export default function InboxPage() {
     return (
       <Card className={toneClasses}>
         <CardContent>
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <h2 className="m-0 text-base font-semibold tracking-tight">{title}</h2>
-              <Badge variant="muted">{count}</Badge>
+          <button
+            type="button"
+            onClick={onToggle}
+            className="w-full text-left"
+            aria-expanded={open}
+            title={open ? "Hide section" : "Show section"}
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <h2 className="m-0 text-base font-semibold tracking-tight">{title}</h2>
+                <Badge variant="muted">{count}</Badge>
+                <span className="text-xs text-zinc-500">{open ? "Hide" : "Show"}</span>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                {description && <div className="text-xs text-zinc-600">{description}</div>}
+              </div>
             </div>
-            {description && <div className="text-xs text-zinc-600">{description}</div>}
-          </div>
+          </button>
+
+          {!open && count > 0 && <div className="mt-2 text-xs text-zinc-500">Hidden — click to show.</div>}
         </CardContent>
       </Card>
     );
@@ -746,6 +775,8 @@ export default function InboxPage() {
     const analysis = aiPreview[it.id];
     const loading = !!aiLoading[it.id];
     const err = aiError[it.id];
+
+    const hasShortcutAction = !!it.action_href;
 
     return (
       <Card key={it.id} className={engineCardClasses(s, engine)}>
@@ -777,7 +808,11 @@ export default function InboxPage() {
               </div>
             </div>
 
-            {engine && <div className="text-xs text-zinc-500">Truth reminder from Engine</div>}
+            {engine && (
+              <div className="text-xs text-zinc-500">
+                Truth reminder from Engine{hasShortcutAction ? " — using the action will auto-resolve this item." : ""}
+              </div>
+            )}
 
             {it.body && <div className="whitespace-pre-wrap text-sm text-zinc-800">{it.body}</div>}
 
@@ -859,7 +894,9 @@ export default function InboxPage() {
                         </div>
                       )}
 
-                      {analysis.reasoning && <div className="whitespace-pre-wrap text-sm leading-relaxed">{analysis.reasoning}</div>}
+                      {analysis.reasoning && (
+                        <div className="whitespace-pre-wrap text-sm leading-relaxed">{analysis.reasoning}</div>
+                      )}
 
                       {Array.isArray(analysis.key_questions) && analysis.key_questions.length > 0 && (
                         <div className="text-sm">
@@ -1032,9 +1069,7 @@ export default function InboxPage() {
       <div className="space-y-3">
         <div className="flex items-end justify-between gap-3">
           <h2 className="m-0 text-lg font-semibold tracking-tight">Visible</h2>
-          <div className="text-xs text-zinc-500">
-            Insights are generated from your inputs — no forecasting. You can snooze or ignore anything.
-          </div>
+          <div className="text-xs text-zinc-500">Insights are generated from your inputs — no forecasting. You can snooze or ignore anything.</div>
         </div>
 
         <div className="grid gap-3">
@@ -1044,8 +1079,21 @@ export default function InboxPage() {
             count={buckets.v2.length}
             description="Higher-signal nudges & patterns — based on current truth, not prediction."
             tone="sky"
+            open={openV2}
+            onToggle={() => setOpenV2((v) => !v)}
           />
-          {buckets.v2.map(renderItemCard)}
+          {openV2 ? (
+            buckets.v2.length ? (
+              buckets.v2.map(renderItemCard)
+            ) : (
+              <Card className="bg-white">
+                <CardContent>
+                  <div className="text-sm text-zinc-700">No insights right now.</div>
+                  <div className="text-xs text-zinc-500">Run Engine if you want a fresh pass.</div>
+                </CardContent>
+              </Card>
+            )
+          ) : null}
 
           {/* Engine v1 */}
           <SectionHeader
@@ -1053,8 +1101,21 @@ export default function InboxPage() {
             count={buckets.v1.length}
             description="Housekeeping prompts — helpful, but not urgent unless marked Top."
             tone="amber"
+            open={openV1}
+            onToggle={() => setOpenV1((v) => !v)}
           />
-          {buckets.v1.map(renderItemCard)}
+          {openV1 ? (
+            buckets.v1.length ? (
+              buckets.v1.map(renderItemCard)
+            ) : (
+              <Card className="bg-white">
+                <CardContent>
+                  <div className="text-sm text-zinc-700">No reminders right now.</div>
+                  <div className="text-xs text-zinc-500">Nice and calm ✅</div>
+                </CardContent>
+              </Card>
+            )
+          ) : null}
 
           {/* Manual */}
           <SectionHeader
@@ -1062,8 +1123,21 @@ export default function InboxPage() {
             count={buckets.manual.length}
             description="What you captured manually. Decide, snooze, or promote to Decisions."
             tone="zinc"
+            open={openManual}
+            onToggle={() => setOpenManual((v) => !v)}
           />
-          {buckets.manual.map(renderItemCard)}
+          {openManual ? (
+            buckets.manual.length ? (
+              buckets.manual.map(renderItemCard)
+            ) : (
+              <Card className="bg-white">
+                <CardContent>
+                  <div className="text-sm text-zinc-700">Nothing here yet.</div>
+                  <div className="text-xs text-zinc-500">Add a thought above to capture it.</div>
+                </CardContent>
+              </Card>
+            )
+          ) : null}
 
           {visibleItems.length === 0 && (
             <Card className="bg-zinc-50">
