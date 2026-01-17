@@ -128,6 +128,39 @@ function bumpIsoByCadence(currentIso: string, cadence: Cadence) {
 
 const LOAD_THROTTLE_MS = 1500;
 
+// -------------------- filter helpers --------------------
+type BillsFilter = "due14" | "due7" | "autopay_risk" | null;
+
+function readBillsFilterFromUrl(): BillsFilter {
+  if (typeof window === "undefined") return null;
+  const url = new URL(window.location.href);
+  const raw = (url.searchParams.get("filter") || "").trim();
+  if (raw === "due14" || raw === "due7" || raw === "autopay_risk") return raw;
+  return null;
+}
+
+function labelForBillsFilter(f: BillsFilter) {
+  if (!f) return null;
+  if (f === "due14") return "Due in 14 days";
+  if (f === "due7") return "Due in 7 days";
+  if (f === "autopay_risk") return "Autopay risk";
+  return null;
+}
+
+function isDueWithinDays(b: RecurringBill, days: number) {
+  const now = Date.now();
+  const until = now + days * 24 * 60 * 60 * 1000;
+  const t = new Date(b.next_due_at).getTime();
+  return Number.isFinite(t) && t >= now && t <= until;
+}
+
+function isAutopayRisk(b: RecurringBill) {
+  // Minimal, calm heuristic: bills that are due soon but NOT autopay.
+  // (No new tables, no extra engine logic.)
+  return b.active && !b.autopay && isDueWithinDays(b, 14);
+}
+// -------------------- end filter helpers --------------------
+
 export default function BillsPage() {
   const toastApi: any = useToast();
   const showToast =
@@ -160,6 +193,9 @@ export default function BillsPage() {
   // receipts (lightweight)
   const [payments, setPayments] = useState<BillPayment[]>([]);
   const [paymentsError, setPaymentsError] = useState<string | null>(null);
+
+  // Landing filter from Engine links
+  const [filter, setFilter] = useState<BillsFilter>(null);
 
   // Silent reload throttle
   const lastLoadAtRef = useRef<number>(0);
@@ -246,12 +282,26 @@ export default function BillsPage() {
         return;
       }
 
+      // read landing filter once on mount
+      setFilter(readBillsFilterFromUrl());
+
       setUserId(data.user.id);
       await Promise.all([loadBills(data.user.id), loadPayments(data.user.id, { silent: true })]);
       setLoading(false);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  function clearFilter() {
+    setFilter(null);
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("filter");
+      window.history.replaceState({}, "", url.toString());
+    } catch {
+      // no-op
+    }
+  }
 
   // Realtime patching (user-scoped)
   useEffect(() => {
@@ -341,6 +391,14 @@ export default function BillsPage() {
     }
     return map;
   }, [payments]);
+
+  const filteredBills = useMemo(() => {
+    if (!filter) return bills;
+    if (filter === "due14") return bills.filter((b) => b.active && isDueWithinDays(b, 14));
+    if (filter === "due7") return bills.filter((b) => b.active && isDueWithinDays(b, 7));
+    if (filter === "autopay_risk") return bills.filter((b) => isAutopayRisk(b));
+    return bills;
+  }, [bills, filter]);
 
   async function addBill() {
     if (!userId) return;
@@ -609,15 +667,27 @@ export default function BillsPage() {
     return map;
   }, [bills]);
 
+  const filterLabel = useMemo(() => labelForBillsFilter(filter), [filter]);
+  const filterChip =
+    filter && filterLabel ? (
+      <div className="flex items-center gap-2">
+        <Chip className="border border-zinc-200 bg-zinc-50 text-zinc-700">{`Filtered: ${filterLabel}`}</Chip>
+        <Button variant="secondary" onClick={clearFilter}>
+          Clear
+        </Button>
+      </div>
+    ) : null;
+
   return (
     <Page title="Bills" subtitle="Recurring bills you’ve told Keystone are true. Used by the Engine later.">
       <div className="grid gap-4">
         <Card>
           <CardContent>
             <div className="flex items-center justify-between gap-3 flex-wrap">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <Badge>Active: {activeBills.length}</Badge>
                 <Badge>Due in 14d: {nextDueSoon.length}</Badge>
+                {filterChip}
               </div>
               <div className="flex items-center gap-2">
                 {liveChip}
@@ -747,10 +817,10 @@ export default function BillsPage() {
             </div>
 
             <div className="grid gap-2">
-              {bills.length === 0 ? (
-                <div className="opacity-70 text-sm">No bills yet.</div>
+              {filteredBills.length === 0 ? (
+                <div className="opacity-70 text-sm">{bills.length === 0 ? "No bills yet." : "No bills match this filter."}</div>
               ) : (
-                bills.map((b) => {
+                filteredBills.map((b) => {
                   const editing = !!drafts[b.id];
                   const d = drafts[b.id];
                   const busyPaid = !!markingPaid[b.id];
@@ -767,6 +837,7 @@ export default function BillsPage() {
                                 {b.active ? <Badge>Active</Badge> : <Badge>Paused</Badge>}
                                 {b.autopay ? <Chip>Autopay</Chip> : null}
                                 <Chip>{b.cadence}</Chip>
+                                {filter === "autopay_risk" && !b.autopay ? <Chip>Risk</Chip> : null}
                               </div>
                               <div className="text-sm opacity-75 mt-1">
                                 {formatMoneyFromCents(b.amount_cents, b.currency)} • Next due {fmtDateTime(b.next_due_at)}
