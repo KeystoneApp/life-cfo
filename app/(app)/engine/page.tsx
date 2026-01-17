@@ -180,6 +180,11 @@ const INSIGHTS_DEDUPE_KEY = "engine_insights_v2_digest";
 // Single source of truth for "due soon" in signal counts
 const REVIEW_DUE_SOON_HOURS = 48;
 
+// Targeted Bills landing (new)
+const BILLS_FILTER_DUE7 = "/bills?filter=due7";
+const BILLS_FILTER_DUE14 = "/bills?filter=due14";
+const BILLS_FILTER_AUTOPAY_RISK = "/bills?filter=autopay_risk";
+
 function buildUpcomingBillsBody(t: ComputedTotals) {
   if (t.bills14.length === 0) {
     return [
@@ -920,7 +925,7 @@ export default function EnginePage() {
         title: "Insight: Safe-to-spend is $0 this week",
         severity: 1,
         action_label: "Review Bills",
-        action_href: "/bills",
+        action_href: BILLS_FILTER_DUE7,
         body: [
           `Balance now: ${formatMoneyFromCents(t.balance)}`,
           `Income due (7d): ${formatMoneyFromCents(t.income7Total)}`,
@@ -937,8 +942,8 @@ export default function EnginePage() {
         key: "engine_v2_safe_to_spend_low",
         title: "Insight: Safe-to-spend is low this week",
         severity: 2,
-        action_label: "Open Bills",
-        action_href: "/bills",
+        action_label: "Review Bills",
+        action_href: BILLS_FILTER_DUE7,
         body: [
           `Safe-to-spend (7d): ${formatMoneyFromCents(t.safeToSpendWeek)}`,
           "",
@@ -953,7 +958,7 @@ export default function EnginePage() {
         title: "Insight: Bills due in 14 days exceed balance",
         severity: 1,
         action_label: "Review Bills",
-        action_href: "/bills",
+        action_href: BILLS_FILTER_DUE14,
         body: [
           `Balance now: ${formatMoneyFromCents(t.balance)}`,
           `Bills due (14d): ${formatMoneyFromCents(t.bills14Total)}`,
@@ -972,7 +977,7 @@ export default function EnginePage() {
         title: "Insight: A bill is due soon and autopay is OFF",
         severity: 2,
         action_label: "Open Bills",
-        action_href: "/bills",
+        action_href: BILLS_FILTER_AUTOPAY_RISK,
         body: [
           `Bill: ${b.name}`,
           `Amount: ${formatMoneyFromCents(b.amount_cents, b.currency)}`,
@@ -1104,8 +1109,8 @@ export default function EnginePage() {
           status: "open",
           snoozed_until: null,
           dedupe_key: "engine_safe_to_spend_week",
-          action_label: "Open Bills",
-          action_href: "/bills",
+          action_label: "Review Bills",
+          action_href: BILLS_FILTER_DUE7,
         },
         {
           user_id: userId,
@@ -1117,8 +1122,8 @@ export default function EnginePage() {
           status: "open",
           snoozed_until: null,
           dedupe_key: "engine_upcoming_bills_14d",
-          action_label: "Open Bills",
-          action_href: "/bills",
+          action_label: "Review Bills",
+          action_href: BILLS_FILTER_DUE14,
         },
         {
           user_id: userId,
@@ -1143,8 +1148,8 @@ export default function EnginePage() {
           status: "open",
           snoozed_until: null,
           dedupe_key: "engine_cashflow_outlook_30d",
-          action_label: "Open Bills",
-          action_href: "/bills",
+          action_label: "Review Bills",
+          action_href: BILLS_FILTER_DUE14,
         },
         {
           user_id: userId,
@@ -1156,8 +1161,8 @@ export default function EnginePage() {
           status: "open",
           snoozed_until: null,
           dedupe_key: "engine_largest_bill_14d",
-          action_label: "Open Bills",
-          action_href: "/bills",
+          action_label: "Review Bills",
+          action_href: BILLS_FILTER_DUE14,
         },
         {
           user_id: userId,
@@ -1170,7 +1175,7 @@ export default function EnginePage() {
           snoozed_until: null,
           dedupe_key: "engine_autopay_risk_7d",
           action_label: "Review Bills",
-          action_href: "/bills",
+          action_href: BILLS_FILTER_AUTOPAY_RISK,
         },
       ];
 
