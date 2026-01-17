@@ -761,7 +761,9 @@ export default function EnginePage() {
   async function markBillPaid(b: RecurringBill) {
     if (!userId) return;
 
-    // guard double clicks
+    // ✅ guard double clicks / rapid re-entry
+    if (markingPaid[b.id]) return;
+
     setMarkingPaid((prev) => ({ ...prev, [b.id]: true }));
 
     const nextDue = bumpIsoByCadence(b.next_due_at, b.cadence);
