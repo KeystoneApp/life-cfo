@@ -1720,7 +1720,7 @@ export default function InboxPage() {
           <SectionHeader
             title="Recommended"
             count={buckets.recommended.length}
-            description="Smart nudges from the Engine — designed to help you choose the next best move."
+            description="These are the most useful things to look at right now."
             tone="sky"
             open={openRecommended}
             onToggle={() => setOpenRecommended((v) => !v)}
