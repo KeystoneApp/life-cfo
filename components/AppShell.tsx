@@ -16,13 +16,14 @@ export function AppShell({ children }: AppShellProps) {
   const router = useRouter();
 
   const nav = [
-    { href: "/inbox", label: "Inbox" },
+    // UI label is Home, but route stays /inbox for now
+    { href: "/inbox", label: "Home" },
     { href: "/capture", label: "Capture" },
     { href: "/decisions", label: "Decisions" },
     { href: "/accounts", label: "Accounts" },
     { href: "/bills", label: "Bills" },
     { href: "/income", label: "Income" },
-    { href: "/engine", label: "Engine" },
+    // Engine intentionally removed from nav (UI-only)
   ];
 
   const signOut = async () => {
