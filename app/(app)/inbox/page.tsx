@@ -1503,10 +1503,6 @@ export default function InboxPage() {
                   </Button>
                 </div>
 
-                {(isV2 || isV1) && hasShortcutAction ? (
-                  <div className="text-xs text-zinc-500">Using the action clears this item.</div>
-                ) : null}
-
                 {renderBodySmart(it)}
 
                 {insightsDigest && (
@@ -1838,7 +1834,7 @@ export default function InboxPage() {
                   </Button>
                 </div>
 
-                <div className="text-xs text-zinc-700">Your next 5 active bills.</div>
+                <div className="text-xs text-zinc-700">Your next bills.</div>
               </div>
 
               <div className="flex flex-wrap items-center justify-end gap-2">
@@ -1888,7 +1884,7 @@ export default function InboxPage() {
       <div className="space-y-3">
         <div className="flex items-end justify-between gap-3">
           <h2 className="m-0 text-lg font-semibold tracking-tight text-zinc-900">What to do next</h2>
-          <div className="text-xs text-zinc-500">Snoozed items hide until they’re due.</div>
+          <div className="text-xs text-zinc-500">Snoozed items come back automatically.</div>
         </div>
 
         <div className="grid gap-3">
