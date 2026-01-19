@@ -633,7 +633,9 @@ export default function InboxPage() {
       return;
     }
 
-    setItems((prev) => prev.map((it) => (it.status === "snoozed" ? { ...it, status: "open", snoozed_until: null } : it)));
+    setItems((prev) =>
+      prev.map((it) => (it.status === "snoozed" ? { ...it, status: "open", snoozed_until: null } : it))
+    );
     setLastLoadedAt(new Date());
     setStatusLine("All snoozed items are now open.");
   };
@@ -1058,10 +1060,11 @@ export default function InboxPage() {
 
   const minutesAgo = lastLoadedAt ? Math.floor((clock - lastLoadedAt.getTime()) / 60000) : null;
 
-  const liveBadge = () => {
-    if (liveStatus === "live") return { text: "Live", variant: "success" as const };
-    if (liveStatus === "connecting") return { text: "Connecting…", variant: "warning" as const };
-    return { text: "Offline", variant: "danger" as const };
+  // ✅ FIXED + strongly typed (prevents the TS errors you saw)
+  const liveBadge = (): { text: string; variant: "success" | "warning" | "danger" } => {
+    if (liveStatus === "live") return { text: "Live", variant: "success" };
+    if (liveStatus === "connecting") return { text: "Connecting…", variant: "warning" };
+    return { text: "Offline", variant: "danger" };
   };
 
   const badge = liveBadge();
@@ -1142,7 +1145,7 @@ export default function InboxPage() {
         : isV2
         ? "Recommended based on your current inputs."
         : isV1
-        ? "Maintenance item to keep things accurate."
+        ? "A quick check to keep things accurate."
         : "Note you captured.";
 
     return (
@@ -1164,9 +1167,9 @@ export default function InboxPage() {
                   <Badge variant={b.variant}>{b.label}</Badge>
 
                   {isV2 && <Chip>Recommended</Chip>}
-                  {isV1 && <Chip>Maintenance</Chip>}
-                  {!isV2 && !isV1 && isEng && <Chip>Engine</Chip>}
-                  {!isEng && <Chip>My note</Chip>}
+{isV1 && <Chip>Maintenance</Chip>}
+{!isV2 && !isV1 && isEng && <Chip>Engine</Chip>}
+{!isEng && <Chip>My note</Chip>}
 
                   {activelySnoozed && <Chip>Snoozed</Chip>}
 
@@ -1177,7 +1180,7 @@ export default function InboxPage() {
                         e.stopPropagation?.();
                         router.push("/engine");
                       }}
-                      title="Open Engine"
+                      title="Open suggestions"
                     >
                       Digest
                     </Chip>
@@ -1198,7 +1201,7 @@ export default function InboxPage() {
                       await autoResolveWithUndo(it, "Shortcut used.");
                       router.push(it.action_href!);
                     }}
-                    title="Use this and jump to the right place"
+                    title="Open the right place (this will clear the item)"
                   >
                     {it.action_label ?? "Open"}
                   </Button>
@@ -1234,14 +1237,12 @@ export default function InboxPage() {
                 {/* context / why */}
                 {isV2 && (
                   <div className="text-xs text-zinc-500">
-                    Why this is here: based on your current inputs (no forecasting).{" "}
-                    {hasShortcutAction ? "Using the action will clear this item." : ""}
+                    Why this is here: based on your current inputs. {hasShortcutAction ? "Using the action will clear this item." : ""}
                   </div>
                 )}
                 {isV1 && (
                   <div className="text-xs text-zinc-500">
-                    Why this is here: keeping your system accurate and up to date.{" "}
-                    {hasShortcutAction ? "Using the action will clear this item." : ""}
+                    Why this is here: keeping your system accurate and up to date. {hasShortcutAction ? "Using the action will clear this item." : ""}
                   </div>
                 )}
                 {!isV2 && !isV1 && isEng && <div className="text-xs text-zinc-500">Engine note.</div>}
@@ -1274,7 +1275,7 @@ export default function InboxPage() {
                               router.push("/engine");
                             }}
                           >
-                            Open Engine
+                            Open suggestions
                           </Button>
 
                           <Button variant="secondary" onClick={() => snooze24h(it.id)}>
@@ -1297,11 +1298,7 @@ export default function InboxPage() {
                           Decide now
                         </Button>
 
-                        <Button
-                          variant="secondary"
-                          onClick={() => snooze24h(it.id)}
-                          title="Hide this until tomorrow"
-                        >
+                        <Button variant="secondary" onClick={() => snooze24h(it.id)} title="Hide this until tomorrow">
                           Snooze 24h
                         </Button>
 
@@ -1325,7 +1322,7 @@ export default function InboxPage() {
                       </div>
 
                       <div className="text-xs text-zinc-500">
-                        Tip: If you’re not ready to decide, snooze it. If it’s fully handled, mark it done.
+                        Tip: If you’re not ready to decide, snooze it. If it’s handled, mark it done.
                       </div>
                     </div>
                   </CardContent>
@@ -1466,7 +1463,6 @@ export default function InboxPage() {
                     </CardContent>
                   </Card>
                 ) : (
-                  // If advanced is hidden, still keep inputs lightly accessible (not mandatory)
                   <div className="space-y-2">
                     <div className="text-xs text-zinc-500">Optional: add a reason before deciding</div>
                     <textarea
@@ -1485,15 +1481,12 @@ export default function InboxPage() {
     );
   };
 
-  const minutesAgoText =
-    !lastLoadedAt ? "" : minutesAgo !== null && minutesAgo < 1 ? "just now" : `${minutesAgo ?? 0}m ago`;
+ const minutesAgo2 = lastLoadedAt ? Math.floor((clock - lastLoadedAt.getTime()) / 60000) : null;
+const minutesAgoText =
+  !lastLoadedAt ? "" : minutesAgo2 !== null && minutesAgo2 < 1 ? "just now" : `${minutesAgo2 ?? 0}m ago`;
 
-  const badgeVariant = badge.variant;
-
-  // ---------- top bar actions ----------
   const updateNow = () => loadRef.current({ silent: false });
 
-  // ---------- UI ----------
   return (
     <Page
       title="Inbox"
@@ -1506,7 +1499,7 @@ export default function InboxPage() {
       }
       right={
         <div className="flex items-center gap-2">
-          <Badge variant={badgeVariant}>● {badge.text}</Badge>
+          <Badge variant={badge.variant}>● {badge.text}</Badge>
 
           <Button onClick={updateNow}>Update now</Button>
 
@@ -1514,8 +1507,12 @@ export default function InboxPage() {
             Review decisions
           </Button>
 
-          <Button variant="secondary" onClick={() => router.push("/engine")}>
-            Run Engine
+          <Button
+            variant="secondary"
+            onClick={() => router.push("/engine")}
+            title="Refresh your suggestions"
+          >
+            Update suggestions
           </Button>
 
           {process.env.NODE_ENV === "development" && (
@@ -1571,7 +1568,7 @@ export default function InboxPage() {
         <div className="flex items-end justify-between gap-3">
           <h2 className="m-0 text-lg font-semibold tracking-tight">What to do next</h2>
           <div className="text-xs text-zinc-500">
-            Snoozed items hide until they’re due. Recommended items are based on your current inputs — no forecasting.
+            Snoozed items hide until they’re due. Recommended items are based on your current inputs.
           </div>
         </div>
 
@@ -1585,8 +1582,12 @@ export default function InboxPage() {
             onToggle={() => setOpenRecommended((v) => !v)}
             actions={
               <>
-                <Button variant="secondary" onClick={() => router.push("/engine")} title="Open Engine and run a fresh pass">
-                  Run Engine
+                <Button
+                  variant="secondary"
+                  onClick={() => router.push("/engine")}
+                  title="Refresh your suggestions"
+                >
+                  Update suggestions
                 </Button>
 
                 <Button
@@ -1608,7 +1609,7 @@ export default function InboxPage() {
               <Card className="bg-white">
                 <CardContent>
                   <div className="text-sm text-zinc-700">No recommendations right now.</div>
-                  <div className="text-xs text-zinc-500">You can run Engine if you want a fresh pass.</div>
+                  <div className="text-xs text-zinc-500">You can update suggestions if you want a fresh pass.</div>
                 </CardContent>
               </Card>
             )
