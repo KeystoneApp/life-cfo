@@ -93,12 +93,12 @@ export default function InboxPage() {
   // Live indicator
   const [liveStatus, setLiveStatus] = useState<LiveStatus>("connecting");
 
-  // ✅ New UX: section-level collapse (calm defaults)
+  // ✅ section-level collapse (calm defaults)
   const [openRecommended, setOpenRecommended] = useState(true);
   const [openMaintenance, setOpenMaintenance] = useState(false);
   const [openNotes, setOpenNotes] = useState(true);
 
-  // ✅ New UX: item-level collapse (collapsed by default)
+  // ✅ item-level collapse (collapsed by default)
   const [openItem, setOpenItem] = useState<Record<string, boolean>>({});
 
   // ✅ Action hierarchy: keep advanced controls tucked away
@@ -297,7 +297,6 @@ export default function InboxPage() {
 
   function engineCardClasses(base: { border: string; bg: string }, kind: "v2" | "v1" | null) {
     if (!kind) return `${base.border} ${base.bg}`;
-
     const left = kind === "v2" ? "border-l-4 border-l-sky-400 bg-zinc-50" : "border-l-4 border-l-amber-400 bg-zinc-50";
     return `${base.border} ${left}`;
   }
@@ -327,7 +326,8 @@ export default function InboxPage() {
     return t.slice(0, max - 1) + "…";
   };
 
-   const isAutopayAllClear = (it: InboxItem) => {
+  // “All clear” helper for autopay checks (keeps it visible but de-emphasised)
+  const isAutopayAllClear = (it: InboxItem) => {
     if (!isEngineV1Reminder(it)) return false;
 
     const title = (it.title ?? "").toLowerCase();
@@ -343,7 +343,6 @@ export default function InboxPage() {
 
     if (!looksLikeAutopay) return false;
 
-    // Phrases that mean “no action needed right now”
     const allClearSignals = [
       "no near-term",
       "no near term",
@@ -375,6 +374,16 @@ export default function InboxPage() {
 
   const setAdvancedOpen = (id: string, open: boolean) => {
     setShowAdvanced((prev) => ({ ...prev, [id]: open }));
+  };
+
+  const normalizeActionLabel = (it: InboxItem) => {
+    const raw = (it.action_label ?? "Open").trim();
+    if (!raw) return "Open";
+    if (/review bills/i.test(raw)) return "Review bills";
+    if (it.action_href && it.action_href.includes("/decisions")) return "Review decisions";
+    if (it.action_href && it.action_href.includes("/income")) return "Open income";
+    if (it.action_href && it.action_href.includes("/bills")) return "Review bills";
+    return raw;
   };
 
   // ---------- auth + load ----------
@@ -624,7 +633,6 @@ export default function InboxPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [buckets.maintenance.length]);
 
-
   // ---------- manual add ----------
   const addManualInboxItem = async () => {
     if (!userId) {
@@ -640,7 +648,7 @@ export default function InboxPage() {
 
     setAffirmation(null);
     setAdding(true);
-    setStatusLine("Adding to inbox...");
+    setStatusLine("Adding to My notes...");
 
     try {
       const dedupe_key = `manual_${Date.now()}`;
@@ -694,9 +702,7 @@ export default function InboxPage() {
       return;
     }
 
-    setItems((prev) =>
-      prev.map((it) => (it.status === "snoozed" ? { ...it, status: "open", snoozed_until: null } : it))
-    );
+    setItems((prev) => prev.map((it) => (it.status === "snoozed" ? { ...it, status: "open", snoozed_until: null } : it)));
     setLastLoadedAt(new Date());
     setStatusLine("All snoozed items are now open.");
   };
@@ -1121,7 +1127,7 @@ export default function InboxPage() {
 
   const minutesAgo = lastLoadedAt ? Math.floor((clock - lastLoadedAt.getTime()) / 60000) : null;
 
-  // ✅ FIXED + strongly typed (prevents the TS errors you saw)
+  // ✅ strongly typed
   const liveBadge = (): { text: string; variant: "success" | "warning" | "danger" } => {
     if (liveStatus === "live") return { text: "Live", variant: "success" };
     if (liveStatus === "connecting") return { text: "Connecting…", variant: "warning" };
@@ -1155,33 +1161,43 @@ export default function InboxPage() {
         ? "border-amber-200 bg-amber-50"
         : "border-zinc-200 bg-zinc-50";
 
-    return (
-      <Card className={toneClasses}>
-        <CardContent>
-          <div className="flex flex-wrap items-start justify-between gap-2">
-            <div className="flex flex-wrap items-center gap-2">
-              <h2 className="m-0 text-base font-semibold tracking-tight">{title}</h2>
-              <Badge variant="muted">{count}</Badge>
+    const leftBar =
+      tone === "sky"
+        ? "border-l-4 border-l-sky-400"
+        : tone === "amber"
+        ? "border-l-4 border-l-amber-400"
+        : "border-l-4 border-l-zinc-300";
 
-              <Button variant="secondary" onClick={onToggle} title={open ? "Hide section" : "Show section"}>
-                {open ? "Hide" : "Show"}
-              </Button>
+    return (
+      <Card className={`${toneClasses} ${leftBar}`}>
+        <CardContent>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="flex min-w-[260px] flex-1 flex-col gap-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="m-0 text-lg font-semibold tracking-tight">{title}</h2>
+                <Badge variant="muted">{count}</Badge>
+
+                <Button variant="secondary" onClick={onToggle} title={open ? "Hide this section" : "Show this section"}>
+                  {open ? "Hide" : "Show"}
+                </Button>
+              </div>
+
+              {description && <div className="text-xs text-zinc-600">{description}</div>}
             </div>
 
             <div className="flex flex-wrap items-center justify-end gap-2">{actions}</div>
           </div>
-
-          {description && <div className="mt-2 text-xs text-zinc-600">{description}</div>}
         </CardContent>
       </Card>
     );
   };
 
-    const renderItemCard = (it: InboxItem) => {
+  const renderItemCard = (it: InboxItem) => {
     const autopayAllClear = isAutopayAllClear(it);
 
-    const b = autopayAllClear ? { label: "OK", variant: "success" as const } : severityBadge(it.severity);
-    const s = severityStyle(it.severity);
+    // De-emphasise “all clear” items so they never feel like “Top priority”
+    const b = autopayAllClear ? { label: "All clear", variant: "success" as const } : severityBadge(it.severity);
+    const s = autopayAllClear ? { border: "border-emerald-200", bg: "bg-emerald-50" } : severityStyle(it.severity);
 
     const isV2 = isEngineV2Insight(it);
     const isV1 = isEngineV1Reminder(it);
@@ -1202,7 +1218,7 @@ export default function InboxPage() {
 
     const subtitle =
       autopayAllClear
-        ? "All clear — no payments due soon."
+        ? "All clear — nothing due soon."
         : activelySnoozed && it.snoozed_until
         ? `Snoozed until ${formatWhen(it.snoozed_until)}`
         : it.body
@@ -1212,6 +1228,8 @@ export default function InboxPage() {
         : isV1
         ? "A quick check to keep things accurate."
         : "Note you captured.";
+
+    const shortcutLabel = it.action_href ? normalizeActionLabel(it) : null;
 
     return (
       <Card key={it.id} className={engineCardClasses(s, kind)}>
@@ -1224,17 +1242,17 @@ export default function InboxPage() {
                 onClick={() => toggleItem(it.id)}
                 className="flex min-w-[280px] flex-1 flex-col gap-1 text-left"
                 aria-expanded={expanded}
-                title={expanded ? "Collapse" : "Expand"}
+                title={expanded ? "Collapse details" : "Expand details"}
               >
                 <div className="flex flex-wrap items-center gap-2">
-                  <strong className="text-base">{it.title}</strong>
+                  <span className="text-base font-medium text-zinc-900">{it.title}</span>
 
                   <Badge variant={b.variant}>{b.label}</Badge>
 
                   {isV2 && <Chip>Recommended</Chip>}
-{isV1 && <Chip>Maintenance</Chip>}
-{!isV2 && !isV1 && isEng && <Chip>Engine</Chip>}
-{!isEng && <Chip>My note</Chip>}
+                  {isV1 && <Chip>Maintenance</Chip>}
+                  {!isV2 && !isV1 && isEng && <Chip>Engine</Chip>}
+                  {!isEng && <Chip>My note</Chip>}
 
                   {activelySnoozed && <Chip>Snoozed</Chip>}
 
@@ -1254,7 +1272,6 @@ export default function InboxPage() {
 
                 <div className="text-xs text-zinc-600">{subtitle}</div>
 
-                <div className="mt-1 text-xs text-zinc-500">{expanded ? "Collapse" : "Expand"}</div>
               </button>
 
               <div className="flex flex-wrap items-center justify-end gap-2">
@@ -1263,25 +1280,25 @@ export default function InboxPage() {
                     variant="secondary"
                     onClick={async (e) => {
                       e.stopPropagation?.();
-                      await autoResolveWithUndo(it, "Shortcut used.");
+                      await autoResolveWithUndo(it, "Opened.");
                       router.push(it.action_href!);
                     }}
                     title="Open the right place (this will clear the item)"
                   >
-                    {it.action_label ?? "Open"}
+                    {shortcutLabel}
                   </Button>
                 )}
 
                 <Button
-  variant="secondary"
-  onClick={(e) => {
-    e.stopPropagation?.();
-    toggleItem(it.id);
-  }}
-  title={expanded ? "Collapse details" : "Expand details"}
->
-  {expanded ? "Collapse" : "Expand"}
-</Button>
+                  variant="secondary"
+                  onClick={(e) => {
+                    e.stopPropagation?.();
+                    toggleItem(it.id);
+                  }}
+                  title={expanded ? "Collapse details" : "Expand details"}
+                >
+                  {expanded ? "Collapse" : "Expand"}
+                </Button>
 
                 <Button
                   variant="secondary"
@@ -1299,6 +1316,13 @@ export default function InboxPage() {
             {/* ---- expanded details ---- */}
             {expanded ? (
               <div className="space-y-3">
+                {/* Top-right collapse inside expanded content (so it never feels “stuck open”) */}
+                <div className="flex items-center justify-end">
+                  <Button variant="secondary" onClick={() => setItemOpen(it.id, false)} title="Collapse details">
+                    Hide details
+                  </Button>
+                </div>
+
                 {/* context / why */}
                 {isV2 && (
                   <div className="text-xs text-zinc-500">
@@ -1307,7 +1331,8 @@ export default function InboxPage() {
                 )}
                 {isV1 && (
                   <div className="text-xs text-zinc-500">
-                    Why this is here: keeping your system accurate and up to date. {hasShortcutAction ? "Using the action will clear this item." : ""}
+                    Why this is here: a quick check that keeps your numbers and reminders trustworthy.{" "}
+                    {hasShortcutAction ? "Using the action will clear this item." : ""}
                   </div>
                 )}
                 {!isV2 && !isV1 && isEng && <div className="text-xs text-zinc-500">Engine note.</div>}
@@ -1320,7 +1345,7 @@ export default function InboxPage() {
                     <CardContent>
                       <div className="flex flex-wrap items-center justify-between gap-3">
                         <div className="text-sm text-zinc-600">
-                          Shortcut actions — use the insight, then come back. (This digest will clear itself.)
+                          Shortcut actions — do the review, then come back. (This digest will clear itself.)
                         </div>
 
                         <div className="flex flex-wrap gap-2">
@@ -1352,31 +1377,43 @@ export default function InboxPage() {
                   </Card>
                 )}
 
-                {/* Primary vs secondary actions */}
+                               {/* Primary action hierarchy */}
                 <Card className="bg-white">
                   <CardContent>
                     <div className="space-y-3">
                       <div className="text-sm font-semibold text-zinc-900">Next step</div>
 
-                      <div className="flex flex-wrap gap-2">
-                        <Button onClick={() => decideNowAndCloseInboxItem(it)} title="Save a decision and clear this item">
-                          Decide now
-                        </Button>
-
-                        <Button variant="secondary" onClick={() => snooze24h(it.id)} title="Hide this until tomorrow">
-                          Snooze 24h
-                        </Button>
-
-                        <Button variant="secondary" onClick={() => snooze7d(it.id)} title="Hide this for a week">
-                          Snooze 7d
-                        </Button>
-
-                        {activelySnoozed && (
-                          <Button variant="secondary" onClick={() => unsnoozeToOpen(it.id)}>
-                            Unsnooze
+                      <div className="flex flex-wrap items-center gap-2">
+                        {/* Primary */}
+                        {it.action_href ? (
+                          <Button
+                            onClick={async () => {
+                              await autoResolveWithUndo(it, "Opened.");
+                              router.push(it.action_href!);
+                            }}
+                            title="Open the right place (this will clear the item)"
+                          >
+                            {shortcutLabel ?? "Open"}
+                          </Button>
+                        ) : !isEng ? (
+                          <Button
+                            onClick={() => decideNowAndCloseInboxItem(it)}
+                            title="Save a decision and clear this item"
+                          >
+                            Decide
+                          </Button>
+                        ) : (
+                          <Button onClick={() => doneItem(it.id)} title="Mark this as handled">
+                            Mark done
                           </Button>
                         )}
 
+                        {/* Secondary */}
+                        <Button variant="secondary" onClick={() => snooze24h(it.id)} title="Hide this until tomorrow">
+                          Snooze
+                        </Button>
+
+                        {/* Tertiary */}
                         <Button
                           variant="secondary"
                           onClick={() => toggleAdvanced(it.id)}
@@ -1384,10 +1421,16 @@ export default function InboxPage() {
                         >
                           {advOpen ? "Hide advanced" : "Advanced"}
                         </Button>
+
+                        {activelySnoozed && (
+                          <Button variant="secondary" onClick={() => unsnoozeToOpen(it.id)} title="Bring back now">
+                            Unsnooze
+                          </Button>
+                        )}
                       </div>
 
                       <div className="text-xs text-zinc-500">
-                        Tip: If you’re not ready to decide, snooze it. If it’s handled, mark it done.
+                        Tip: If you’re not ready, snooze it. If it’s handled, mark it done.
                       </div>
                     </div>
                   </CardContent>
@@ -1414,7 +1457,19 @@ export default function InboxPage() {
                             Mark done
                           </Button>
 
-                          <Button variant="secondary" onClick={() => snoozeItemMinutes(it.id, 10)} title="Short snooze">
+                          <Button
+                            variant="secondary"
+                            onClick={() => snooze7d(it.id)}
+                            title="Hide this for a week"
+                          >
+                            Snooze 7d
+                          </Button>
+
+                          <Button
+                            variant="secondary"
+                            onClick={() => snoozeItemMinutes(it.id, 10)}
+                            title="Short snooze"
+                          >
                             Snooze 10m
                           </Button>
 
@@ -1432,10 +1487,6 @@ export default function InboxPage() {
                             title="Lower priority (towards Low)"
                           >
                             Lower priority
-                          </Button>
-
-                          <Button variant="secondary" onClick={() => setItemOpen(it.id, false)} title="Collapse details">
-                            Collapse
                           </Button>
                         </div>
 
@@ -1546,7 +1597,7 @@ export default function InboxPage() {
     );
   };
 
-   const minutesAgoText =
+  const minutesAgoText =
     !lastLoadedAt ? "" : minutesAgo !== null && minutesAgo < 1 ? "just now" : `${minutesAgo ?? 0}m ago`;
 
   const updateNow = () => loadRef.current({ silent: false });
@@ -1571,11 +1622,7 @@ export default function InboxPage() {
             Review decisions
           </Button>
 
-          <Button
-            variant="secondary"
-            onClick={() => router.push("/engine")}
-            title="Refresh your suggestions"
-          >
+          <Button variant="secondary" onClick={() => router.push("/engine")} title="Refresh your suggestions">
             Update suggestions
           </Button>
 
@@ -1597,16 +1644,22 @@ export default function InboxPage() {
       <Card className="bg-zinc-50">
         <CardContent>
           <div className="text-sm text-zinc-700">
-            Start with <strong>Recommended</strong>. If you’re not ready to decide, <strong>Snooze</strong>. If it’s handled, mark it done.
+            Start with <strong>Recommended</strong>. If you’re not ready, <strong>Snooze</strong>. If it’s handled,
+            <strong> mark done</strong>.
           </div>
         </CardContent>
       </Card>
 
-      {/* ---- quick capture ---- */}
-      <Card>
+      {/* Capture */}
+      <Card className="border-zinc-200 bg-white">
         <CardContent>
           <div className="space-y-3">
-            <div className="text-sm text-zinc-600">Add a quick note</div>
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <div className="text-sm font-semibold text-zinc-900">Capture</div>
+                <div className="text-xs text-zinc-600">Add something you don’t want to forget.</div>
+              </div>
+            </div>
 
             <div className="flex flex-wrap gap-2">
               <input
@@ -1620,20 +1673,18 @@ export default function InboxPage() {
               />
 
               <Button onClick={addManualInboxItem} disabled={adding}>
-                {adding ? "Adding…" : "Add"}
+                {adding ? "Adding…" : "Add to My notes"}
               </Button>
             </div>
           </div>
         </CardContent>
       </Card>
 
-      {/* ---- sections ---- */}
+      {/* Sections */}
       <div className="space-y-3">
         <div className="flex items-end justify-between gap-3">
           <h2 className="m-0 text-lg font-semibold tracking-tight">What to do next</h2>
-          <div className="text-xs text-zinc-500">
-            Snoozed items hide until they’re due. Recommended items are based on your current inputs.
-          </div>
+          <div className="text-xs text-zinc-500">Snoozed items hide until they’re due.</div>
         </div>
 
         <div className="grid gap-3">
@@ -1646,11 +1697,7 @@ export default function InboxPage() {
             onToggle={() => setOpenRecommended((v) => !v)}
             actions={
               <>
-                <Button
-                  variant="secondary"
-                  onClick={() => router.push("/engine")}
-                  title="Refresh your suggestions"
-                >
+                <Button variant="secondary" onClick={() => router.push("/engine")} title="Refresh your suggestions">
                   Update suggestions
                 </Button>
 
@@ -1667,16 +1714,18 @@ export default function InboxPage() {
           />
 
           {openRecommended ? (
-            buckets.recommended.length ? (
-              buckets.recommended.map(renderItemCard)
-            ) : (
-              <Card className="bg-white">
-                <CardContent>
-                  <div className="text-sm text-zinc-700">No recommendations right now.</div>
-                  <div className="text-xs text-zinc-500">You can update suggestions if you want a fresh pass.</div>
-                </CardContent>
-              </Card>
-            )
+            <div className="pl-2 space-y-3">
+              {buckets.recommended.length ? (
+                buckets.recommended.map(renderItemCard)
+              ) : (
+                <Card className="bg-white">
+                  <CardContent>
+                    <div className="text-sm text-zinc-700">No recommendations right now.</div>
+                    <div className="text-xs text-zinc-500">You can update suggestions if you want a fresh pass.</div>
+                  </CardContent>
+                </Card>
+              )}
+            </div>
           ) : null}
 
           <SectionHeader
@@ -1689,16 +1738,18 @@ export default function InboxPage() {
           />
 
           {openMaintenance ? (
-            buckets.maintenance.length ? (
-              buckets.maintenance.map(renderItemCard)
-            ) : (
-              <Card className="bg-white">
-                <CardContent>
-                  <div className="text-sm text-zinc-700">Nothing to maintain right now.</div>
-                  <div className="text-xs text-zinc-500">All up to date.</div>
-                </CardContent>
-              </Card>
-            )
+            <div className="pl-2 space-y-3">
+              {buckets.maintenance.length ? (
+                buckets.maintenance.map(renderItemCard)
+              ) : (
+                <Card className="bg-white">
+                  <CardContent>
+                    <div className="text-sm text-zinc-700">Nothing to maintain right now.</div>
+                    <div className="text-xs text-zinc-500">All up to date.</div>
+                  </CardContent>
+                </Card>
+              )}
+            </div>
           ) : null}
 
           <SectionHeader
@@ -1711,16 +1762,18 @@ export default function InboxPage() {
           />
 
           {openNotes ? (
-            buckets.notes.length ? (
-              buckets.notes.map(renderItemCard)
-            ) : (
-              <Card className="bg-white">
-                <CardContent>
-                  <div className="text-sm text-zinc-700">No notes yet.</div>
-                  <div className="text-xs text-zinc-500">Add something above to capture it.</div>
-                </CardContent>
-              </Card>
-            )
+            <div className="pl-2 space-y-3">
+              {buckets.notes.length ? (
+                buckets.notes.map(renderItemCard)
+              ) : (
+                <Card className="bg-white">
+                  <CardContent>
+                    <div className="text-sm text-zinc-700">No notes yet.</div>
+                    <div className="text-xs text-zinc-500">Use Capture above to add one.</div>
+                  </CardContent>
+                </Card>
+              )}
+            </div>
           ) : null}
 
           {visibleItems.length === 0 && (
