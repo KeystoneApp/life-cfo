@@ -94,9 +94,9 @@ export default function InboxPage() {
   const [liveStatus, setLiveStatus] = useState<LiveStatus>("connecting");
 
   // ✅ section-level collapse (calm defaults)
-  const [openRecommended, setOpenRecommended] = useState(true);
+  const [openRecommended, setOpenRecommended] = useState(false);
   const [openMaintenance, setOpenMaintenance] = useState(false);
-  const [openNotes, setOpenNotes] = useState(true);
+  const [openNotes, setOpenNotes] = useState(false);
 
   // ✅ item-level collapse (collapsed by default)
   const [openItem, setOpenItem] = useState<Record<string, boolean>>({});
@@ -304,11 +304,21 @@ export default function InboxPage() {
     isInsightsDigest(it) || (isEngineItem(it) && String(it.dedupe_key ?? "").includes("engine_insights_v2"));
   const isEngineV1Reminder = (it: InboxItem) => isEngineItem(it) && !isEngineV2Insight(it);
 
-  function engineCardClasses(base: { border: string; bg: string }, kind: "v2" | "v1" | null) {
-    if (!kind) return `${base.border} ${base.bg}`;
-    const left = kind === "v2" ? "border-l-4 border-l-sky-300 bg-zinc-50" : "border-l-4 border-l-amber-400 bg-zinc-50";
-    return `${base.border} ${left}`;
-  }
+  function engineCardClasses(
+  base: { border: string; bg: string },
+  kind: "v2" | "v1" | null
+) {
+  if (!kind) return `${base.border} ${base.bg}`;
+
+  // Category-only bars (brand-ready, neutral)
+  const left =
+    kind === "v2"
+      ? "border-l-4 border-l-zinc-300"
+      : "border-l-4 border-l-zinc-300";
+
+  return `${base.border} ${left} bg-white`;
+}
+
 
   const prettySupabaseError = (e: any) => {
     const msg = typeof e?.message === "string" ? e.message : "";
@@ -636,15 +646,6 @@ export default function InboxPage() {
     return { recommended, maintenance, notes };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visibleItems]);
-
-  // optional: open Maintenance automatically if it's small (so it doesn't feel "lost")
-  useEffect(() => {
-    // keep the default "calm": closed when noisy
-    if (buckets.maintenance.length > 0 && buckets.maintenance.length <= 2) {
-      setOpenMaintenance(true);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [buckets.maintenance.length]);
 
   // ---------- manual add ----------
   const addManualInboxItem = async () => {
@@ -1161,24 +1162,14 @@ export default function InboxPage() {
     title: string;
     count: number;
     description?: string;
-    tone?: "zinc" | "sky" | "amber";
+    tone?: "zinc" | "brand";
     open: boolean;
     onToggle: () => void;
     actions?: ReactNode;
   }) => {
-    const toneClasses =
-      tone === "sky"
-        ? "border-sky-200 bg-sky-50"
-        : tone === "amber"
-        ? "border-amber-200 bg-amber-50"
-        : "border-zinc-200 bg-zinc-50";
 
-    const leftBar =
-      tone === "sky"
-        ? "border-l-4 border-l-sky-300"
-        : tone === "amber"
-        ? "border-l-4 border-l-amber-400"
-        : "border-l-4 border-l-zinc-300";
+const toneClasses = "border-zinc-200 bg-white";
+const leftBar = "border-l-4 border-l-zinc-300";
 
     return (
       <Card className={`${toneClasses} ${leftBar}`}>
@@ -1393,12 +1384,10 @@ export default function InboxPage() {
                 </div>
 
                 {/* Context / why (kept, but subtle + short) */}
-                {(isV2 || isV1) && (
-                  <div className="text-xs text-zinc-500">
-                    {isV2 ? "Suggested by the Engine." : "Maintenance reminder."}{" "}
-                    {hasShortcutAction ? "Using the action clears this item." : ""}
-                  </div>
-                )}
+                {(isV2 || isV1) && hasShortcutAction ? (
+                <div className="text-xs text-zinc-500">Using the action clears this item.</div>
+                ) : null}
+
 
                 {/* Body (with labels bold + formula hidden behind toggle) */}
                 {renderBodySmart(it)}
@@ -1652,10 +1641,6 @@ export default function InboxPage() {
             Review decisions
           </Button>
 
-          <Button variant="secondary" onClick={() => router.push("/engine")} title="Refresh your suggestions">
-            Update suggestions
-          </Button>
-
           {process.env.NODE_ENV === "development" && (
             <Button variant="secondary" onClick={forceUnsnoozeAll}>
               Force Unsnooze (dev)
@@ -1721,7 +1706,7 @@ export default function InboxPage() {
             title="Recommended"
             count={buckets.recommended.length}
             description="These are the most useful things to look at right now."
-            tone="sky"
+            tone="brand"
             open={openRecommended}
             onToggle={() => setOpenRecommended((v) => !v)}
             actions={
@@ -1761,7 +1746,7 @@ export default function InboxPage() {
             title="Maintenance"
             count={buckets.maintenance.length}
             description="Quick checks that prevent bigger issues later."
-            tone="amber"
+            tone="brand"
             open={openMaintenance}
             onToggle={() => setOpenMaintenance((v) => !v)}
           />
@@ -1785,7 +1770,7 @@ export default function InboxPage() {
             title="My Notes"
             count={buckets.notes.length}
             description="Things you captured. Decide, snooze, or promote to Decisions."
-            tone="zinc"
+            tone="brand"
             open={openNotes}
             onToggle={() => setOpenNotes((v) => !v)}
           />
