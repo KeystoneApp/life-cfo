@@ -94,8 +94,9 @@ export default function InboxPage() {
   const [liveStatus, setLiveStatus] = useState<LiveStatus>("connecting");
 
   // Collapsible sections (UI only)
-  const [openV2, setOpenV2] = useState(true);
-  const [openV1, setOpenV1] = useState(true);
+  // ✅ Calm defaults: Engine collapsed, manual open
+  const [openV2, setOpenV2] = useState(false);
+  const [openV1, setOpenV1] = useState(false);
   const [openManual, setOpenManual] = useState(true);
 
   const loadRef = useRef<(opts?: { silent?: boolean }) => void>(() => {});
@@ -105,12 +106,10 @@ export default function InboxPage() {
   const [clock, setClock] = useState<number>(() => Date.now());
   useEffect(() => {
     const onVisibility = () => {
-      // nudge the clock when returning to tab
       if (!document.hidden) setClock(Date.now());
     };
     document.addEventListener("visibilitychange", onVisibility);
 
-    // small UI-only clock (no network) while visible
     const t = window.setInterval(() => {
       if (!document.hidden) setClock(Date.now());
     }, 15_000);
@@ -124,7 +123,6 @@ export default function InboxPage() {
   const scheduleReload = () => {
     if (reloadTimerRef.current) window.clearTimeout(reloadTimerRef.current);
     reloadTimerRef.current = window.setTimeout(() => {
-      // ✅ silent fallback reload = no “Loading…” flicker
       loadRef.current({ silent: true });
     }, 250);
   };
@@ -226,7 +224,6 @@ export default function InboxPage() {
   }
 
   const clearPerItemInputs = (id: string) => {
-    // also clears persisted drafts
     clearDraftForId(id);
 
     setAiPreview((prev) => {
@@ -285,7 +282,6 @@ export default function InboxPage() {
     if (!kind) return `${base.border} ${base.bg}`;
 
     const left = kind === "v2" ? "border-l-4 border-l-sky-400 bg-zinc-50" : "border-l-4 border-l-amber-400 bg-zinc-50";
-
     return `${base.border} ${left}`;
   }
 
@@ -391,7 +387,6 @@ export default function InboxPage() {
           const idFromNew = newRow?.id as string | undefined;
           const id = idFromNew || idFromOld;
 
-          // If we don't have enough info, fallback to throttled (silent) reload
           if (!eventType || !id) {
             scheduleReload();
             return;
@@ -426,7 +421,6 @@ export default function InboxPage() {
                 ? prev.map((x) => (x.id === candidate.id ? { ...x, ...candidate } : x))
                 : [candidate, ...prev];
 
-              // keep newest-first (created_at desc) like load()
               merged.sort((a, b) => {
                 const ta = a.created_at ? Date.parse(a.created_at) : 0;
                 const tb = b.created_at ? Date.parse(b.created_at) : 0;
@@ -460,7 +454,6 @@ export default function InboxPage() {
             }
 
             if (eventType === "DELETE") {
-              // best-effort: also clear local drafts/AI preview state
               clearPerItemInputs(id);
               return prev.filter((x) => x.id !== id);
             }
@@ -521,18 +514,6 @@ export default function InboxPage() {
     return { v2, v1, manual };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visibleItems]);
-
-  // Auto-collapse Engine v1 when it gets noisy (UI only)
-  const didInitSectionsRef = useRef(false);
-  useEffect(() => {
-    if (didInitSectionsRef.current) return;
-    didInitSectionsRef.current = true;
-
-    setOpenV2(true);
-    setOpenManual(true);
-    setOpenV1(buckets.v1.length <= 3);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [buckets.v1.length]);
 
   // ---------- manual add ----------
   const addManualInboxItem = async () => {
@@ -709,7 +690,6 @@ export default function InboxPage() {
   };
 
   const undoToOpen = async (id: string) => {
-    // kept for compatibility with existing UI (“Undo → Open”)
     return unsnoozeToOpen(id);
   };
 
@@ -719,7 +699,6 @@ export default function InboxPage() {
     const prevStatus = it.status;
     const prevSnooze = it.snoozed_until ?? null;
 
-    // optimistic
     setItems((prev) => prev.map((x) => (x.id === it.id ? { ...x, status: "done", snoozed_until: null } : x)));
     clearPerItemInputs(it.id);
     setLastLoadedAt(new Date());
@@ -774,7 +753,6 @@ export default function InboxPage() {
     setAffirmation(null);
     setStatusLine("Dismissing v2 insights...");
 
-    // optimistic UI
     setItems((prev) => prev.map((it) => (ids.includes(it.id) ? { ...it, status: "done", snoozed_until: null } : it)));
     ids.forEach((id) => clearPerItemInputs(id));
     setLastLoadedAt(new Date());
@@ -830,7 +808,6 @@ export default function InboxPage() {
 
       const userReason = (decisionReason[item.id] ?? "").trim() ? (decisionReason[item.id] ?? "").trim() : null;
 
-      // ✅ default confidence to Medium if not set
       const confidenceLevel = decisionConfidence[item.id] ?? 2;
 
       let ai: any = null;
@@ -1113,7 +1090,6 @@ export default function InboxPage() {
     const err = aiError[it.id];
 
     const hasShortcutAction = !!it.action_href;
-
     const activelySnoozed = isActivelySnoozed(it, now);
 
     return (
@@ -1132,11 +1108,7 @@ export default function InboxPage() {
                 {activelySnoozed && <Chip>Snoozed</Chip>}
 
                 {insightsDigest && (
-                  <Chip
-                    active={false}
-                    onClick={() => router.push("/engine")}
-                    title="Open Engine (insights are generated there)"
-                  >
+                  <Chip active={false} onClick={() => router.push("/engine")} title="Open Engine (insights are generated there)">
                     Digest
                   </Chip>
                 )}
@@ -1272,7 +1244,9 @@ export default function InboxPage() {
                 {[1, 2, 3].map((level) => (
                   <label
                     key={level}
-                    className={`flex cursor-pointer items-center gap-2 text-sm ${decisionConfidence[it.id] === level ? "opacity-100" : "opacity-80"}`}
+                    className={`flex cursor-pointer items-center gap-2 text-sm ${
+                      decisionConfidence[it.id] === level ? "opacity-100" : "opacity-80"
+                    }`}
                   >
                     <input
                       type="radio"
@@ -1328,19 +1302,11 @@ export default function InboxPage() {
                 </Button>
               )}
 
-              <Button
-                variant="secondary"
-                onClick={() => updateSeverity(it.id, (it.severity ?? 2) - 1)}
-                title="Raise priority (towards 1)"
-              >
+              <Button variant="secondary" onClick={() => updateSeverity(it.id, (it.severity ?? 2) - 1)} title="Raise priority (towards 1)">
                 ↑ Priority
               </Button>
 
-              <Button
-                variant="secondary"
-                onClick={() => updateSeverity(it.id, (it.severity ?? 2) + 1)}
-                title="Lower priority (towards 3)"
-              >
+              <Button variant="secondary" onClick={() => updateSeverity(it.id, (it.severity ?? 2) + 1)} title="Lower priority (towards 3)">
                 ↓ Priority
               </Button>
             </div>
@@ -1354,8 +1320,7 @@ export default function InboxPage() {
     );
   };
 
-  const minutesAgoText =
-    !lastLoadedAt ? "" : minutesAgo !== null && minutesAgo < 1 ? "just now" : `${minutesAgo ?? 0}m ago`;
+  const minutesAgoText = !lastLoadedAt ? "" : minutesAgo !== null && minutesAgo < 1 ? "just now" : `${minutesAgo ?? 0}m ago`;
 
   // ---------- UI ----------
   return (
@@ -1423,9 +1388,7 @@ export default function InboxPage() {
       <div className="space-y-3">
         <div className="flex items-end justify-between gap-3">
           <h2 className="m-0 text-lg font-semibold tracking-tight">Visible</h2>
-          <div className="text-xs text-zinc-500">
-            Snoozed items hide until they’re due. Insights are generated from your inputs — no forecasting.
-          </div>
+          <div className="text-xs text-zinc-500">Snoozed items hide until they’re due. Insights are generated from your inputs — no forecasting.</div>
         </div>
 
         <div className="grid gap-3">
