@@ -327,6 +327,40 @@ export default function InboxPage() {
     return t.slice(0, max - 1) + "…";
   };
 
+   const isAutopayAllClear = (it: InboxItem) => {
+    if (!isEngineV1Reminder(it)) return false;
+
+    const title = (it.title ?? "").toLowerCase();
+    const body = (it.body ?? "").toLowerCase();
+
+    const looksLikeAutopay =
+      title.includes("autopay") ||
+      title.includes("auto pay") ||
+      title.includes("auto-pay") ||
+      body.includes("autopay") ||
+      body.includes("auto pay") ||
+      body.includes("auto-pay");
+
+    if (!looksLikeAutopay) return false;
+
+    // Phrases that mean “no action needed right now”
+    const allClearSignals = [
+      "no near-term",
+      "no near term",
+      "no immediate",
+      "no bills due",
+      "nothing due",
+      "all bills due",
+      "next 7 days",
+      "next seven days",
+      "no risks",
+      "all clear",
+      "up to date",
+    ];
+
+    return allClearSignals.some((p) => body.includes(p));
+  };
+
   const toggleItem = (id: string) => {
     setOpenItem((prev) => ({ ...prev, [id]: !prev[id] }));
   };
@@ -551,6 +585,32 @@ export default function InboxPage() {
       else notes.push(it);
     }
 
+    const createdMs = (x: InboxItem) => (x.created_at ? Date.parse(x.created_at) || 0 : 0);
+
+    // Recommended: highest priority first, then newest
+    recommended.sort((a, b) => {
+      const sa = a.severity ?? 2;
+      const sb = b.severity ?? 2;
+      if (sa !== sb) return sa - sb; // 1 first
+      return createdMs(b) - createdMs(a);
+    });
+
+    // Maintenance: actionable first, then priority, then newest
+    maintenance.sort((a, b) => {
+      const aa = isAutopayAllClear(a) ? 1 : 0; // 0 first, 1 last
+      const bb = isAutopayAllClear(b) ? 1 : 0;
+      if (aa !== bb) return aa - bb;
+
+      const sa = a.severity ?? 2;
+      const sb = b.severity ?? 2;
+      if (sa !== sb) return sa - sb;
+
+      return createdMs(b) - createdMs(a);
+    });
+
+    // Notes: newest first
+    notes.sort((a, b) => createdMs(b) - createdMs(a));
+
     return { recommended, maintenance, notes };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visibleItems]);
@@ -563,6 +623,7 @@ export default function InboxPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [buckets.maintenance.length]);
+
 
   // ---------- manual add ----------
   const addManualInboxItem = async () => {
@@ -1116,8 +1177,10 @@ export default function InboxPage() {
     );
   };
 
-  const renderItemCard = (it: InboxItem) => {
-    const b = severityBadge(it.severity);
+    const renderItemCard = (it: InboxItem) => {
+    const autopayAllClear = isAutopayAllClear(it);
+
+    const b = autopayAllClear ? { label: "OK", variant: "success" as const } : severityBadge(it.severity);
     const s = severityStyle(it.severity);
 
     const isV2 = isEngineV2Insight(it);
@@ -1138,7 +1201,9 @@ export default function InboxPage() {
     const advOpen = !!showAdvanced[it.id];
 
     const subtitle =
-      activelySnoozed && it.snoozed_until
+      autopayAllClear
+        ? "All clear — no payments due soon."
+        : activelySnoozed && it.snoozed_until
         ? `Snoozed until ${formatWhen(it.snoozed_until)}`
         : it.body
         ? snippet(it.body, 120)
@@ -1208,15 +1273,15 @@ export default function InboxPage() {
                 )}
 
                 <Button
-                  variant="secondary"
-                  onClick={(e) => {
-                    e.stopPropagation?.();
-                    setItemOpen(it.id, true);
-                  }}
-                  title="Expand details"
-                >
-                  Expand
-                </Button>
+  variant="secondary"
+  onClick={(e) => {
+    e.stopPropagation?.();
+    toggleItem(it.id);
+  }}
+  title={expanded ? "Collapse details" : "Expand details"}
+>
+  {expanded ? "Collapse" : "Expand"}
+</Button>
 
                 <Button
                   variant="secondary"
@@ -1481,9 +1546,8 @@ export default function InboxPage() {
     );
   };
 
- const minutesAgo2 = lastLoadedAt ? Math.floor((clock - lastLoadedAt.getTime()) / 60000) : null;
-const minutesAgoText =
-  !lastLoadedAt ? "" : minutesAgo2 !== null && minutesAgo2 < 1 ? "just now" : `${minutesAgo2 ?? 0}m ago`;
+   const minutesAgoText =
+    !lastLoadedAt ? "" : minutesAgo !== null && minutesAgo < 1 ? "just now" : `${minutesAgo ?? 0}m ago`;
 
   const updateNow = () => loadRef.current({ silent: false });
 
