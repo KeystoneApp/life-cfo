@@ -94,10 +94,12 @@ export default function InboxPage() {
   const [liveStatus, setLiveStatus] = useState<LiveStatus>("connecting");
 
   // Collapsible sections (UI only)
-  // ✅ Calm defaults: Engine collapsed, manual open
-  const [openV2, setOpenV2] = useState(false);
-  const [openV1, setOpenV1] = useState(false);
+  const [openV2, setOpenV2] = useState(true);
+  const [openV1, setOpenV1] = useState(false); // default collapsed (reminders can be noisy)
   const [openManual, setOpenManual] = useState(true);
+
+  // Per-item collapse (inside section)
+  const [openItem, setOpenItem] = useState<Record<string, boolean>>({});
 
   const loadRef = useRef<(opts?: { silent?: boolean }) => void>(() => {});
   const reloadTimerRef = useRef<number | null>(null);
@@ -241,6 +243,13 @@ export default function InboxPage() {
       delete copy[id];
       return copy;
     });
+
+    setOpenItem((prev) => {
+      if (prev[id] == null) return prev;
+      const copy = { ...prev };
+      delete copy[id];
+      return copy;
+    });
   };
 
   const analyzeItem = async (item: InboxItem) => {
@@ -280,7 +289,6 @@ export default function InboxPage() {
 
   function engineCardClasses(base: { border: string; bg: string }, kind: "v2" | "v1" | null) {
     if (!kind) return `${base.border} ${base.bg}`;
-
     const left = kind === "v2" ? "border-l-4 border-l-sky-400 bg-zinc-50" : "border-l-4 border-l-amber-400 bg-zinc-50";
     return `${base.border} ${left}`;
   }
@@ -699,6 +707,7 @@ export default function InboxPage() {
     const prevStatus = it.status;
     const prevSnooze = it.snoozed_until ?? null;
 
+    // optimistic
     setItems((prev) => prev.map((x) => (x.id === it.id ? { ...x, status: "done", snoozed_until: null } : x)));
     clearPerItemInputs(it.id);
     setLastLoadedAt(new Date());
@@ -808,6 +817,7 @@ export default function InboxPage() {
 
       const userReason = (decisionReason[item.id] ?? "").trim() ? (decisionReason[item.id] ?? "").trim() : null;
 
+      // ✅ default confidence to Medium if not set
       const confidenceLevel = decisionConfidence[item.id] ?? 2;
 
       let ai: any = null;
@@ -1051,23 +1061,88 @@ export default function InboxPage() {
       <Card className={toneClasses}>
         <CardContent>
           <div className="flex flex-wrap items-start justify-between gap-2">
-            <button
-              type="button"
-              onClick={onToggle}
-              className="flex flex-wrap items-center gap-2 text-left"
-              aria-expanded={open}
-              title={open ? "Hide section" : "Show section"}
-            >
+            <div className="flex flex-wrap items-center gap-2">
               <h2 className="m-0 text-base font-semibold tracking-tight">{title}</h2>
               <Badge variant="muted">{count}</Badge>
-              <span className="text-xs text-zinc-500">{open ? "Hide" : "Show"}</span>
-            </button>
+
+              <Button variant="secondary" onClick={onToggle} title={open ? "Hide section" : "Show section"}>
+                {open ? "Hide" : "Show"}
+              </Button>
+            </div>
 
             <div className="flex flex-wrap items-center justify-end gap-2">{actions}</div>
           </div>
 
           {description && <div className="mt-2 text-xs text-zinc-600">{description}</div>}
-          {!open && count > 0 && <div className="mt-2 text-xs text-zinc-500">Hidden — click to show.</div>}
+          {!open && count > 0 && <div className="mt-2 text-xs text-zinc-500">Hidden.</div>}
+        </CardContent>
+      </Card>
+    );
+  };
+
+  const ItemRow = ({ it }: { it: InboxItem }) => {
+    const isV2 = isEngineV2Insight(it);
+    const isV1 = isEngineV1Reminder(it);
+    const isEng = isEngineItem(it);
+    const activelySnoozed = isActivelySnoozed(it, now);
+
+    const b = severityBadge(it.severity);
+
+    const open = !!openItem[it.id];
+
+    return (
+      <Card className="bg-white">
+        <CardContent>
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <button
+              type="button"
+              onClick={() => setOpenItem((prev) => ({ ...prev, [it.id]: !prev[it.id] }))}
+              className="flex-1 text-left"
+              aria-expanded={open}
+              title={open ? "Collapse" : "Expand"}
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <strong className="text-sm">{it.title}</strong>
+                <Badge variant={b.variant}>{b.label}</Badge>
+
+                {isV2 && <Chip>Insight</Chip>}
+                {isV1 && <Chip>Reminder</Chip>}
+                {!isV2 && !isV1 && isEng && <Chip>Engine</Chip>}
+                {activelySnoozed && <Chip>Snoozed</Chip>}
+
+                <span className="text-xs text-zinc-500">{open ? "Collapse" : "Expand"}</span>
+              </div>
+
+              <div className="mt-1 text-xs text-zinc-500">
+                {it.status}
+                {activelySnoozed ? ` • until ${formatWhen(it.snoozed_until)}` : ""}
+              </div>
+            </button>
+
+            <div className="flex flex-wrap items-center gap-2">
+              {it.action_href && (
+                <Button
+                  variant="secondary"
+                  onClick={async () => {
+                    await autoResolveWithUndo(it, "Shortcut used ✅");
+                    router.push(it.action_href!);
+                  }}
+                  title="Jump to the linked page (auto-resolves this item)"
+                >
+                  {it.action_label ?? "Open"}
+                </Button>
+              )}
+
+              <Button
+                variant="secondary"
+                onClick={() => setOpenItem((prev) => ({ ...prev, [it.id]: !prev[it.id] }))}
+              >
+                {open ? "Hide details" : "Show details"}
+              </Button>
+            </div>
+          </div>
+
+          {open ? <div className="mt-3">{renderItemCard(it)}</div> : null}
         </CardContent>
       </Card>
     );
@@ -1090,6 +1165,7 @@ export default function InboxPage() {
     const err = aiError[it.id];
 
     const hasShortcutAction = !!it.action_href;
+
     const activelySnoozed = isActivelySnoozed(it, now);
 
     return (
@@ -1168,7 +1244,7 @@ export default function InboxPage() {
                         Open Engine
                       </Button>
 
-                      <Button variant="secondary" onClick={() => snooze24h(it.id)}>
+                      <Button variant="secondary" onClick={async () => snooze24h(it.id)}>
                         Snooze 24h
                       </Button>
                     </div>
@@ -1387,15 +1463,15 @@ export default function InboxPage() {
 
       <div className="space-y-3">
         <div className="flex items-end justify-between gap-3">
-          <h2 className="m-0 text-lg font-semibold tracking-tight">Visible</h2>
-          <div className="text-xs text-zinc-500">Snoozed items hide until they’re due. Insights are generated from your inputs — no forecasting.</div>
+          <h2 className="m-0 text-lg font-semibold tracking-tight">Due now</h2>
+          <div className="text-xs text-zinc-500">Snoozed items hide until they’re due. Insights are generated from truth — no forecasting.</div>
         </div>
 
         <div className="grid gap-3">
           <SectionHeader
             title="Insights (Engine v2)"
             count={buckets.v2.length}
-            description="Higher-signal nudges & patterns — based on current truth, not prediction."
+            description="Higher-signal patterns — based on current truth."
             tone="sky"
             open={openV2}
             onToggle={() => setOpenV2((v) => !v)}
@@ -1418,7 +1494,11 @@ export default function InboxPage() {
           />
           {openV2 ? (
             buckets.v2.length ? (
-              buckets.v2.map(renderItemCard)
+              <div className="grid gap-2">
+                {buckets.v2.map((it) => (
+                  <ItemRow key={it.id} it={it} />
+                ))}
+              </div>
             ) : (
               <Card className="bg-white">
                 <CardContent>
@@ -1432,14 +1512,18 @@ export default function InboxPage() {
           <SectionHeader
             title="Reminders (Engine v1)"
             count={buckets.v1.length}
-            description="Housekeeping prompts — helpful, but not urgent unless marked Top."
+            description="Housekeeping prompts — collapsed by default so you can pick one at a time."
             tone="amber"
             open={openV1}
             onToggle={() => setOpenV1((v) => !v)}
           />
           {openV1 ? (
             buckets.v1.length ? (
-              buckets.v1.map(renderItemCard)
+              <div className="grid gap-2">
+                {buckets.v1.map((it) => (
+                  <ItemRow key={it.id} it={it} />
+                ))}
+              </div>
             ) : (
               <Card className="bg-white">
                 <CardContent>
@@ -1453,14 +1537,18 @@ export default function InboxPage() {
           <SectionHeader
             title="Your Inbox"
             count={buckets.manual.length}
-            description="What you captured manually. Decide, snooze, or promote to Decisions."
+            description="What you captured manually."
             tone="zinc"
             open={openManual}
             onToggle={() => setOpenManual((v) => !v)}
           />
           {openManual ? (
             buckets.manual.length ? (
-              buckets.manual.map(renderItemCard)
+              <div className="grid gap-2">
+                {buckets.manual.map((it) => (
+                  <ItemRow key={it.id} it={it} />
+                ))}
+              </div>
             ) : (
               <Card className="bg-white">
                 <CardContent>
