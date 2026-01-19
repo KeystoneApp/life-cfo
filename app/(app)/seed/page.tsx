@@ -9,9 +9,7 @@ import { Card, CardContent, Button, Chip, Badge, useToast } from "@/components/u
 function safeUUID() {
   try {
     if (typeof crypto !== "undefined" && "randomUUID" in crypto) return (crypto as any).randomUUID();
-  } catch {
-    // ignore
-  }
+  } catch {}
   return `m_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 }
 
@@ -79,58 +77,26 @@ export default function SeedPage() {
     setStatus("working");
     setStatusLine("Resetting your data…");
 
-    // Order matters if foreign keys exist:
-    // bill_payments -> recurring_bills -> recurring_income -> accounts -> decisions -> inbox
-    // (We also try decisions, but if your schema blocks, we skip with best-effort.)
     const steps: { label: string; fn: () => Promise<void> }[] = [
-      {
-        label: "Delete bill_payments",
-        fn: async () => {
-          await supabase.from("bill_payments").delete().eq("user_id", userId);
-        },
-      },
-      {
-        label: "Delete recurring_bills",
-        fn: async () => {
-          await supabase.from("recurring_bills").delete().eq("user_id", userId);
-        },
-      },
-      {
-        label: "Delete recurring_income",
-        fn: async () => {
-          await supabase.from("recurring_income").delete().eq("user_id", userId);
-        },
-      },
-      {
-        label: "Delete accounts",
-        fn: async () => {
-          await supabase.from("accounts").delete().eq("user_id", userId);
-        },
-      },
+      { label: "Delete bill_payments", fn: async () => void (await supabase.from("bill_payments").delete().eq("user_id", userId)) },
+      { label: "Delete recurring_bills", fn: async () => void (await supabase.from("recurring_bills").delete().eq("user_id", userId)) },
+      { label: "Delete recurring_income", fn: async () => void (await supabase.from("recurring_income").delete().eq("user_id", userId)) },
+      { label: "Delete accounts", fn: async () => void (await supabase.from("accounts").delete().eq("user_id", userId)) },
       {
         label: "Delete decisions (best effort)",
         fn: async () => {
-          // If decisions table or policies ever block deletes, we won’t fail the whole reset.
           try {
             await supabase.from("decisions").delete().eq("user_id", userId);
-          } catch {
-            // ignore
-          }
+          } catch {}
         },
       },
-      {
-        label: "Delete decision_inbox",
-        fn: async () => {
-          await supabase.from("decision_inbox").delete().eq("user_id", userId);
-        },
-      },
+      { label: "Delete decision_inbox", fn: async () => void (await supabase.from("decision_inbox").delete().eq("user_id", userId)) },
     ];
 
     try {
       for (const s of steps) {
         setStatusLine(`${s.label}…`);
-        const res = await s.fn();
-        void res;
+        await s.fn();
       }
 
       setConfirmText("");
@@ -154,18 +120,28 @@ export default function SeedPage() {
     const runId = safeUUID();
 
     try {
-      // 1) Accounts (NOTE: accounts table does NOT have currency in your schema)
+      // 1) Accounts (now includes balances + currency)
       setStatusLine("Seeding accounts…");
       const accountsPayload = [
         {
           user_id: userId,
           name: "Everyday Spending",
+          provider: "manual",
+          type: "cash",
+          status: "active",
+          archived: false,
           current_balance_cents: 1250_00,
+          currency: "AUD",
         },
         {
           user_id: userId,
           name: "Bills Buffer",
+          provider: "manual",
+          type: "cash",
+          status: "active",
+          archived: false,
           current_balance_cents: 600_00,
+          currency: "AUD",
         },
       ];
 
@@ -274,29 +250,15 @@ export default function SeedPage() {
 
   async function runSeedThenEngine() {
     if (!userId) return;
-
-    // We keep this page calm and structural — so we don’t run Engine automatically.
-    // Instead we seed and then route you to Engine where you can explicitly click Run.
     await runSeed();
     notify({ title: "Next step", description: "Go to Engine and click Run v1 / v2 when you want." });
   }
 
   const statusChip =
-    status === "working" ? (
-      <Chip>Working…</Chip>
-    ) : status === "done" ? (
-      <Chip>Done</Chip>
-    ) : status === "error" ? (
-      <Chip>Error</Chip>
-    ) : (
-      <Chip>Idle</Chip>
-    );
+    status === "working" ? <Chip>Working…</Chip> : status === "done" ? <Chip>Done</Chip> : status === "error" ? <Chip>Error</Chip> : <Chip>Idle</Chip>;
 
   return (
-    <Page
-      title="Seed / Reset"
-      subtitle="Testing harness. Creates repeatable demo data or clears only your own rows. Hidden from navigation by default."
-    >
+    <Page title="Seed / Reset" subtitle="Testing harness. Creates repeatable demo data or clears only your own rows. Hidden from navigation by default.">
       <div className="grid gap-4">
         <Card>
           <CardContent>
@@ -318,8 +280,7 @@ export default function SeedPage() {
           <CardContent>
             <div className="font-semibold mb-2">Seed demo data</div>
             <div className="text-sm text-zinc-600">
-              Adds a small, realistic dataset (accounts, income, bills, and a couple Inbox items). Safe to run multiple
-              times (you’ll just get more rows).
+              Adds a small, realistic dataset (accounts, income, bills, and a couple Inbox items). Safe to run multiple times (you’ll just get more rows).
             </div>
 
             <div className="mt-3 flex flex-wrap gap-2">
@@ -337,7 +298,7 @@ export default function SeedPage() {
           <CardContent>
             <div className="font-semibold mb-2">Reset my data (destructive)</div>
             <div className="text-sm text-zinc-600">
-              Deletes only rows belonging to your user_id across the V1 tables. Requires explicit typed confirmation.
+              Deletes only rows belonging to your <code>user_id</code> across the V1 tables. Requires explicit typed confirmation.
             </div>
 
             <div className="mt-3 grid gap-3">
@@ -359,8 +320,7 @@ export default function SeedPage() {
               </div>
 
               <div className="text-xs text-zinc-500">
-                Note: Reset order is chosen to respect likely foreign keys (payments → bills → income → accounts → decisions → inbox).
-                If a table blocks deletion via policy, the reset will stop and show the error.
+                Note: Reset order is chosen to respect likely foreign keys (payments → bills → income → accounts → decisions → inbox). If a table blocks deletion via policy, the reset will stop and show the error.
               </div>
             </div>
           </CardContent>
