@@ -1443,9 +1443,9 @@ export default function InboxPage() {
                       active={false}
                       onClick={(e) => {
                         e.stopPropagation?.();
-                        router.push("/engine");
+                        router.push("/decisions?tab=review");
                       }}
-                      title="Open suggestions"
+                      title="Review decisions"
                     >
                       Digest
                     </Chip>
@@ -1528,14 +1528,15 @@ export default function InboxPage() {
                           </Button>
 
                           <Button
-                            variant="secondary"
-                            onClick={async () => {
-                              await autoResolveWithUndo(it, "Digest cleared.");
-                              router.push("/engine");
-                            }}
+                          variant="secondary"
+                           onClick={async () => {
+                           await autoResolveWithUndo(it, "Digest cleared.");
+                           router.push("/decisions?tab=review");
+                           }}
                           >
-                            Open suggestions
+                          Review decisions
                           </Button>
+
 
                           <Button variant="secondary" onClick={() => snooze24h(it.id)}>
                             Snooze 24h
