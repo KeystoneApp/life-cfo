@@ -93,12 +93,12 @@ export default function InboxPage() {
   // Live indicator
   const [liveStatus, setLiveStatus] = useState<LiveStatus>("connecting");
 
-  // Collapsible sections (UI only)
-  const [openV2, setOpenV2] = useState(true);
-  const [openV1, setOpenV1] = useState(false); // default collapsed (reminders can be noisy)
-  const [openManual, setOpenManual] = useState(true);
+  // ✅ New UX: section-level collapse (calm defaults)
+  const [openRecommended, setOpenRecommended] = useState(true);
+  const [openMaintenance, setOpenMaintenance] = useState(false);
+  const [openNotes, setOpenNotes] = useState(true);
 
-  // Per-item collapse (inside section)
+  // ✅ New UX: item-level collapse (collapsed by default)
   const [openItem, setOpenItem] = useState<Record<string, boolean>>({});
 
   const loadRef = useRef<(opts?: { silent?: boolean }) => void>(() => {});
@@ -245,7 +245,6 @@ export default function InboxPage() {
     });
 
     setOpenItem((prev) => {
-      if (prev[id] == null) return prev;
       const copy = { ...prev };
       delete copy[id];
       return copy;
@@ -289,6 +288,7 @@ export default function InboxPage() {
 
   function engineCardClasses(base: { border: string; bg: string }, kind: "v2" | "v1" | null) {
     if (!kind) return `${base.border} ${base.bg}`;
+
     const left = kind === "v2" ? "border-l-4 border-l-sky-400 bg-zinc-50" : "border-l-4 border-l-amber-400 bg-zinc-50";
     return `${base.border} ${left}`;
   }
@@ -309,6 +309,21 @@ export default function InboxPage() {
     const ms = safeParseMs(it.snoozed_until);
     if (!ms) return false;
     return ms > nowMs;
+  };
+
+  const snippet = (text: string | null, max = 110) => {
+    const t = (text ?? "").trim().replace(/\s+/g, " ");
+    if (!t) return "";
+    if (t.length <= max) return t;
+    return t.slice(0, max - 1) + "…";
+  };
+
+  const toggleItem = (id: string) => {
+    setOpenItem((prev) => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  const setItemOpen = (id: string, open: boolean) => {
+    setOpenItem((prev) => ({ ...prev, [id]: open }));
   };
 
   // ---------- auth + load ----------
@@ -509,19 +524,28 @@ export default function InboxPage() {
 
   // Buckets (UI only)
   const buckets = useMemo(() => {
-    const v2: InboxItem[] = [];
-    const v1: InboxItem[] = [];
-    const manual: InboxItem[] = [];
+    const recommended: InboxItem[] = [];
+    const maintenance: InboxItem[] = [];
+    const notes: InboxItem[] = [];
 
     for (const it of visibleItems) {
-      if (isEngineV2Insight(it)) v2.push(it);
-      else if (isEngineV1Reminder(it)) v1.push(it);
-      else manual.push(it);
+      if (isEngineV2Insight(it)) recommended.push(it);
+      else if (isEngineV1Reminder(it)) maintenance.push(it);
+      else notes.push(it);
     }
 
-    return { v2, v1, manual };
+    return { recommended, maintenance, notes };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visibleItems]);
+
+  // optional: open Maintenance automatically if it's small (so it doesn't feel "lost")
+  useEffect(() => {
+    // keep the default "calm": closed when noisy
+    if (buckets.maintenance.length > 0 && buckets.maintenance.length <= 2) {
+      setOpenMaintenance(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [buckets.maintenance.length]);
 
   // ---------- manual add ----------
   const addManualInboxItem = async () => {
@@ -697,17 +721,12 @@ export default function InboxPage() {
     setStatusLine("Unsnoozed ✅");
   };
 
-  const undoToOpen = async (id: string) => {
-    return unsnoozeToOpen(id);
-  };
-
   const autoResolveWithUndo = async (it: InboxItem, message = "Marked done ✅") => {
     if (!userId) return;
 
     const prevStatus = it.status;
     const prevSnooze = it.snoozed_until ?? null;
 
-    // optimistic
     setItems((prev) => prev.map((x) => (x.id === it.id ? { ...x, status: "done", snoozed_until: null } : x)));
     clearPerItemInputs(it.id);
     setLastLoadedAt(new Date());
@@ -750,17 +769,17 @@ export default function InboxPage() {
     );
   };
 
-  const dismissAllV2Insights = async () => {
+  const dismissAllRecommended = async () => {
     if (!userId) return;
 
-    const ids = buckets.v2.map((x) => x.id);
+    const ids = buckets.recommended.map((x) => x.id);
     if (ids.length === 0) {
-      showToast({ message: "No v2 insights to dismiss." }, 2500);
+      showToast({ message: "Nothing to dismiss." }, 2500);
       return;
     }
 
     setAffirmation(null);
-    setStatusLine("Dismissing v2 insights...");
+    setStatusLine("Dismissing recommended items...");
 
     setItems((prev) => prev.map((it) => (ids.includes(it.id) ? { ...it, status: "done", snoozed_until: null } : it)));
     ids.forEach((id) => clearPerItemInputs(id));
@@ -782,7 +801,7 @@ export default function InboxPage() {
 
     showToast(
       {
-        message: `Dismissed ${ids.length} insight(s) ✅`,
+        message: `Dismissed ${ids.length} ✅`,
         undoLabel: "Undo",
         onUndo: async () => {
           setStatusLine("Undoing dismiss...");
@@ -816,8 +835,6 @@ export default function InboxPage() {
       setAffirmation(null);
 
       const userReason = (decisionReason[item.id] ?? "").trim() ? (decisionReason[item.id] ?? "").trim() : null;
-
-      // ✅ default confidence to Medium if not set
       const confidenceLevel = decisionConfidence[item.id] ?? 2;
 
       let ai: any = null;
@@ -1072,77 +1089,7 @@ export default function InboxPage() {
 
             <div className="flex flex-wrap items-center justify-end gap-2">{actions}</div>
           </div>
-
           {description && <div className="mt-2 text-xs text-zinc-600">{description}</div>}
-          {!open && count > 0 && <div className="mt-2 text-xs text-zinc-500">Hidden.</div>}
-        </CardContent>
-      </Card>
-    );
-  };
-
-  const ItemRow = ({ it }: { it: InboxItem }) => {
-    const isV2 = isEngineV2Insight(it);
-    const isV1 = isEngineV1Reminder(it);
-    const isEng = isEngineItem(it);
-    const activelySnoozed = isActivelySnoozed(it, now);
-
-    const b = severityBadge(it.severity);
-
-    const open = !!openItem[it.id];
-
-    return (
-      <Card className="bg-white">
-        <CardContent>
-          <div className="flex flex-wrap items-start justify-between gap-2">
-            <button
-              type="button"
-              onClick={() => setOpenItem((prev) => ({ ...prev, [it.id]: !prev[it.id] }))}
-              className="flex-1 text-left"
-              aria-expanded={open}
-              title={open ? "Collapse" : "Expand"}
-            >
-              <div className="flex flex-wrap items-center gap-2">
-                <strong className="text-sm">{it.title}</strong>
-                <Badge variant={b.variant}>{b.label}</Badge>
-
-                {isV2 && <Chip>Insight</Chip>}
-                {isV1 && <Chip>Reminder</Chip>}
-                {!isV2 && !isV1 && isEng && <Chip>Engine</Chip>}
-                {activelySnoozed && <Chip>Snoozed</Chip>}
-
-                <span className="text-xs text-zinc-500">{open ? "Collapse" : "Expand"}</span>
-              </div>
-
-              <div className="mt-1 text-xs text-zinc-500">
-                {it.status}
-                {activelySnoozed ? ` • until ${formatWhen(it.snoozed_until)}` : ""}
-              </div>
-            </button>
-
-            <div className="flex flex-wrap items-center gap-2">
-              {it.action_href && (
-                <Button
-                  variant="secondary"
-                  onClick={async () => {
-                    await autoResolveWithUndo(it, "Shortcut used ✅");
-                    router.push(it.action_href!);
-                  }}
-                  title="Jump to the linked page (auto-resolves this item)"
-                >
-                  {it.action_label ?? "Open"}
-                </Button>
-              )}
-
-              <Button
-                variant="secondary"
-                onClick={() => setOpenItem((prev) => ({ ...prev, [it.id]: !prev[it.id] }))}
-              >
-                {open ? "Hide details" : "Show details"}
-              </Button>
-            </div>
-          </div>
-
-          {open ? <div className="mt-3">{renderItemCard(it)}</div> : null}
         </CardContent>
       </Card>
     );
@@ -1157,7 +1104,6 @@ export default function InboxPage() {
     const isEng = isEngineItem(it);
 
     const kind: "v2" | "v1" | null = isV2 ? "v2" : isV1 ? "v1" : null;
-
     const insightsDigest = isInsightsDigest(it);
 
     const analysis = aiPreview[it.id];
@@ -1165,238 +1111,326 @@ export default function InboxPage() {
     const err = aiError[it.id];
 
     const hasShortcutAction = !!it.action_href;
-
     const activelySnoozed = isActivelySnoozed(it, now);
+
+    const expanded = !!openItem[it.id];
+
+    const subtitle =
+      activelySnoozed && it.snoozed_until
+        ? `Snoozed until ${formatWhen(it.snoozed_until)}`
+        : it.body
+        ? snippet(it.body, 120)
+        : isV2
+        ? "Recommended based on your current inputs."
+        : isV1
+        ? "Maintenance reminder."
+        : "Note you captured.";
 
     return (
       <Card key={it.id} className={engineCardClasses(s, kind)}>
         <CardContent>
           <div className="space-y-3">
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <strong className="text-base">{it.title}</strong>
-                <Badge variant={b.variant}>{b.label}</Badge>
-
-                {isV2 && <Chip>Insight</Chip>}
-                {isV1 && <Chip>Reminder</Chip>}
-                {!isV2 && !isV1 && isEng && <Chip>Engine</Chip>}
-
-                {activelySnoozed && <Chip>Snoozed</Chip>}
-
-                {insightsDigest && (
-                  <Chip active={false} onClick={() => router.push("/engine")} title="Open Engine (insights are generated there)">
-                    Digest
-                  </Chip>
-                )}
-              </div>
-
-              <div className="text-xs text-zinc-500">
-                {it.status}
-                {activelySnoozed ? ` • until ${formatWhen(it.snoozed_until)}` : ""}
-              </div>
-            </div>
-
-            {isV2 && (
-              <div className="text-xs text-zinc-500">
-                Why you’re seeing this: generated from your current inputs (no forecasting).
-                {hasShortcutAction ? " Using the action will auto-resolve this item." : ""}
-              </div>
-            )}
-            {isV1 && (
-              <div className="text-xs text-zinc-500">
-                Why you’re seeing this: housekeeping reminder from your current inputs.
-                {hasShortcutAction ? " Using the action will auto-resolve this item." : ""}
-              </div>
-            )}
-            {!isV2 && !isV1 && isEng && (
-              <div className="text-xs text-zinc-500">
-                Truth reminder from Engine{hasShortcutAction ? " — using the action will auto-resolve this item." : ""}
-              </div>
-            )}
-
-            {it.body && <div className="whitespace-pre-wrap text-sm text-zinc-800">{it.body}</div>}
-
-            {insightsDigest && (
-              <Card className="bg-white">
-                <CardContent>
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="text-sm text-zinc-600">
-                      Shortcut actions — use the insight, then come back. (This digest will auto-clear.)
-                    </div>
-
-                    <div className="flex flex-wrap gap-2">
-                      <Button
-                        onClick={async () => {
-                          await autoResolveWithUndo(it, "Digest cleared ✅");
-                          router.push("/decisions?tab=review");
-                        }}
-                      >
-                        Review now
-                      </Button>
-
-                      <Button
-                        variant="secondary"
-                        onClick={async () => {
-                          await autoResolveWithUndo(it, "Digest cleared ✅");
-                          router.push("/engine");
-                        }}
-                      >
-                        Open Engine
-                      </Button>
-
-                      <Button variant="secondary" onClick={async () => snooze24h(it.id)}>
-                        Snooze 24h
-                      </Button>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            )}
-
-            {it.action_href && (
-              <Button
-                variant="secondary"
-                onClick={async (e) => {
-                  e.stopPropagation?.();
-                  await autoResolveWithUndo(it, "Shortcut used ✅");
-                  router.push(it.action_href!);
-                }}
-                title="Use this insight and jump to the right place"
+            {/* ---- collapsed summary row ---- */}
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <button
+                type="button"
+                onClick={() => toggleItem(it.id)}
+                className="flex min-w-[280px] flex-1 flex-col gap-1 text-left"
+                aria-expanded={expanded}
+                title={expanded ? "Collapse" : "Expand"}
               >
-                {it.action_label ?? "Open"}
-              </Button>
-            )}
+                <div className="flex flex-wrap items-center gap-2">
+                  <strong className="text-base">{it.title}</strong>
 
-            <div className="space-y-2">
-              <Button variant="secondary" onClick={() => analyzeItem(it)} disabled={loading}>
-                {loading ? "Analyzing..." : analysis ? "Re-analyze with AI" : "Analyze with AI"}
-              </Button>
+                  <Badge variant={b.variant}>{b.label}</Badge>
 
-              {err && <div className="text-xs text-red-700">AI error: {err}</div>}
+                  {isV2 && <Chip>Recommended</Chip>}
+                  {isV1 && <Chip>Maintenance</Chip>}
+                  {!isV2 && !isV1 && isEng && <Chip>Engine</Chip>}
+                  {!isEng && <Chip>My note</Chip>}
 
-              {analysis && (
-                <Card className="border-sky-200 bg-sky-50">
-                  <CardContent>
-                    <div className="space-y-3">
-                      <div className="text-xs text-zinc-500">AI analysis</div>
+                  {activelySnoozed && <Chip>Snoozed</Chip>}
 
-                      <div className="flex flex-wrap gap-2 text-xs text-zinc-600">
-                        {analysis.decision_type && <span>Type: {analysis.decision_type}</span>}
-                        {analysis.stakes && <span>• Stakes: {analysis.stakes}</span>}
-                        {analysis.reversible != null && <span>• Reversible: {analysis.reversible ? "Yes" : "No"}</span>}
-                        {analysis.time_horizon && <span>• Horizon: {analysis.time_horizon}</span>}
-                      </div>
+                  {insightsDigest && (
+                    <Chip
+                      active={false}
+                      onClick={(e) => {
+                        e.stopPropagation?.();
+                        router.push("/engine");
+                      }}
+                      title="Open Engine"
+                    >
+                      Digest
+                    </Chip>
+                  )}
+                </div>
 
-                      {analysis.suggested_default && (
-                        <div className="text-sm">
-                          <strong>Suggested default:</strong> {analysis.suggested_default}
-                        </div>
-                      )}
+                <div className="text-xs text-zinc-600">{subtitle}</div>
 
-                      {analysis.reasoning && <div className="whitespace-pre-wrap text-sm leading-relaxed">{analysis.reasoning}</div>}
+                <div className="mt-1 text-xs text-zinc-500">{expanded ? "Collapse" : "Expand"}</div>
+              </button>
 
-                      {Array.isArray(analysis.key_questions) && analysis.key_questions.length > 0 && (
-                        <div className="text-sm">
-                          <strong>Key questions</strong>
-                          <ul className="mt-2 list-disc pl-5">
-                            {analysis.key_questions.map((q: string, idx: number) => (
-                              <li key={idx} className="mb-1">
-                                {q}
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                      )}
-                    </div>
-                  </CardContent>
-                </Card>
-              )}
-            </div>
-
-            <div className="space-y-2">
-              <div className="text-xs text-zinc-500">How confident do you feel about this?</div>
-
-              <div className="flex flex-wrap gap-4">
-                {[1, 2, 3].map((level) => (
-                  <label
-                    key={level}
-                    className={`flex cursor-pointer items-center gap-2 text-sm ${
-                      decisionConfidence[it.id] === level ? "opacity-100" : "opacity-80"
-                    }`}
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                {it.action_href && (
+                  <Button
+                    variant="secondary"
+                    onClick={async (e) => {
+                      e.stopPropagation?.();
+                      await autoResolveWithUndo(it, "Shortcut used ✅");
+                      router.push(it.action_href!);
+                    }}
+                    title="Use this and jump to the right place"
                   >
-                    <input
-                      type="radio"
-                      name={`confidence-${it.id}`}
-                      checked={decisionConfidence[it.id] === level}
-                      onChange={() => setDraftConfidence(it.id, level)}
-                    />
-                    {level === 1 ? "Low" : level === 2 ? "Medium" : "High"}
-                  </label>
-                ))}
+                    {it.action_label ?? "Open"}
+                  </Button>
+                )}
+
+                <Button
+                  variant="secondary"
+                  onClick={(e) => {
+                    e.stopPropagation?.();
+                    setItemOpen(it.id, true);
+                  }}
+                  title="Expand details"
+                >
+                  Expand
+                </Button>
+
+                <Button
+                  variant="secondary"
+                  onClick={(e) => {
+                    e.stopPropagation?.();
+                    snooze24h(it.id);
+                  }}
+                  title="Hide until tomorrow"
+                >
+                  Snooze 24h
+                </Button>
               </div>
-
-              <textarea
-                placeholder="Why did you decide this? (optional)"
-                value={decisionReason[it.id] ?? ""}
-                onChange={(e) => setDraftReason(it.id, e.target.value)}
-                className="w-full min-h-[70px] rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
-              />
             </div>
 
-            <div className="flex flex-wrap gap-2">
-              <Button onClick={() => decideNowAndCloseInboxItem(it)}>Decide Now ✅</Button>
+            {/* ---- expanded details ---- */}
+            {expanded ? (
+              <div className="space-y-3">
+                {/* context / why */}
+                {isV2 && (
+                  <div className="text-xs text-zinc-500">
+                    Why this is here: based on your current inputs (no forecasting).{" "}
+                    {hasShortcutAction ? "Using the action will auto-clear this item." : ""}
+                  </div>
+                )}
+                {isV1 && (
+                  <div className="text-xs text-zinc-500">
+                    Why this is here: maintenance reminder from your current inputs.{" "}
+                    {hasShortcutAction ? "Using the action will auto-clear this item." : ""}
+                  </div>
+                )}
+                {!isV2 && !isV1 && isEng && <div className="text-xs text-zinc-500">Engine note.</div>}
 
-              <Button variant="secondary" onClick={() => promoteInboxItemToDecision(it)}>
-                Promote → Decisions
-              </Button>
+                {it.body && <div className="whitespace-pre-wrap text-sm text-zinc-800">{it.body}</div>}
 
-              <Button variant="secondary" onClick={() => doneItem(it.id)}>
-                Done
-              </Button>
+                {/* digest shortcuts */}
+                {insightsDigest && (
+                  <Card className="bg-white">
+                    <CardContent>
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="text-sm text-zinc-600">
+                          Shortcut actions — use the insight, then come back. (This digest will auto-clear.)
+                        </div>
 
-              <Button variant="secondary" onClick={() => snooze24h(it.id)}>
-                Snooze 24h
-              </Button>
+                        <div className="flex flex-wrap gap-2">
+                          <Button
+                            onClick={async () => {
+                              await autoResolveWithUndo(it, "Digest cleared ✅");
+                              router.push("/decisions?tab=review");
+                            }}
+                          >
+                            Review now
+                          </Button>
 
-              <Button variant="secondary" onClick={() => snooze7d(it.id)}>
-                Snooze 7d
-              </Button>
+                          <Button
+                            variant="secondary"
+                            onClick={async () => {
+                              await autoResolveWithUndo(it, "Digest cleared ✅");
+                              router.push("/engine");
+                            }}
+                          >
+                            Open Engine
+                          </Button>
 
-              <Button variant="secondary" onClick={() => snoozeItemMinutes(it.id, 10)} title="Short snooze (testing / quick defer)">
-                Snooze 10m
-              </Button>
+                          <Button variant="secondary" onClick={() => snooze24h(it.id)}>
+                            Snooze 24h
+                          </Button>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
 
-              {activelySnoozed && (
-                <Button variant="secondary" onClick={() => unsnoozeToOpen(it.id)}>
-                  Unsnooze
-                </Button>
-              )}
+                {/* AI */}
+                <div className="space-y-2">
+                  <Button
+                    variant="secondary"
+                    onClick={() => analyzeItem(it)}
+                    disabled={loading}
+                    title="Get a quick structured view"
+                  >
+                    {loading ? "Analyzing…" : analysis ? "Re-analyze with AI" : "Analyze with AI"}
+                  </Button>
 
-              {(it.status === "done" || it.status === "snoozed") && !activelySnoozed && (
-                <Button variant="secondary" onClick={() => undoToOpen(it.id)}>
-                  Undo → Open
-                </Button>
-              )}
+                  {err && <div className="text-xs text-red-700">AI error: {err}</div>}
 
-              <Button variant="secondary" onClick={() => updateSeverity(it.id, (it.severity ?? 2) - 1)} title="Raise priority (towards 1)">
-                ↑ Priority
-              </Button>
+                  {analysis && (
+                    <Card className="border-sky-200 bg-sky-50">
+                      <CardContent>
+                        <div className="space-y-3">
+                          <div className="text-xs text-zinc-500">AI analysis</div>
 
-              <Button variant="secondary" onClick={() => updateSeverity(it.id, (it.severity ?? 2) + 1)} title="Lower priority (towards 3)">
-                ↓ Priority
-              </Button>
-            </div>
+                          <div className="flex flex-wrap gap-2 text-xs text-zinc-600">
+                            {analysis.decision_type && <span>Type: {analysis.decision_type}</span>}
+                            {analysis.stakes && <span>• Stakes: {analysis.stakes}</span>}
+                            {analysis.reversible != null && (
+                              <span>• Reversible: {analysis.reversible ? "Yes" : "No"}</span>
+                            )}
+                            {analysis.time_horizon && <span>• Horizon: {analysis.time_horizon}</span>}
+                          </div>
 
-            <div className="text-xs text-zinc-500">
-              type: {it.type} • severity: {it.severity ?? 2} • id: {it.id}
-            </div>
+                          {analysis.suggested_default && (
+                            <div className="text-sm">
+                              <strong>Suggested default:</strong> {analysis.suggested_default}
+                            </div>
+                          )}
+
+                          {analysis.reasoning && (
+                            <div className="whitespace-pre-wrap text-sm leading-relaxed">{analysis.reasoning}</div>
+                          )}
+
+                          {Array.isArray(analysis.key_questions) && analysis.key_questions.length > 0 && (
+                            <div className="text-sm">
+                              <strong>Key questions</strong>
+                              <ul className="mt-2 list-disc pl-5">
+                                {analysis.key_questions.map((q: string, idx: number) => (
+                                  <li key={idx} className="mb-1">
+                                    {q}
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  )}
+                </div>
+
+                {/* decision inputs */}
+                <div className="space-y-2">
+                  <div className="text-xs text-zinc-500">How confident do you feel about this?</div>
+
+                  <div className="flex flex-wrap gap-4">
+                    {[1, 2, 3].map((level) => (
+                      <label
+                        key={level}
+                        className={`flex cursor-pointer items-center gap-2 text-sm ${
+                          decisionConfidence[it.id] === level ? "opacity-100" : "opacity-80"
+                        }`}
+                      >
+                        <input
+                          type="radio"
+                          name={`confidence-${it.id}`}
+                          checked={decisionConfidence[it.id] === level}
+                          onChange={() => setDraftConfidence(it.id, level)}
+                        />
+                        {level === 1 ? "Low" : level === 2 ? "Medium" : "High"}
+                      </label>
+                    ))}
+                  </div>
+
+                  <textarea
+                    placeholder="Why did you decide this? (optional)"
+                    value={decisionReason[it.id] ?? ""}
+                    onChange={(e) => setDraftReason(it.id, e.target.value)}
+                    className="w-full min-h-[70px] rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
+                  />
+                </div>
+
+                {/* primary actions */}
+                <div className="flex flex-wrap gap-2">
+                  <Button onClick={() => decideNowAndCloseInboxItem(it)}>Decide now ✅</Button>
+
+                  <Button variant="secondary" onClick={() => promoteInboxItemToDecision(it)}>
+                    Promote → Decisions
+                  </Button>
+
+                  <Button variant="secondary" onClick={() => doneItem(it.id)}>
+                    Done
+                  </Button>
+
+                  <Button variant="secondary" onClick={() => snooze24h(it.id)}>
+                    Snooze 24h
+                  </Button>
+
+                  <Button variant="secondary" onClick={() => snooze7d(it.id)}>
+                    Snooze 7d
+                  </Button>
+
+                  <Button
+                    variant="secondary"
+                    onClick={() => snoozeItemMinutes(it.id, 10)}
+                    title="Short snooze (testing / quick defer)"
+                  >
+                    Snooze 10m
+                  </Button>
+
+                  {activelySnoozed && (
+                    <Button variant="secondary" onClick={() => unsnoozeToOpen(it.id)}>
+                      Unsnooze
+                    </Button>
+                  )}
+
+                  <Button
+                    variant="secondary"
+                    onClick={() => updateSeverity(it.id, (it.severity ?? 2) - 1)}
+                    title="Raise priority (towards Top)"
+                  >
+                    ↑ Priority
+                  </Button>
+
+                  <Button
+                    variant="secondary"
+                    onClick={() => updateSeverity(it.id, (it.severity ?? 2) + 1)}
+                    title="Lower priority (towards Low)"
+                  >
+                    ↓ Priority
+                  </Button>
+
+                  <Button
+                    variant="secondary"
+                    onClick={() => setItemOpen(it.id, false)}
+                    title="Collapse details"
+                  >
+                    Collapse
+                  </Button>
+                </div>
+
+                <div className="text-xs text-zinc-500">
+                  type: {it.type} • severity: {it.severity ?? 2} • id: {it.id}
+                </div>
+              </div>
+            ) : null}
           </div>
         </CardContent>
       </Card>
     );
   };
 
-  const minutesAgoText = !lastLoadedAt ? "" : minutesAgo !== null && minutesAgo < 1 ? "just now" : `${minutesAgo ?? 0}m ago`;
+  const minutesAgoText =
+    !lastLoadedAt ? "" : minutesAgo !== null && minutesAgo < 1 ? "just now" : `${minutesAgo ?? 0}m ago`;
+
+  const badgeVariant = badge.variant;
+
+  // ---------- top bar actions ----------
+  const updateNow = () => loadRef.current({ silent: false });
 
   // ---------- UI ----------
   return (
@@ -1411,16 +1445,16 @@ export default function InboxPage() {
       }
       right={
         <div className="flex items-center gap-2">
-          <Badge variant={badge.variant}>● {badge.text}</Badge>
+          <Badge variant={badgeVariant}>● {badge.text}</Badge>
 
-          <Button onClick={() => loadRef.current({ silent: false })}>Refresh</Button>
+          <Button onClick={updateNow}>Update now</Button>
 
           <Button variant="secondary" onClick={() => router.push("/decisions?tab=review")}>
-            Review now
+            Review bills
           </Button>
 
           <Button variant="secondary" onClick={() => router.push("/engine")}>
-            Insights
+            Run Engine
           </Button>
 
           {process.env.NODE_ENV === "development" && (
@@ -1437,10 +1471,11 @@ export default function InboxPage() {
         </Card>
       )}
 
+      {/* ---- quick capture ---- */}
       <Card>
         <CardContent>
           <div className="space-y-3">
-            <div className="text-sm text-zinc-600">Add something that’s on your mind</div>
+            <div className="text-sm text-zinc-600">Add a quick note</div>
 
             <div className="flex flex-wrap gap-2">
               <input
@@ -1454,27 +1489,30 @@ export default function InboxPage() {
               />
 
               <Button onClick={addManualInboxItem} disabled={adding}>
-                {adding ? "Adding..." : "Add to Inbox"}
+                {adding ? "Adding…" : "Add"}
               </Button>
             </div>
           </div>
         </CardContent>
       </Card>
 
+      {/* ---- sections ---- */}
       <div className="space-y-3">
         <div className="flex items-end justify-between gap-3">
-          <h2 className="m-0 text-lg font-semibold tracking-tight">Due now</h2>
-          <div className="text-xs text-zinc-500">Snoozed items hide until they’re due. Insights are generated from truth — no forecasting.</div>
+          <h2 className="m-0 text-lg font-semibold tracking-tight">What to do next</h2>
+          <div className="text-xs text-zinc-500">
+            Snoozed items hide until they’re due. Recommended items are based on your current inputs — no forecasting.
+          </div>
         </div>
 
         <div className="grid gap-3">
           <SectionHeader
-            title="Insights (Engine v2)"
-            count={buckets.v2.length}
-            description="Higher-signal patterns — based on current truth."
+            title="Recommended"
+            count={buckets.recommended.length}
+            description="Higher-signal nudges & patterns. Use these first if you’re not sure what to do next."
             tone="sky"
-            open={openV2}
-            onToggle={() => setOpenV2((v) => !v)}
+            open={openRecommended}
+            onToggle={() => setOpenRecommended((v) => !v)}
             actions={
               <>
                 <Button variant="secondary" onClick={() => router.push("/engine")} title="Open Engine and run a fresh pass">
@@ -1483,51 +1521,45 @@ export default function InboxPage() {
 
                 <Button
                   variant="secondary"
-                  onClick={dismissAllV2Insights}
-                  disabled={buckets.v2.length === 0}
-                  title="Mark all visible v2 insights as done"
+                  onClick={dismissAllRecommended}
+                  disabled={buckets.recommended.length === 0}
+                  title="Mark all recommended items as done"
                 >
-                  Dismiss digest
+                  Dismiss all
                 </Button>
               </>
             }
           />
-          {openV2 ? (
-            buckets.v2.length ? (
-              <div className="grid gap-2">
-                {buckets.v2.map((it) => (
-                  <ItemRow key={it.id} it={it} />
-                ))}
-              </div>
+
+          {openRecommended ? (
+            buckets.recommended.length ? (
+              buckets.recommended.map(renderItemCard)
             ) : (
               <Card className="bg-white">
                 <CardContent>
-                  <div className="text-sm text-zinc-700">No insights right now.</div>
-                  <div className="text-xs text-zinc-500">Run Engine if you want a fresh pass.</div>
+                  <div className="text-sm text-zinc-700">No recommendations right now.</div>
+                  <div className="text-xs text-zinc-500">You can run Engine if you want a fresh pass.</div>
                 </CardContent>
               </Card>
             )
           ) : null}
 
           <SectionHeader
-            title="Reminders (Engine v1)"
-            count={buckets.v1.length}
-            description="Housekeeping prompts — collapsed by default so you can pick one at a time."
+            title="Maintenance"
+            count={buckets.maintenance.length}
+            description="Housekeeping items. Do these when you have a moment."
             tone="amber"
-            open={openV1}
-            onToggle={() => setOpenV1((v) => !v)}
+            open={openMaintenance}
+            onToggle={() => setOpenMaintenance((v) => !v)}
           />
-          {openV1 ? (
-            buckets.v1.length ? (
-              <div className="grid gap-2">
-                {buckets.v1.map((it) => (
-                  <ItemRow key={it.id} it={it} />
-                ))}
-              </div>
+
+          {openMaintenance ? (
+            buckets.maintenance.length ? (
+              buckets.maintenance.map(renderItemCard)
             ) : (
               <Card className="bg-white">
                 <CardContent>
-                  <div className="text-sm text-zinc-700">No reminders right now.</div>
+                  <div className="text-sm text-zinc-700">Nothing to maintain right now.</div>
                   <div className="text-xs text-zinc-500">Nice and calm ✅</div>
                 </CardContent>
               </Card>
@@ -1535,25 +1567,22 @@ export default function InboxPage() {
           ) : null}
 
           <SectionHeader
-            title="Your Inbox"
-            count={buckets.manual.length}
-            description="What you captured manually."
+            title="My notes"
+            count={buckets.notes.length}
+            description="Things you captured manually. Decide, snooze, or promote to Decisions."
             tone="zinc"
-            open={openManual}
-            onToggle={() => setOpenManual((v) => !v)}
+            open={openNotes}
+            onToggle={() => setOpenNotes((v) => !v)}
           />
-          {openManual ? (
-            buckets.manual.length ? (
-              <div className="grid gap-2">
-                {buckets.manual.map((it) => (
-                  <ItemRow key={it.id} it={it} />
-                ))}
-              </div>
+
+          {openNotes ? (
+            buckets.notes.length ? (
+              buckets.notes.map(renderItemCard)
             ) : (
               <Card className="bg-white">
                 <CardContent>
-                  <div className="text-sm text-zinc-700">Nothing here yet.</div>
-                  <div className="text-xs text-zinc-500">Add a thought above to capture it.</div>
+                  <div className="text-sm text-zinc-700">No notes yet.</div>
+                  <div className="text-xs text-zinc-500">Add something above to capture it.</div>
                 </CardContent>
               </Card>
             )
