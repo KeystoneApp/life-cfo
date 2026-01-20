@@ -1282,14 +1282,18 @@ export default function DecisionsClient() {
             {liveStatus === "live" ? "Live" : liveStatus === "connecting" ? "Connecting…" : "Offline"}
           </Badge>
 
-          <Button onClick={() => load({ silent: false })}>Refresh</Button>
+          <Chip onClick={() => load({ silent: false })} title="Refresh list">
+  Refresh
+</Chip>
 
-          <Button variant="secondary" onClick={() => expandAll(filtered)}>
-            Expand filtered
-          </Button>
-          <Button variant="secondary" onClick={collapseAll}>
-            Collapse all
-          </Button>
+<Chip onClick={() => expandAll(filtered)} title="Expand filtered">
+  Expand filtered
+</Chip>
+
+<Chip onClick={collapseAll} title="Collapse all">
+  Collapse all
+</Chip>
+
 
           <label className="flex items-center gap-2 text-sm text-zinc-600">
             <input type="checkbox" checked={showAIJson} onChange={(e) => setShowAIJson(e.target.checked)} />
@@ -1406,9 +1410,10 @@ export default function DecisionsClient() {
             <div className="flex flex-wrap justify-between gap-3">
               <div className="text-sm text-zinc-600">Filters {activeFiltersCount > 0 ? `• ${activeFiltersCount} active` : ""}</div>
 
-              <Button variant="secondary" onClick={clearFilters} disabled={activeFiltersCount === 0}>
-                Clear
-              </Button>
+              <Chip onClick={clearFilters} disabled={activeFiltersCount === 0}>
+  Clear
+</Chip>
+
             </div>
 
             <div className="flex flex-wrap gap-2">
@@ -1557,16 +1562,16 @@ export default function DecisionsClient() {
 
                           {/* One-click review link (only when due) */}
                           {!isDraft && due && (
-                            <Button
-                              variant="secondary"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                router.push(`/decisions/${d.id}/review`);
-                              }}
-                              title="Open the review form"
-                            >
-                              Review
-                            </Button>
+                            <Chip
+  onClick={(e) => {
+    e.stopPropagation();
+    router.push(`/decisions/${d.id}/review`);
+  }}
+  title="Open the review form"
+>
+  Review
+</Chip>
+
                           )}
                         </div>
 
