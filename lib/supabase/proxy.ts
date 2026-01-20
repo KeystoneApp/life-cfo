@@ -75,7 +75,7 @@ export async function updateSession(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  // If signed in and trying to access /login → send them to next (or inbox)
+  // If signed in and trying to access /login → send them to next (or home)
   if (user && pathname.startsWith("/login")) {
     const url = request.nextUrl.clone();
     const next = url.searchParams.get("next");
