@@ -36,9 +36,10 @@ export function AppShell({ children }: AppShellProps) {
     <div className="min-h-screen bg-white">
       <header className="sticky top-0 z-20 border-b border-zinc-200 bg-white/80 backdrop-blur">
         <div className="mx-auto flex max-w-[900px] flex-wrap items-center justify-between gap-3 p-4">
-          <Link href="/inbox" className="text-sm font-semibold tracking-tight text-zinc-900 no-underline">
+          <Link href="/home" className="text-sm font-semibold tracking-tight text-zinc-900 no-underline">
             Keystone
-          </Link>
+            </Link>
+
 
           <nav className="flex flex-wrap items-center gap-2">
             {nav.map((item) => {
