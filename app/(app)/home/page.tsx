@@ -1794,7 +1794,7 @@ export default function InboxPage() {
               />
 
               <Button onClick={addManualInboxItem} disabled={adding}>
-                {adding ? "Adding…" : "Add note"}
+                {adding ? "Adding…" : "Add"}
               </Button>
             </div>
           </div>
@@ -1859,7 +1859,7 @@ export default function InboxPage() {
               </div>
             ) : (
               <div className="mt-2 text-xs text-zinc-500">
-                {upcomingBills.length === 1 ? "1 bill listed." : `${upcomingBills.length} bills listed.`}
+                {upcomingBills.length === 1 ? "Listed." : `${upcomingBills.length} Listed.`}
               </div>
             )}
           </CardContent>
@@ -1869,15 +1869,15 @@ export default function InboxPage() {
       {/* Sections */}
       <div className="space-y-3">
         <div className="flex items-end justify-between gap-3">
-         <h2 className="m-0 text-lg font-semibold tracking-tight text-zinc-900">Today</h2>
+         <h2 className="m-0 text-lg font-semibold tracking-tight text-zinc-900">Items for review</h2>
 <div className="text-xs text-zinc-500">Snoozed items return automatically.</div>
         </div>
 
         <div className="grid gap-3">
           <SectionHeader
-            title="For you"
+            title="Priority Items"
             count={buckets.recommended.length}
-            description="A few things worth a look."
+            description="Look at these first."
             tone="brand"
             open={openRecommended}
             onToggle={() => setOpenRecommended((v) => !v)}
@@ -1911,9 +1911,9 @@ export default function InboxPage() {
           ) : null}
 
           <SectionHeader
-            title="Checks"
+            title="Housekeeping"
             count={buckets.maintenance.length}
-            description="Small items that keep things running smoothly."
+            description="Quick checks to keep things running smoothly and prevent bigger issues later. Not a priority, do these when you have time."
             tone="brand"
             open={openMaintenance}
             onToggle={() => setOpenMaintenance((v) => !v)}
@@ -1937,7 +1937,7 @@ export default function InboxPage() {
           <SectionHeader
             title="Notes"
             count={buckets.notes.length}
-            description="Things you've captured."
+            description="Things you've captured that you want to come back to."
             tone="brand"
             open={openNotes}
             onToggle={() => setOpenNotes((v) => !v)}
