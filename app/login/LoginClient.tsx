@@ -73,14 +73,11 @@ export default function LoginClient({ nextPath }: { nextPath: string }) {
             K
           </div>
 
-          <h1 className="text-2xl font-semibold tracking-tight">
-            Welcome to Keystone
-          </h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Welcome to Keystone</h1>
 
           <p className="text-sm text-neutral-600 leading-relaxed">
-            Keystone is a values-first decision and money operating system.
-            Capture what matters, make clear decisions, and review them over
-            time — without noise or guilt.
+            Keystone is a values-first decision and money operating system. Capture what matters, make clear decisions,
+            and review them over time — without noise or guilt.
           </p>
         </div>
 
@@ -88,9 +85,7 @@ export default function LoginClient({ nextPath }: { nextPath: string }) {
         <div className="rounded-2xl border border-neutral-200 bg-white shadow-sm p-6">
           <form onSubmit={signIn} className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-neutral-800">
-                Email
-              </label>
+              <label className="block text-sm font-medium text-neutral-800">Email</label>
               <input
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -102,9 +97,7 @@ export default function LoginClient({ nextPath }: { nextPath: string }) {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-neutral-800">
-                Password
-              </label>
+              <label className="block text-sm font-medium text-neutral-800">Password</label>
               <input
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -114,20 +107,28 @@ export default function LoginClient({ nextPath }: { nextPath: string }) {
               />
             </div>
 
-            <button
-              type="submit"
-              className="w-full rounded-xl bg-black text-white py-2.5 font-medium hover:bg-black/90 transition"
-            >
-              Sign in
-            </button>
+            {/* Actions */}
+            <div className="pt-1 space-y-3">
+              <button
+                type="submit"
+                className="w-full inline-flex items-center justify-center rounded-xl bg-black text-white px-4 py-2 text-sm font-medium hover:bg-black/90 transition focus:outline-none focus:ring-2 focus:ring-black/10"
+              >
+                Sign in
+              </button>
 
-            <button
-              type="button"
-              onClick={sendReset}
-              className="w-full rounded-xl border border-neutral-300 bg-white py-2.5 font-medium text-neutral-900 hover:bg-neutral-50 transition"
-            >
-              Forgot password
-            </button>
+              <div className="flex items-center justify-between gap-3">
+                <button
+                  type="button"
+                  onClick={sendReset}
+                  className="inline-flex items-center rounded-full border border-neutral-200 bg-white px-3 py-1 text-sm text-neutral-800 hover:bg-neutral-50 transition focus:outline-none focus:ring-2 focus:ring-black/10"
+                >
+                  Forgot password
+                </button>
+
+                {/* (Optional) tiny hint that reset uses the email above */}
+                <div className="text-xs text-neutral-500">Uses the email above</div>
+              </div>
+            </div>
 
             {status && (
               <div className="rounded-xl bg-neutral-50 border border-neutral-200 p-3 text-sm text-neutral-800">
@@ -138,9 +139,7 @@ export default function LoginClient({ nextPath }: { nextPath: string }) {
         </div>
 
         {/* Footer values line */}
-        <p className="text-center text-xs text-neutral-500">
-          Designed for clarity • Built for long-term thinking
-        </p>
+        <p className="text-center text-xs text-neutral-500">Designed for clarity • Built for long-term thinking</p>
       </div>
     </main>
   );
