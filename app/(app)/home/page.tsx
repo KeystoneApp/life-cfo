@@ -47,7 +47,7 @@ type Bill = {
 };
 
 const SmallButton = ({ className = "", ...props }: ComponentProps<typeof Button>) => (
-  <Button {...props} className={`h-8 px-3 py-1 text-sm ${className}`} />
+  <Button {...props} className={`${className} h-8 px-3 py-1 text-sm`} />
 );
 
 function isoNowPlusMinutes(mins: number) {
@@ -721,11 +721,16 @@ export default function InboxPage() {
     const maintenance: InboxItem[] = [];
     const notes: InboxItem[] = [];
 
-    for (const it of visibleItems) {
-      if (isEngineV2Insight(it)) recommended.push(it);
-      else if (isEngineV1Reminder(it)) maintenance.push(it);
-      else notes.push(it);
-    }
+  for (const it of visibleItems) {
+  if (isEngineV2Insight(it)) {
+    recommended.push(it);
+  } else if (isEngineV1Reminder(it)) {
+    // Hide “all clear” autopay checks from Home
+    if (!isAutopayAllClear(it)) maintenance.push(it);
+  } else {
+    notes.push(it);
+  }
+}
 
     const createdMs = (x: InboxItem) => (x.created_at ? Date.parse(x.created_at) || 0 : 0);
 
