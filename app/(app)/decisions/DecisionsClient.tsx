@@ -1854,17 +1854,6 @@ export default function DecisionsClient() {
                             </Button>
                           </div>
 
-                          {!isDraft && (
-                            <div className="min-w-[260px]">
-                              <NextReviewControls
-                                decisionId={d.id}
-                                onPickDays={(days) => {
-                                  saveReviewNote(d, days);
-                                }}
-                              />
-                              <div className="mt-1 text-xs text-zinc-500">Optional — if not set, overdue bumps +{DEFAULT_REVIEW_BUMP_DAYS}d.</div>
-                            </div>
-                          )}
                         </div>
                       </CardContent>
                     </Card>
