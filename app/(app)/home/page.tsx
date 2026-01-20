@@ -787,7 +787,7 @@ export default function InboxPage() {
 
     setAffirmation(null);
     setAdding(true);
-    setStatusLine("Adding to My Notes...");
+    setStatusLine("Adding...");
 
     try {
       const dedupe_key = `manual_${Date.now()}`;
@@ -1404,10 +1404,10 @@ export default function InboxPage() {
         ? "All clear — nothing due soon."
         : activelySnoozed && it.snoozed_until
           ? `Snoozed until ${formatWhen(it.snoozed_until)}`
-          : isV2
-            ? "A suggestion based on your recent activity."
-            : isV1
-              ? "A quick check that keeps your numbers accurate."
+         : isV2
+  ? "Worth a look when you’re ready."
+  : isV1
+    ? "A quick check to keep things tidy."
               : it.body
                 ? snippet(it.body, 120)
                 : "Note you captured.";
@@ -1431,10 +1431,11 @@ export default function InboxPage() {
 
                   <Badge variant={b.variant}>{b.label}</Badge>
 
-                  {isV2 && <Chip>Recommended</Chip>}
-                  {isV1 && <Chip>Maintenance</Chip>}
-                  {!isV2 && !isV1 && isEng && <Chip>Engine</Chip>}
-                  {!isEng && <Chip>My note</Chip>}
+                  {isV2 && <Chip>For you</Chip>}
+                  {isV1 && <Chip>Check</Chip>}
+                  {!isV2 && !isV1 && isEng && <Chip>Check</Chip>}
+                  {!isEng && <Chip>Note</Chip>}
+
 
                   {activelySnoozed && <Chip>Snoozed</Chip>}
 
@@ -1447,7 +1448,7 @@ export default function InboxPage() {
                       }}
                       title="Review decisions"
                     >
-                      Digest
+                      Review
                     </Chip>
                   )}
                 </div>
@@ -1510,13 +1511,14 @@ export default function InboxPage() {
                     <CardContent>
                       <div className="flex flex-wrap items-center justify-between gap-3">
                         <div className="text-sm text-zinc-700">
-                          Do the review, then come back. (This digest clears itself.)
+                        A few decisions are ready to review.
                         </div>
+
 
                         <div className="flex flex-wrap gap-2">
                           <Button
                             onClick={async () => {
-                              await autoResolveWithUndo(it, "Digest cleared.");
+                              await autoResolveWithUndo(it, "Done.");
                               router.push("/decisions?tab=review");
                             }}
                           >
@@ -1526,7 +1528,7 @@ export default function InboxPage() {
                           <Button
                           variant="secondary"
                            onClick={async () => {
-                           await autoResolveWithUndo(it, "Digest cleared.");
+                           await autoResolveWithUndo(it, "Done.");
                            router.push("/decisions?tab=review");
                            }}
                           >
@@ -1546,11 +1548,11 @@ export default function InboxPage() {
                 <Card className="bg-white">
                   <CardContent>
                     <div className="space-y-3">
-                      <div className="text-sm font-semibold text-zinc-900">Next step</div>
+                     <div className="text-sm font-semibold text-zinc-900">Actions</div>
 
                       <div className="flex flex-wrap items-center gap-2">
                         <Button onClick={() => decideNowAndCloseInboxItem(it)} title="Save a decision and clear this item">
-                          Decide
+                          Save decision
                         </Button>
 
                         <Button variant="secondary" onClick={() => snooze24h(it.id)} title="Hide this until tomorrow">
@@ -1572,8 +1574,8 @@ export default function InboxPage() {
                         )}
                       </div>
 
-                      <div className="text-xs text-zinc-500">
-                        Tip: If you’re not ready, snooze it. If it’s already handled, mark it done.
+                     <div className="text-xs text-zinc-500">
+                      Snooze it if you’re not ready. Mark done if it’s handled.
                       </div>
                     </div>
                   </CardContent>
@@ -1744,18 +1746,12 @@ export default function InboxPage() {
       title="Home"
       subtitle={
         <div className="space-y-1">
-          {email && <div>Signed in as: {email}</div>}
-          <div className="text-zinc-700">{statusLine}</div>
-          {lastLoadedAt && <div className="text-xs text-zinc-500">Updated {minutesAgoText}</div>}
+         {lastLoadedAt && <div className="text-xs text-zinc-500">Updated {minutesAgoText}</div>}
         </div>
       }
       right={
         <div className="flex items-center gap-2">
           <Badge variant={badge.variant}>● {badge.text}</Badge>
-
-          <Button variant="secondary" onClick={updateNow} title="Refresh">
-            Refresh
-          </Button>
 
           <Button variant="secondary" onClick={() => router.push("/decisions?tab=review")}>
             Review decisions
@@ -1774,16 +1770,6 @@ export default function InboxPage() {
           <CardContent className="text-sm text-emerald-900">{affirmation}</CardContent>
         </Card>
       )}
-
-      {/* Orientation */}
-      <Card className="bg-zinc-50">
-        <CardContent>
-          <div className="text-sm text-zinc-700">
-            Start with <strong>Recommended</strong>. If you’re not ready, <strong>Snooze</strong>. If it’s handled,{" "}
-            <strong>mark done</strong>.
-          </div>
-        </CardContent>
-      </Card>
 
       {/* Capture */}
       <Card className="border-zinc-200 bg-white">
@@ -1808,7 +1794,7 @@ export default function InboxPage() {
               />
 
               <Button onClick={addManualInboxItem} disabled={adding}>
-                {adding ? "Adding…" : "Add to My Notes"}
+                {adding ? "Adding…" : "Add note"}
               </Button>
             </div>
           </div>
@@ -1883,15 +1869,15 @@ export default function InboxPage() {
       {/* Sections */}
       <div className="space-y-3">
         <div className="flex items-end justify-between gap-3">
-          <h2 className="m-0 text-lg font-semibold tracking-tight text-zinc-900">What to do next</h2>
-          <div className="text-xs text-zinc-500">Snoozed items come back automatically.</div>
+         <h2 className="m-0 text-lg font-semibold tracking-tight text-zinc-900">Today</h2>
+<div className="text-xs text-zinc-500">Snoozed items return automatically.</div>
         </div>
 
         <div className="grid gap-3">
           <SectionHeader
-            title="Recommended"
+            title="For you"
             count={buckets.recommended.length}
-            description="These are the most useful things to look at right now."
+            description="A few things worth a look."
             tone="brand"
             open={openRecommended}
             onToggle={() => setOpenRecommended((v) => !v)}
@@ -1916,7 +1902,7 @@ export default function InboxPage() {
               ) : (
                 <Card className="bg-white">
                   <CardContent>
-                    <div className="text-sm text-zinc-700">No recommendations right now.</div>
+                    <div className="text-sm text-zinc-700">You’re up to date.</div>
                     <div className="text-xs text-zinc-500">Updated {minutesAgoText}.</div>
                   </CardContent>
                 </Card>
@@ -1925,9 +1911,9 @@ export default function InboxPage() {
           ) : null}
 
           <SectionHeader
-            title="Maintenance"
+            title="Checks"
             count={buckets.maintenance.length}
-            description="Quick checks that prevent bigger issues later."
+            description="Small items that keep things running smoothly."
             tone="brand"
             open={openMaintenance}
             onToggle={() => setOpenMaintenance((v) => !v)}
@@ -1940,8 +1926,8 @@ export default function InboxPage() {
               ) : (
                 <Card className="bg-white">
                   <CardContent>
-                    <div className="text-sm text-zinc-700">Nothing to maintain right now.</div>
-                    <div className="text-xs text-zinc-500">All up to date.</div>
+                    <div className="text-sm text-zinc-700">All clear.</div>
+                    <div className="text-xs text-zinc-500">Nothing needs attention.</div>
                   </CardContent>
                 </Card>
               )}
@@ -1949,9 +1935,9 @@ export default function InboxPage() {
           ) : null}
 
           <SectionHeader
-            title="My Notes"
+            title="Notes"
             count={buckets.notes.length}
-            description="Things you captured. Decide, snooze, or promote to Decisions."
+            description="Things you've captured."
             tone="brand"
             open={openNotes}
             onToggle={() => setOpenNotes((v) => !v)}
