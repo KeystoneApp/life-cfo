@@ -47,7 +47,7 @@ type Bill = {
 };
 
 const SmallButton = ({ className = "", ...props }: ComponentProps<typeof Button>) => (
-  <Button {...props} className={`${className} h-8 px-3 py-1 text-sm`} />
+  <Button size="sm" {...props} className={className} />
 );
 
 function isoNowPlusMinutes(mins: number) {
