@@ -1,8 +1,5 @@
-// app/(app)/inbox/page.tsx
+// app/(app)/home/page.tsx
 "use client";
-
-export const dynamic = "force-dynamic";
-export const revalidate = 0;
 
 import { ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -10,6 +7,8 @@ import { supabase } from "@/lib/supabaseClient";
 import { Badge, Button, Card, CardContent, useToast, Chip } from "@/components/ui";
 import { Page } from "@/components/Page";
 import type { ComponentProps } from "react";
+
+export const dynamic = "force-dynamic";
 
 // ---- CONFIG ----
 const PROMOTED_STATUS: "decided" | "draft" = "decided";
@@ -47,11 +46,8 @@ type Bill = {
   updated_at: string | null;
 };
 
-const SmallButton = (props: ComponentProps<typeof Button>) => (
-  <SmallButton
-    {...props}
-    className={`h-8 px-3 py-1 text-sm ${props.className ?? ""}`}
-  />
+const SmallButton = ({ className = "", ...props }: ComponentProps<typeof Button>) => (
+  <Button {...props} className={`h-8 px-3 py-1 text-sm ${className}`} />
 );
 
 function isoNowPlusMinutes(mins: number) {
