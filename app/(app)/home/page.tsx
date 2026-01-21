@@ -118,17 +118,20 @@ export default function HomePage() {
 
           {/* Orientation (AI conclusions) — separate; never competes with input */}
         {orientation.item?.text ? (
-          <button
-            type="button"
-            disabled={!orientation.item?.href}
-            onClick={orientation.item?.href ? onOrientationClick : undefined}
-            className={`w-full text-left text-[15px] leading-relaxed text-zinc-800 ${
-              orientation.item?.href ? "cursor-pointer hover:text-zinc-900" : "cursor-default"
-            }`}
-            aria-label="Orientation"
-          >
-            {orientation.item.text}
-          </button>
+<button
+  type="button"
+  disabled={!orientation.item?.href}
+  onClick={onOrientationClick}
+  className={`w-full text-left text-[15px] leading-relaxed text-zinc-800 ${
+    orientation.item?.href
+      ? "cursor-pointer hover:text-zinc-900"
+      : "cursor-default opacity-70"
+  }`}
+  aria-label="Orientation"
+>
+  {orientation.item.text}
+</button>
+
         ) : null}
       </div>
     </Page>
