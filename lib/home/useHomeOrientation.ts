@@ -6,9 +6,7 @@ import { supabase } from "@/lib/supabaseClient";
 
 export type HomeOrientationItem = {
   text: string;
-  // Optional navigation away from Home (no inline expansion)
   href?: string | null;
-  // Optional stable key for dedupe/updates
   dedupe_key?: string | null;
 };
 
@@ -37,17 +35,9 @@ export function useHomeOrientation(opts: UseHomeOrientationOptions) {
     let mounted = true;
 
     const load = async () => {
-      /**
-       * V1 strategy (quiet + minimal):
-       * Look for a single, precomputed Engine conclusion row in decision_inbox:
-       * - type = 'engine'
-       * - dedupe_key = 'home_orientation_v1'
-       *
-       * If not present, show nothing (silence is valid).
-       */
       const { data, error } = await supabase
         .from("decision_inbox")
-        .select("title, body, action_href, dedupe_key, created_at")
+        .select("title, body, action_href, dedupe_key, created_at, status, snoozed_until")
         .eq("user_id", userId)
         .eq("type", "engine")
         .eq("dedupe_key", "home_orientation_v1")
@@ -63,7 +53,12 @@ export function useHomeOrientation(opts: UseHomeOrientationOptions) {
 
       const row = data[0] as any;
 
-      // Orientation should be one calm sentence. Prefer title; fall back to first line of body.
+      // If it exists but is done/snoozed, treat as absent (Home should rest)
+      if (row?.status === "done") {
+        setItem(null);
+        return;
+      }
+
       const textRaw =
         (typeof row.title === "string" && row.title.trim()) ||
         (typeof row.body === "string" && row.body.trim().split("\n")[0]) ||
@@ -84,7 +79,6 @@ export function useHomeOrientation(opts: UseHomeOrientationOptions) {
 
     void load();
 
-    // Optional realtime refresh, but still calm: just replace the one sentence if it changes.
     const channel = supabase
       .channel(`home-orientation-${userId}`)
       .on(

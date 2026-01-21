@@ -116,13 +116,14 @@ export default function HomePage() {
           ) : null}
         </div>
 
-        {/* Orientation (AI conclusions) — separate; never competes with input */}
+          {/* Orientation (AI conclusions) — separate; never competes with input */}
         {orientation.item?.text ? (
           <button
             type="button"
-            onClick={onOrientationClick}
+            disabled={!orientation.item?.href}
+            onClick={orientation.item?.href ? onOrientationClick : undefined}
             className={`w-full text-left text-[15px] leading-relaxed text-zinc-800 ${
-              orientation.item.href ? "cursor-pointer hover:text-zinc-900" : "cursor-default"
+              orientation.item?.href ? "cursor-pointer hover:text-zinc-900" : "cursor-default"
             }`}
             aria-label="Orientation"
           >
