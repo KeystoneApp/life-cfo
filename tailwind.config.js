@@ -5,9 +5,8 @@ module.exports = {
     "./app/**/*.{js,ts,jsx,tsx}",
     "./components/**/*.{js,ts,jsx,tsx}",
     "./src/**/*.{js,ts,jsx,tsx}",
-    // If you ever use Tailwind classes in these, uncomment:
-    // "./lib/**/*.{js,ts,jsx,tsx}",
-    // "./styles/**/*.{css}",
+    "./lib/**/*.{js,ts,jsx,tsx}",
+    "./styles/**/*.{css}",
   ],
   theme: {
     extend: {

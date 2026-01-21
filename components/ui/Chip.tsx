@@ -23,7 +23,7 @@ export function Chip({ className, active = false, ...props }: ChipProps) {
     "inline-flex select-none items-center rounded-full border px-3 py-1 text-sm transition",
     active
       ? "border-brand-teal bg-brand-teal text-white"
-      : "border-neutral-border bg-neutral-surface text-neutral-text-2 hover:bg-neutral-bg",
+      : "border-neutral-border bg-neutral-surface text-neutral-text-2 hover:bg-neutral-bg hover:border-brand-aqua/40",
     "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-aqua/30 focus-visible:ring-offset-2",
     className
   );

@@ -19,6 +19,5 @@ button {
 
 body {
   margin: 0;
-  background: rgb(250 250 250);
-  color: rgb(24 24 27);
+  @apply bg-neutral-bg text-neutral-text;
 }

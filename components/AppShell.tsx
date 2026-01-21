@@ -48,25 +48,47 @@ export function AppShell({ children }: AppShellProps) {
     <div className="min-h-screen bg-white">
       <header className="sticky top-0 z-20 border-b border-zinc-200 bg-white/80 backdrop-blur">
         <div className="mx-auto flex max-w-[900px] flex-wrap items-center justify-between gap-3 p-4">
-          <Link href="/home" className="text-sm font-semibold tracking-tight text-zinc-900 no-underline">
+          <Link
+            href="/home"
+            className="text-sm font-semibold tracking-tight text-zinc-900 no-underline"
+          >
             Keystone
           </Link>
 
-          <nav className="flex flex-wrap items-center gap-2">
-            {lifecycleNav.map((item) => (
-              <Link key={item.href} href={item.href} className="no-underline">
-                <Chip active={isActive(item.href)}>{item.label}</Chip>
-              </Link>
-            ))}
+          <nav className="flex flex-wrap items-center gap-2" aria-label="Primary navigation">
+            {lifecycleNav.map((item) => {
+              const active = isActive(item.href);
+              return (
+                <Link key={item.href} href={item.href} className="no-underline">
+                  <Chip
+                    active={active}
+                    aria-current={active ? "page" : undefined}
+                  >
+                    {item.label}
+                  </Chip>
+                </Link>
+              );
+            })}
 
             {/* subtle separation between lifecycle and inputs */}
-            <span className="mx-1 h-5 w-px bg-zinc-200" aria-hidden="true" />
+            <span
+              className="mx-1 h-5 w-px bg-zinc-200"
+              aria-hidden="true"
+            />
 
-            {inputsNav.map((item) => (
-              <Link key={item.href} href={item.href} className="no-underline">
-                <Chip active={isActive(item.href)}>{item.label}</Chip>
-              </Link>
-            ))}
+            {inputsNav.map((item) => {
+              const active = isActive(item.href);
+              return (
+                <Link key={item.href} href={item.href} className="no-underline">
+                  <Chip
+                    active={active}
+                    aria-current={active ? "page" : undefined}
+                  >
+                    {item.label}
+                  </Chip>
+                </Link>
+              );
+            })}
           </nav>
 
           <div className="flex items-center gap-2">
