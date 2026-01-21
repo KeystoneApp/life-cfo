@@ -15,16 +15,28 @@ export function AppShell({ children }: AppShellProps) {
   const pathname = usePathname();
   const router = useRouter();
 
-  const nav = [
-// Home is the main entry point. /inbox remains as an internal alias.
+  // Home is the main entry point. /inbox remains as an internal alias.
+  const lifecycleNav = [
     { href: "/home", label: "Home" },
     { href: "/capture", label: "Capture" },
+    { href: "/thinking", label: "Thinking" },
     { href: "/decisions", label: "Decisions" },
+    { href: "/revisit", label: "Revisit" },
+    { href: "/chapters", label: "Chapters" },
+  ];
+
+  // Inputs (feed Home; not the experience)
+  const inputsNav = [
     { href: "/accounts", label: "Accounts" },
     { href: "/bills", label: "Bills" },
     { href: "/income", label: "Income" },
+    { href: "/investments", label: "Investments" },
     // Engine intentionally removed from nav (UI-only)
   ];
+
+  const isActive = (href: string) => {
+    return pathname === href || (href !== "/" && pathname?.startsWith(href));
+  };
 
   const signOut = async () => {
     await supabase.auth.signOut();
@@ -38,19 +50,23 @@ export function AppShell({ children }: AppShellProps) {
         <div className="mx-auto flex max-w-[900px] flex-wrap items-center justify-between gap-3 p-4">
           <Link href="/home" className="text-sm font-semibold tracking-tight text-zinc-900 no-underline">
             Keystone
-            </Link>
-
+          </Link>
 
           <nav className="flex flex-wrap items-center gap-2">
-            {nav.map((item) => {
-              const active = pathname === item.href || (item.href !== "/" && pathname?.startsWith(item.href));
+            {lifecycleNav.map((item) => (
+              <Link key={item.href} href={item.href} className="no-underline">
+                <Chip active={isActive(item.href)}>{item.label}</Chip>
+              </Link>
+            ))}
 
-              return (
-                <Link key={item.href} href={item.href} className="no-underline">
-                  <Chip active={active}>{item.label}</Chip>
-                </Link>
-              );
-            })}
+            {/* subtle separation between lifecycle and inputs */}
+            <span className="mx-1 h-5 w-px bg-zinc-200" aria-hidden="true" />
+
+            {inputsNav.map((item) => (
+              <Link key={item.href} href={item.href} className="no-underline">
+                <Chip active={isActive(item.href)}>{item.label}</Chip>
+              </Link>
+            ))}
           </nav>
 
           <div className="flex items-center gap-2">
