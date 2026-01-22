@@ -43,6 +43,7 @@ export function ConversationPanel(props: {
   const [addSummaryStatus, setAddSummaryStatus] = useState<string>("");
 
   const endRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
 
   const decisionStatement = useMemo(() => frame?.decision_statement ?? "", [frame]);
 
@@ -107,9 +108,24 @@ export function ConversationPanel(props: {
     };
   }, [decisionId]);
 
-  // Autoscroll
+  // Focus input without scrolling the page (prevents the "jump to bottom" issue)
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth" });
+    const t = window.setTimeout(() => {
+      // preventScroll is supported in modern browsers; TS types may not include it everywhere
+      try {
+        (inputRef.current as any)?.focus?.({ preventScroll: true });
+      } catch {
+        inputRef.current?.focus();
+      }
+    }, 0);
+
+    return () => window.clearTimeout(t);
+  }, [decisionId]);
+
+  // Autoscroll the message list container to bottom (NOT the whole page)
+  useEffect(() => {
+    // Use "instant" behavior to avoid page-feel jank; container is already scrollable
+    endRef.current?.scrollIntoView({ behavior: "auto", block: "end" });
   }, [messages.length]);
 
   const persist = async (next: Msg[]) => {
@@ -180,7 +196,10 @@ export function ConversationPanel(props: {
         return;
       }
 
-      const after: Msg[] = [...next, { role: "assistant" as const, content: assistantText, at: new Date().toISOString() }];
+      const after: Msg[] = [
+        ...next,
+        { role: "assistant" as const, content: assistantText, at: new Date().toISOString() },
+      ];
       setMessages(after);
       setStatus("");
       void persist(after);
@@ -296,7 +315,9 @@ export function ConversationPanel(props: {
             {loading ? <div className="text-sm text-zinc-600">Loading…</div> : null}
 
             {!loading && messages.length === 0 ? (
-              <div className="text-sm text-zinc-600">Start anywhere. Keystone will keep this conversation with the decision.</div>
+              <div className="text-sm text-zinc-600">
+                Start anywhere. Keystone will keep this conversation with the decision.
+              </div>
             ) : null}
 
             {messages.map((m, idx) => (
@@ -313,6 +334,7 @@ export function ConversationPanel(props: {
             {status ? <div className="text-xs text-zinc-500">{status}</div> : null}
 
             <textarea
+              ref={inputRef}
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               rows={3}
@@ -366,10 +388,7 @@ export function ConversationPanel(props: {
                 <div className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-800">{summaryText}</div>
 
                 <div className="flex flex-wrap items-center gap-2 pt-1">
-                  <Chip
-                    onClick={addSummaryToDecision}
-                    title="Add this summary to the decision (explicit consent)"
-                  >
+                  <Chip onClick={addSummaryToDecision} title="Add this summary to the decision (explicit consent)">
                     {addingSummary ? "Adding…" : addedSummary ? "Added" : "Add summary to decision"}
                   </Chip>
 
