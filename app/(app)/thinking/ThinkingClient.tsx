@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { Page } from "@/components/Page";
 import { Chip, Card, CardContent, useToast } from "@/components/ui";
+import { ConversationPanel } from "./ConversationPanel";
 
 export const dynamic = "force-dynamic";
 
@@ -45,6 +46,7 @@ export default function ThinkingClient() {
   const [statusLine, setStatusLine] = useState<string>("Loading…");
   const [drafts, setDrafts] = useState<Decision[]>([]);
   const [openId, setOpenId] = useState<string | null>(null);
+  const [chatForId, setChatForId] = useState<string | null>(null);
 
   const loadRef = useRef<(opts?: { silent?: boolean }) => void>(() => {});
   const reloadTimerRef = useRef<number | null>(null);
@@ -105,6 +107,15 @@ export default function ThinkingClient() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Close chat when focus changes (safe because conversation is persisted)
+  useEffect(() => {
+    setChatForId((cur) => {
+      if (!cur) return null;
+      if (!openId) return null;
+      return cur === openId ? cur : null;
+    });
+  }, [openId]);
+
   // Realtime: draft decisions
   useEffect(() => {
     if (!userId) return;
@@ -133,6 +144,7 @@ export default function ThinkingClient() {
             // DELETE
             if (eventType === "DELETE") {
               if (openId === id) setOpenId(null);
+              if (chatForId === id) setChatForId(null);
               return current.filter((d) => d.id !== id);
             }
 
@@ -140,6 +152,7 @@ export default function ThinkingClient() {
             if (!isDraft) {
               // If it stopped being a draft, remove it from this page
               if (openId === id) setOpenId(null);
+              if (chatForId === id) setChatForId(null);
               return current.filter((d) => d.id !== id);
             }
 
@@ -157,7 +170,9 @@ export default function ThinkingClient() {
             const patch = toDecision(next ?? prev);
 
             const exists = current.some((d) => d.id === patch.id);
-            const merged = exists ? current.map((d) => (d.id === patch.id ? { ...d, ...patch } : d)) : [patch, ...current];
+            const merged = exists
+              ? current.map((d) => (d.id === patch.id ? { ...d, ...patch } : d))
+              : [patch, ...current];
 
             merged.sort((a, b) => {
               const ta = safeMs(a.created_at) ?? 0;
@@ -175,7 +190,7 @@ export default function ThinkingClient() {
       supabase.removeChannel(channel);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userId, openId]);
+  }, [userId, openId, chatForId]);
 
   const decideNow = async (d: Decision) => {
     if (!userId) return;
@@ -183,6 +198,7 @@ export default function ThinkingClient() {
     // Optimistic UI: remove immediately
     setDrafts((prev) => prev.filter((x) => x.id !== d.id));
     if (openId === d.id) setOpenId(null);
+    if (chatForId === d.id) setChatForId(null);
 
     const { error } = await supabase
       .from("decisions")
@@ -248,8 +264,14 @@ export default function ThinkingClient() {
     const prev = drafts;
     setDrafts((p) => p.filter((x) => x.id !== d.id));
     if (openId === d.id) setOpenId(null);
+    if (chatForId === d.id) setChatForId(null);
 
-    const { error } = await supabase.from("decisions").delete().eq("id", d.id).eq("user_id", userId).eq("status", "draft");
+    const { error } = await supabase
+      .from("decisions")
+      .delete()
+      .eq("id", d.id)
+      .eq("user_id", userId)
+      .eq("status", "draft");
 
     if (error) {
       showToast({ message: `Couldn’t delete: ${error.message}` }, 3500);
@@ -289,7 +311,9 @@ export default function ThinkingClient() {
             <CardContent>
               <div className="space-y-2">
                 <div className="text-sm font-semibold text-zinc-900">All clear.</div>
-                <div className="text-sm text-zinc-600">When something needs thinking time, it can live here without pressure.</div>
+                <div className="text-sm text-zinc-600">
+                  When something needs thinking time, it can live here without pressure.
+                </div>
               </div>
             </CardContent>
           </Card>
@@ -297,13 +321,18 @@ export default function ThinkingClient() {
           <div className="grid gap-3">
             {drafts.map((d) => {
               const isOpen = openId === d.id;
+              const isChatOpen = chatForId === d.id;
 
               return (
                 <Card key={d.id} className="border-zinc-200 bg-white">
                   <CardContent>
                     <button
                       type="button"
-                      onClick={() => setOpenId(isOpen ? null : d.id)}
+                      onClick={() => {
+                        const nextOpen = isOpen ? null : d.id;
+                        setOpenId(nextOpen);
+                        if (nextOpen !== d.id) setChatForId(null);
+                      }}
                       className="w-full text-left"
                       aria-expanded={isOpen}
                       title={isOpen ? "Collapse" : "Open"}
@@ -353,10 +382,28 @@ export default function ThinkingClient() {
                             Delete
                           </Chip>
 
+                          <Chip
+                            onClick={() => setChatForId((cur) => (cur === d.id ? null : d.id))}
+                            title="Have a conversation with Keystone about this decision"
+                          >
+                            {isChatOpen ? "Hide chat" : "Talk this through"}
+                          </Chip>
+
                           <Chip onClick={() => router.push("/home")} title="Return to Home">
                             Put this down
                           </Chip>
                         </div>
+
+                        {isChatOpen ? (
+                          <div className="pt-2">
+                            <ConversationPanel
+                              decisionId={d.id}
+                              decisionTitle={d.title}
+                              frame={{ decision_statement: d.title }}
+                              onClose={() => setChatForId(null)}
+                            />
+                          </div>
+                        ) : null}
                       </div>
                     ) : null}
                   </CardContent>
@@ -366,7 +413,6 @@ export default function ThinkingClient() {
           </div>
         )}
 
-        {/* little dev-only sanity detail */}
         {process.env.NODE_ENV === "development" && openDraft ? (
           <div className="text-xs text-zinc-400">openId: {openDraft.id}</div>
         ) : null}
