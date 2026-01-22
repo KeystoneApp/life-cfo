@@ -54,6 +54,7 @@ export default function ThinkingClient() {
   const openFromQuery = searchParams.get("open");
 
   const [highlightId, setHighlightId] = useState<string | null>(null);
+  const [didAutoOpen, setDidAutoOpen] = useState(false);
 
   const [userId, setUserId] = useState<string | null>(null);
   const [statusLine, setStatusLine] = useState<string>("Loading…");
@@ -124,30 +125,51 @@ export default function ThinkingClient() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Auto-open draft from query (?open=...)
-useEffect(() => {
-  if (!openFromQuery) return;
-  if (drafts.length === 0) return;
+  // Auto-open draft from query (?open=...) exactly once.
+  useEffect(() => {
+    if (didAutoOpen) return;
+    if (!openFromQuery) return;
+    if (drafts.length === 0) return;
 
-  const match = drafts.find((d) => d.id === openFromQuery);
-  if (!match) return;
+    const match = drafts.find((d) => d.id === openFromQuery);
+    if (!match) return;
 
-  setOpenId(match.id);
-  setHighlightId(match.id);
+    setOpenId(match.id);
+    setChatForId(null);
+    setHighlightId(match.id);
+    setDidAutoOpen(true);
 
-  // Clear highlight after a moment
-  const t = window.setTimeout(() => setHighlightId(null), 1600);
-  return () => window.clearTimeout(t);
-}, [openFromQuery, drafts]);
+    // Calmly clear the query param so refresh doesn't keep re-opening
+    router.replace("/thinking");
 
-// Keep chat only for the open card
-useEffect(() => {
-  setChatForId((cur) => {
-    if (!cur) return null;
-    if (!openId) return null;
-    return cur === openId ? cur : null;
-  });
-}, [openId]);
+    // Clear highlight after a moment
+    const t = window.setTimeout(() => setHighlightId(null), 1600);
+    return () => window.clearTimeout(t);
+  }, [didAutoOpen, openFromQuery, drafts, router]);
+
+  // Scroll the opened card into view (calm, one-time)
+  useEffect(() => {
+    if (!didAutoOpen) return;
+    if (!openFromQuery) return;
+    if (openId !== openFromQuery) return;
+
+    // Give the DOM a tick to render the expanded card
+    const t = window.setTimeout(() => {
+      const el = document.getElementById(`decision-${openFromQuery}`);
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 60);
+
+    return () => window.clearTimeout(t);
+  }, [didAutoOpen, openFromQuery, openId]);
+
+  // Keep chat only for the open card
+  useEffect(() => {
+    setChatForId((cur) => {
+      if (!cur) return null;
+      if (!openId) return null;
+      return cur === openId ? cur : null;
+    });
+  }, [openId]);
 
   // Load summaries for the open draft (capped; no lists)
   useEffect(() => {
@@ -238,7 +260,9 @@ useEffect(() => {
             const patch = toDecision(next ?? prev);
 
             const exists = current.some((d) => d.id === patch.id);
-            const merged = exists ? current.map((d) => (d.id === patch.id ? { ...d, ...patch } : d)) : [patch, ...current];
+            const merged = exists
+              ? current.map((d) => (d.id === patch.id ? { ...d, ...patch } : d))
+              : [patch, ...current];
 
             merged.sort((a, b) => {
               const ta = safeMs(a.created_at) ?? 0;
@@ -379,7 +403,9 @@ useEffect(() => {
             <CardContent>
               <div className="space-y-2">
                 <div className="text-sm font-semibold text-zinc-900">All clear.</div>
-                <div className="text-sm text-zinc-600">When something needs thinking time, it can live here without pressure.</div>
+                <div className="text-sm text-zinc-600">
+                  When something needs thinking time, it can live here without pressure.
+                </div>
               </div>
             </CardContent>
           </Card>
@@ -391,10 +417,9 @@ useEffect(() => {
 
               return (
                 <Card
-                   key={d.id}
-                   className={`border-zinc-200 bg-white transition ${
-                    highlightId === d.id ? "ring-2 ring-zinc-300" : ""
-                   }`}
+                  key={d.id}
+                  id={`decision-${d.id}`}
+                  className={`border-zinc-200 bg-white transition ${highlightId === d.id ? "ring-2 ring-zinc-300" : ""}`}
                 >
                   <CardContent>
                     <button
@@ -427,8 +452,9 @@ useEffect(() => {
                     {isOpen ? (
                       <div className="mt-4 space-y-4">
                         {d.origin === "framing" ? (
-                      <div className="mt-1 text-xs text-zinc-500">Prepared in Framing.</div>
+                          <div className="mt-1 text-xs text-zinc-500">Prepared in Framing.</div>
                         ) : null}
+
                         {d.context ? (
                           <div className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-700">{d.context}</div>
                         ) : (
