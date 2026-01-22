@@ -16,14 +16,16 @@ export function AppShell({ children }: AppShellProps) {
   const router = useRouter();
 
   // Home is the main entry point. /inbox remains as an internal alias.
-  const lifecycleNav = [
-    { href: "/home", label: "Home" },
-    { href: "/capture", label: "Capture" },
-    { href: "/thinking", label: "Thinking" },
-    { href: "/decisions", label: "Decisions" },
-    { href: "/revisit", label: "Revisit" },
-    { href: "/chapters", label: "Chapters" },
-  ];
+const lifecycleNav = [
+  { href: "/home", label: "Home" },
+  { href: "/capture", label: "Capture" },
+  { href: "/framing", label: "Framing" }, // 👈 new, intentional gate
+  { href: "/thinking", label: "Thinking" },
+  { href: "/decisions", label: "Decisions" },
+  { href: "/revisit", label: "Revisit" },
+  { href: "/chapters", label: "Chapters" },
+];
+
 
   // Inputs (feed Home; not the experience)
   const inputsNav = [
