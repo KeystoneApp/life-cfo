@@ -37,6 +37,11 @@ export function ConversationPanel(props: {
   const [summaryText, setSummaryText] = useState<string>("");
   const [summaryStatus, setSummaryStatus] = useState<string>("");
 
+  // Consent step: add summary to decision
+  const [addingSummary, setAddingSummary] = useState<boolean>(false);
+  const [addedSummary, setAddedSummary] = useState<boolean>(false);
+  const [addSummaryStatus, setAddSummaryStatus] = useState<string>("");
+
   const endRef = useRef<HTMLDivElement | null>(null);
 
   const decisionStatement = useMemo(() => frame?.decision_statement ?? "", [frame]);
@@ -141,6 +146,8 @@ export function ConversationPanel(props: {
     // New message invalidates any prior summary preview
     setSummaryText("");
     setSummaryStatus("");
+    setAddedSummary(false);
+    setAddSummaryStatus("");
 
     try {
       setStatus("Thinking…");
@@ -159,7 +166,6 @@ export function ConversationPanel(props: {
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
         const errMsg = json?.error ? String(json.error) : "AI request failed.";
-
         if (isQuotaError(res.status, errMsg)) {
           setStatus("AI is paused right now (quota/billing). Your conversation is still saved.");
         } else {
@@ -197,6 +203,8 @@ export function ConversationPanel(props: {
     setSummarising(true);
     setSummaryText("");
     setSummaryStatus("Summarising…");
+    setAddedSummary(false);
+    setAddSummaryStatus("");
 
     try {
       const res = await fetch("/api/ai/conversation", {
@@ -213,7 +221,6 @@ export function ConversationPanel(props: {
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
         const errMsg = json?.error ? String(json.error) : "Summary failed.";
-
         if (isQuotaError(res.status, errMsg)) {
           setSummaryStatus("AI summaries are paused right now (quota/billing). Your conversation is still saved.");
         } else {
@@ -234,6 +241,37 @@ export function ConversationPanel(props: {
       setSummaryStatus(e?.message ?? "Summary failed.");
     } finally {
       setSummarising(false);
+    }
+  };
+
+  const addSummaryToDecision = async () => {
+    if (!userId) {
+      setAddSummaryStatus("Not signed in.");
+      return;
+    }
+    if (!summaryText.trim()) return;
+    if (addingSummary) return;
+
+    setAddingSummary(true);
+    setAddSummaryStatus("");
+    try {
+      const { error } = await supabase.from("decision_summaries").insert({
+        user_id: userId,
+        decision_id: decisionId,
+        summary_text: summaryText.trim(),
+      });
+
+      if (error) {
+        setAddSummaryStatus(`Couldn’t add summary: ${error.message}`);
+        return;
+      }
+
+      setAddedSummary(true);
+      setAddSummaryStatus("Added to decision.");
+    } catch (e: any) {
+      setAddSummaryStatus(e?.message ?? "Couldn’t add summary.");
+    } finally {
+      setAddingSummary(false);
     }
   };
 
@@ -316,6 +354,8 @@ export function ConversationPanel(props: {
                     onClick={() => {
                       setSummaryText("");
                       setSummaryStatus("");
+                      setAddedSummary(false);
+                      setAddSummaryStatus("");
                     }}
                     title="Dismiss preview"
                   >
@@ -325,8 +365,19 @@ export function ConversationPanel(props: {
 
                 <div className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-800">{summaryText}</div>
 
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <Chip
+                    onClick={addSummaryToDecision}
+                    title="Add this summary to the decision (explicit consent)"
+                  >
+                    {addingSummary ? "Adding…" : addedSummary ? "Added" : "Add summary to decision"}
+                  </Chip>
+
+                  {addSummaryStatus ? <div className="text-xs text-zinc-500">{addSummaryStatus}</div> : null}
+                </div>
+
                 <div className="pt-1 text-xs text-zinc-500">
-                  Next: “Add summary to decision” (explicit consent) — coming next.
+                  This creates a durable summary entry for this decision. It can be used later for search and recall.
                 </div>
               </div>
             ) : null}
