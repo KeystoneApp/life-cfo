@@ -8,6 +8,13 @@ import { Card, CardContent, Chip } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
 
+type AttachmentMeta = {
+  name: string;
+  path: string; // storage path inside bucket
+  type: string;
+  size: number;
+};
+
 type Decision = {
   id: string;
   user_id: string;
@@ -21,6 +28,8 @@ type Decision = {
   review_notes: string | null;
   review_history: any[] | null;
   reviewed_at?: string | null;
+
+  attachments: AttachmentMeta[] | null; // ✅ decisions.attachments (jsonb)
 };
 
 const SOON_DAYS = 7;
@@ -66,6 +75,24 @@ function toDateInputValue(iso: string | null) {
   return `${yyyy}-${mm}-${dd}`;
 }
 
+function softKB(bytes?: number | null) {
+  if (!bytes || bytes <= 0) return "";
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+function normalizeAttachments(raw: any): AttachmentMeta[] {
+  if (!raw) return [];
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((a) => a && typeof a.path === "string")
+    .map((a) => ({
+      name: typeof a.name === "string" ? a.name : "Attachment",
+      path: String(a.path),
+      type: typeof a.type === "string" ? a.type : "application/octet-stream",
+      size: typeof a.size === "number" ? a.size : 0,
+    }));
+}
+
 type LastUndo = {
   label: string;
   decisionId: string;
@@ -83,6 +110,10 @@ export default function RevisitClient() {
 
   const [lastUndo, setLastUndo] = useState<LastUndo | null>(null);
 
+  // signed url cache (path -> signedUrl)
+  const [signed, setSigned] = useState<Record<string, string>>({});
+  const signingRef = useRef<Record<string, boolean>>({});
+
   // throttle / reload protection
   const isMountedRef = useRef(true);
   const inFlightRef = useRef(false);
@@ -90,6 +121,37 @@ export default function RevisitClient() {
   const queuedRefetchRef = useRef(false);
 
   const openItem = useMemo(() => items.find((x) => x.id === openId) ?? null, [items, openId]);
+
+  const openAttachments = useMemo(() => {
+    if (!openItem) return [];
+    return normalizeAttachments(openItem.attachments);
+  }, [openItem?.id, openItem?.attachments]);
+
+  const ensureSignedUrl = async (path: string) => {
+    if (!path) return null;
+    if (signed[path]) return signed[path];
+    if (signingRef.current[path]) return null;
+
+    signingRef.current[path] = true;
+    try {
+      const { data, error } = await supabase.storage.from("captures").createSignedUrl(path, 60 * 10);
+      if (error || !data?.signedUrl) return null;
+
+      setSigned((prev) => ({ ...prev, [path]: data.signedUrl }));
+      return data.signedUrl;
+    } finally {
+      signingRef.current[path] = false;
+    }
+  };
+
+  const openAttachment = async (att: AttachmentMeta) => {
+    const url = await ensureSignedUrl(att.path);
+    if (!url) {
+      setStatusLine("Couldn’t open attachment.");
+      return;
+    }
+    window.open(url, "_blank", "noopener,noreferrer");
+  };
 
   const dueItems = useMemo(() => {
     const now = Date.now();
@@ -142,7 +204,9 @@ export default function RevisitClient() {
 
     const { data, error } = await supabase
       .from("decisions")
-      .select("id,user_id,title,context,status,created_at,decided_at,review_at,review_notes,review_history,reviewed_at")
+      .select(
+        "id,user_id,title,context,status,created_at,decided_at,review_at,review_notes,review_history,reviewed_at,attachments"
+      )
       .eq("user_id", uid)
       .neq("status", "draft")
       .not("review_at", "is", null)
@@ -158,9 +222,24 @@ export default function RevisitClient() {
       return;
     }
 
-    const rows = (data ?? []) as Decision[];
-    setItems(rows);
-    setStatusLine(rows.length === 0 ? "Nothing scheduled." : `Loaded ${rows.length}.`);
+    const rows = (data ?? []) as any[];
+    const normalized: Decision[] = rows.map((r) => ({
+      id: r.id,
+      user_id: r.user_id,
+      title: r.title ?? "",
+      context: r.context ?? null,
+      status: r.status ?? "",
+      created_at: r.created_at ?? new Date().toISOString(),
+      decided_at: r.decided_at ?? null,
+      review_at: r.review_at ?? null,
+      review_notes: r.review_notes ?? null,
+      review_history: r.review_history ?? null,
+      reviewed_at: r.reviewed_at ?? null,
+      attachments: normalizeAttachments(r.attachments),
+    }));
+
+    setItems(normalized);
+    setStatusLine(normalized.length === 0 ? "Nothing scheduled." : `Loaded ${normalized.length}.`);
   };
 
   // ----- boot -----
@@ -237,9 +316,7 @@ export default function RevisitClient() {
       return;
     }
 
-    setItems((prevItems) =>
-      prevItems.map((x) => (x.id === decisionId ? { ...x, ...(prev as any) } : x))
-    );
+    setItems((prevItems) => prevItems.map((x) => (x.id === decisionId ? { ...x, ...(prev as any) } : x)));
 
     setLastUndo(null);
     setStatusLine("Undone.");
@@ -319,6 +396,36 @@ export default function RevisitClient() {
     return `Due in ${diff}d`;
   };
 
+  const AttachmentsStrip = () => {
+    if (!openItem) return null;
+
+    if (openAttachments.length === 0) {
+      return (
+        <div className="rounded-xl border border-zinc-200 bg-white p-3 space-y-2">
+          <div className="text-xs font-semibold text-zinc-700">Attachments</div>
+          <div className="text-sm text-zinc-600">No attachments.</div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="rounded-xl border border-zinc-200 bg-white p-3 space-y-2">
+        <div className="text-xs font-semibold text-zinc-700">Attachments</div>
+        <div className="flex flex-wrap items-center gap-2">
+          {openAttachments.map((a) => (
+            <Chip
+              key={a.path}
+              onClick={() => void openAttachment(a)}
+              title={`${a.type}${a.size ? ` • ${softKB(a.size)}` : ""}`}
+            >
+              {a.name}
+            </Chip>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <Page
       title="Revisit"
@@ -384,6 +491,9 @@ export default function RevisitClient() {
                             ) : (
                               <div className="text-sm text-zinc-600">No extra context saved.</div>
                             )}
+
+                            {/* ✅ Attachments */}
+                            <AttachmentsStrip />
 
                             <div className="flex flex-wrap items-center gap-2">
                               <Chip onClick={() => void markReviewed(d)} title="Mark reviewed (keep the same cadence)">
@@ -470,6 +580,9 @@ export default function RevisitClient() {
                             ) : (
                               <div className="text-sm text-zinc-600">No extra context saved.</div>
                             )}
+
+                            {/* ✅ Attachments */}
+                            <AttachmentsStrip />
 
                             <div className="flex flex-wrap items-center gap-2">
                               <Chip onClick={() => void markReviewed(d)} title="Reviewed (keep cadence)">
