@@ -105,6 +105,9 @@ export default function FramingPage() {
   const [decisionTitle, setDecisionTitle] = useState<string>("");
   const [decisionStatement, setDecisionStatement] = useState<string>("");
 
+  // ✅ Calm, optional framing note (saved into decision_notes after draft is created)
+  const [framingNote, setFramingNote] = useState<string>("");
+
   const [working, setWorking] = useState<boolean>(false);
 
   const titleRef = useRef<HTMLInputElement | null>(null);
@@ -132,7 +135,9 @@ export default function FramingPage() {
 
     signingRef.current[path] = true;
     try {
-      const { data, error } = await supabase.storage.from("captures").createSignedUrl(path, 60 * 10);
+      const { data, error } = await supabase.storage
+        .from("captures")
+        .createSignedUrl(path, 60 * 10);
       if (error || !data?.signedUrl) return null;
 
       setSigned((prev) => ({ ...prev, [path]: data.signedUrl }));
@@ -157,6 +162,7 @@ export default function FramingPage() {
     if (!next) {
       setDecisionTitle("");
       setDecisionStatement("");
+      setFramingNote("");
       return;
     }
 
@@ -165,6 +171,7 @@ export default function FramingPage() {
 
     setDecisionTitle((next.title || safeTitleFromText(base)).slice(0, 120));
     setDecisionStatement(base.slice(0, 1000));
+    setFramingNote("");
 
     window.setTimeout(() => titleRef.current?.focus(), 0);
   };
@@ -248,7 +255,6 @@ export default function FramingPage() {
 
     if (error) throw error;
 
-    // If title search returns nothing, do a fallback “recent open” so it never feels dead.
     const list = (data ?? []) as InboxItem[];
     if (list.length > 0) return list;
 
@@ -337,6 +343,7 @@ export default function FramingPage() {
     const title = decisionTitle.trim();
     const statement = decisionStatement.trim();
     const attachments = parsed.attachments ?? [];
+    const note = framingNote.trim();
 
     // Compose context: statement + original captured text (if different)
     const contextPieces: string[] = [];
@@ -365,6 +372,21 @@ export default function FramingPage() {
       if (createErr || !created?.id) throw createErr ?? new Error("Couldn’t create draft.");
 
       const decisionId = String(created.id);
+
+      // 1b) ✅ Save framing note quietly (optional)
+      if (note.length > 0) {
+        const { error: noteErr } = await supabase
+          .from("decision_notes")
+          .upsert(
+            { user_id: userId, decision_id: decisionId, kind: "framing", body: note },
+            { onConflict: "user_id,decision_id,kind" }
+          );
+
+        // no toast for note failure (keeps calm). Just ignore unless you want dev visibility.
+        if (noteErr) {
+          // noop
+        }
+      }
 
       // 2) Mark inbox as framed + done (keeps audit trail)
       const { error: updErr } = await supabase
@@ -494,7 +516,9 @@ export default function FramingPage() {
                   className="w-full rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[15px] text-zinc-900 outline-none focus:ring-2 focus:ring-zinc-200"
                 />
 
-                <div className="text-xs text-zinc-500">{searching ? "Searching…" : results.length === 0 ? "No matches." : ""}</div>
+                <div className="text-xs text-zinc-500">
+                  {searching ? "Searching…" : results.length === 0 ? "No matches." : ""}
+                </div>
 
                 {results.length > 0 ? (
                   <div className="grid gap-2">
@@ -540,7 +564,9 @@ export default function FramingPage() {
             <CardContent>
               <div className="space-y-2">
                 <div className="text-sm font-semibold text-zinc-900">Nothing to frame.</div>
-                <div className="text-sm text-zinc-600">When you capture something that needs shaping, it will wait here quietly.</div>
+                <div className="text-sm text-zinc-600">
+                  When you capture something that needs shaping, it will wait here quietly.
+                </div>
               </div>
             </CardContent>
           </Card>
@@ -550,7 +576,9 @@ export default function FramingPage() {
               <div className="space-y-4">
                 <div className="space-y-1">
                   <div className="text-xs font-semibold text-zinc-700">Captured</div>
-                  <div className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-900">{parsed.text || item.title}</div>
+                  <div className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-900">
+                    {parsed.text || item.title}
+                  </div>
 
                   {parsed.attachments.length > 0 ? (
                     <div className="mt-3 space-y-2">
@@ -558,7 +586,11 @@ export default function FramingPage() {
 
                       <div className="flex flex-wrap items-center gap-2">
                         {parsed.attachments.map((a) => (
-                          <Chip key={a.path} onClick={() => void openAttachment(a)} title={`${a.type}${a.size ? ` • ${softKB(a.size)}` : ""}`}>
+                          <Chip
+                            key={a.path}
+                            onClick={() => void openAttachment(a)}
+                            title={`${a.type}${a.size ? ` • ${softKB(a.size)}` : ""}`}
+                          >
                             {a.name}
                           </Chip>
                         ))}
@@ -587,6 +619,19 @@ export default function FramingPage() {
                     className="w-full resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[15px] leading-relaxed text-zinc-900 outline-none focus:ring-2 focus:ring-zinc-200"
                     placeholder="What are you deciding, exactly?"
                   />
+                </div>
+
+                {/* ✅ Calm optional note (becomes decision_notes.kind='framing' after Send) */}
+                <div className="space-y-2">
+                  <div className="text-xs font-semibold text-zinc-700">Note (optional)</div>
+                  <textarea
+                    value={framingNote}
+                    onChange={(e) => setFramingNote(e.target.value)}
+                    rows={3}
+                    className="w-full resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[15px] leading-relaxed text-zinc-900 outline-none focus:ring-2 focus:ring-zinc-200"
+                    placeholder="Why it matters, constraints, values signals…"
+                  />
+                  <div className="text-xs text-zinc-500">This stays quiet — it’s just for you.</div>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2 pt-1">

@@ -12,6 +12,9 @@ import { ConversationPanel } from "./ConversationPanel";
 import { AssistedSearch } from "@/components/AssistedSearch";
 import { TilesRow } from "@/components/TilesRow";
 
+// ✅ Notes (quiet)
+import { DecisionNotes } from "@/components/decision/DecisionNotes";
+
 export const dynamic = "force-dynamic";
 
 type AttachmentMeta = {
@@ -99,7 +102,6 @@ function sortByName<T extends { name: string; sort_order?: number | null }>(item
     return a.name.localeCompare(b.name);
   });
 }
-
 
 export default function ThinkingClient() {
   const router = useRouter();
@@ -227,7 +229,6 @@ export default function ThinkingClient() {
     setDrafts(list);
 
     // 2) Load domains + constellations (for tiles and assignment)
-    // Keep calm: small lists, no extra UI if empty.
     const [domRes, conRes] = await Promise.all([
       supabase.from("domains").select("id,name,sort_order").eq("user_id", uid).order("sort_order", { ascending: true }),
       supabase
@@ -238,30 +239,30 @@ export default function ThinkingClient() {
     ]);
 
     if (!domRes.error) {
-  const rows = (domRes.data ?? []) as any[];
-  const next: Domain[] = rows
-    .filter((r) => r && r.id && r.name)
-    .map((r) => ({
-      id: String(r.id),
-      name: String(r.name),
-      sort_order: typeof r.sort_order === "number" ? r.sort_order : null,
-    }));
-  setDomains(sortByName(next));
-}
+      const rows = (domRes.data ?? []) as any[];
+      const next: Domain[] = rows
+        .filter((r) => r && r.id && r.name)
+        .map((r) => ({
+          id: String(r.id),
+          name: String(r.name),
+          sort_order: typeof r.sort_order === "number" ? r.sort_order : null,
+        }));
+      setDomains(sortByName(next));
+    }
 
-if (!conRes.error) {
-  const rows = (conRes.data ?? []) as any[];
-  const next: Constellation[] = rows
-    .filter((r) => r && r.id && r.name)
-    .map((r) => ({
-      id: String(r.id),
-      name: String(r.name),
-      sort_order: typeof r.sort_order === "number" ? r.sort_order : null,
-    }));
-  setConstellations(sortByName(next));
-}
+    if (!conRes.error) {
+      const rows = (conRes.data ?? []) as any[];
+      const next: Constellation[] = rows
+        .filter((r) => r && r.id && r.name)
+        .map((r) => ({
+          id: String(r.id),
+          name: String(r.name),
+          sort_order: typeof r.sort_order === "number" ? r.sort_order : null,
+        }));
+      setConstellations(sortByName(next));
+    }
 
-    // 3) Load membership maps for current list (so tiles filter instantly)
+    // 3) Load membership maps for current list
     const decisionIds = list.map((d) => d.id);
     if (decisionIds.length > 0) {
       const [ddRes, ciRes] = await Promise.all([
@@ -332,14 +333,11 @@ if (!conRes.error) {
     setOpenId(match.id);
     setHighlightId(match.id);
 
-    // scroll once layout has painted
     window.setTimeout(() => {
       const el = cardRefs.current[match.id];
       if (el?.scrollIntoView) el.scrollIntoView({ behavior: "smooth", block: "center" });
     }, 60);
 
-    // clear the param (prevents repeat-open on refresh)
-    // Keep this simple and safe: replace with base route.
     router.replace("/thinking");
 
     const t = window.setTimeout(() => setHighlightId(null), 1600);
@@ -458,8 +456,6 @@ if (!conRes.error) {
             return merged;
           });
 
-          // membership maps may have changed (domain/constellation assignment)
-          // reload silently to keep truth without complex realtime joins
           scheduleReload();
         }
       )
@@ -576,7 +572,6 @@ if (!conRes.error) {
   const setDecisionDomain = async (decisionId: string, domainId: string | null) => {
     if (!userId) return;
 
-    // optimistic
     setDomainByDecision((prev) => ({ ...prev, [decisionId]: domainId }));
 
     try {
@@ -592,16 +587,17 @@ if (!conRes.error) {
         return;
       }
 
+      // ✅ Correct conflict target
       const { error } = await supabase
         .from("decision_domains")
         .upsert(
           { user_id: userId, decision_id: decisionId, domain_id: domainId },
-          { onConflict: "decision_id" }
+          { onConflict: "user_id,decision_id" }
         );
 
       if (error) throw error;
       showToast({ message: "Domain set." }, 2000);
-    } catch (e: any) {
+    } catch {
       showToast({ message: `Couldn’t update domain.` }, 2500);
       loadRef.current({ silent: true });
     }
@@ -615,7 +611,6 @@ if (!conRes.error) {
     const has = current.includes(constellationId);
     const next = has ? current.filter((x) => x !== constellationId) : [...current, constellationId];
 
-    // optimistic
     setConstellationsByDecision((prev) => ({ ...prev, [decisionId]: next }));
 
     try {
@@ -640,7 +635,7 @@ if (!conRes.error) {
 
       if (error) throw error;
       showToast({ message: "Added." }, 2000);
-    } catch (e: any) {
+    } catch {
       showToast({ message: `Couldn’t update constellation.` }, 2500);
       loadRef.current({ silent: true });
     }
@@ -673,17 +668,10 @@ if (!conRes.error) {
       }
     >
       <div className="mx-auto w-full max-w-[760px] space-y-6">
-        {/* ✅ Assisted retrieval (recognition-first) */}
         <AssistedSearch scope="thinking" placeholder="Search drafts and decisions…" />
 
-        {/* ✅ Calm tiles (filters). Only appear if there are items to show. */}
         <div className="space-y-4">
-          <TilesRow
-            title="Domains"
-            items={domains}
-            activeId={activeDomainId}
-            onSelect={(id) => setActiveDomainId(id)}
-          />
+          <TilesRow title="Domains" items={domains} activeId={activeDomainId} onSelect={(id) => setActiveDomainId(id)} />
           <TilesRow
             title="Constellations"
             items={constellations}
@@ -699,9 +687,7 @@ if (!conRes.error) {
             <CardContent>
               <div className="space-y-2">
                 <div className="text-sm font-semibold text-zinc-900">All clear.</div>
-                <div className="text-sm text-zinc-600">
-                  When something needs thinking time, it can live here without pressure.
-                </div>
+                <div className="text-sm text-zinc-600">When something needs thinking time, it can live here without pressure.</div>
               </div>
             </CardContent>
           </Card>
@@ -750,11 +736,12 @@ if (!conRes.error) {
                               {d.review_at ? ` • Revisit ${softWhen(d.review_at)}` : ""}
                             </div>
 
-                            {/* Quiet meaning hints (not a dashboard) */}
                             <div className="mt-2 flex flex-wrap gap-2">
                               {domainName ? <Chip title="Domain">{domainName}</Chip> : null}
                               {memberNames.slice(0, 2).map((n) => (
-                                <Chip key={n} title="Constellation">{n}</Chip>
+                                <Chip key={n} title="Constellation">
+                                  {n}
+                                </Chip>
                               ))}
                               {memberNames.length > 2 ? <Chip title="More constellations">+{memberNames.length - 2}</Chip> : null}
                             </div>
@@ -776,6 +763,9 @@ if (!conRes.error) {
                             <div className="text-sm text-zinc-600">No extra context yet.</div>
                           )}
 
+                          {/* ✅ Notes (quiet, optional) */}
+                          <DecisionNotes decisionId={d.id} kind="thinking" />
+
                           {/* ✅ Domain + Constellations (quiet assignment UI) */}
                           <div className="rounded-xl border border-zinc-200 bg-white p-3 space-y-3">
                             <div className="text-xs font-semibold text-zinc-700">Meaning</div>
@@ -787,11 +777,7 @@ if (!conRes.error) {
                                   None
                                 </Chip>
                                 {domains.map((dom) => (
-                                  <Chip
-                                    key={dom.id}
-                                    active={domainId === dom.id}
-                                    onClick={() => void setDecisionDomain(d.id, dom.id)}
-                                  >
+                                  <Chip key={dom.id} active={domainId === dom.id} onClick={() => void setDecisionDomain(d.id, dom.id)}>
                                     {dom.name}
                                   </Chip>
                                 ))}
@@ -826,11 +812,7 @@ if (!conRes.error) {
                             ) : (
                               <div className="flex flex-wrap items-center gap-2">
                                 {attachmentsForCard.map((a) => (
-                                  <Chip
-                                    key={a.path}
-                                    onClick={() => void openAttachment(a)}
-                                    title={`${a.type}${a.size ? ` • ${softKB(a.size)}` : ""}`}
-                                  >
+                                  <Chip key={a.path} onClick={() => void openAttachment(a)} title={`${a.type}${a.size ? ` • ${softKB(a.size)}` : ""}`}>
                                     {a.name}
                                   </Chip>
                                 ))}
@@ -843,9 +825,7 @@ if (!conRes.error) {
                             <div className="text-xs font-semibold text-zinc-700">Memory</div>
                             {summaryStatus ? <div className="text-xs text-zinc-500">{summaryStatus}</div> : null}
 
-                            {!summaryStatus && summaries.length === 0 ? (
-                              <div className="text-sm text-zinc-600">No saved summaries yet.</div>
-                            ) : null}
+                            {!summaryStatus && summaries.length === 0 ? <div className="text-sm text-zinc-600">No saved summaries yet.</div> : null}
 
                             {summaries.map((s) => (
                               <div key={s.id} className="space-y-2">
@@ -881,10 +861,7 @@ if (!conRes.error) {
                               Delete
                             </Chip>
 
-                            <Chip
-                              onClick={() => setChatForId((cur) => (cur === d.id ? null : d.id))}
-                              title="Have a conversation with Keystone about this decision"
-                            >
+                            <Chip onClick={() => setChatForId((cur) => (cur === d.id ? null : d.id))} title="Have a conversation with Keystone about this decision">
                               {isChatOpen ? "Hide chat" : "Talk this through"}
                             </Chip>
 
@@ -913,9 +890,7 @@ if (!conRes.error) {
           </div>
         )}
 
-        {process.env.NODE_ENV === "development" && openDraft ? (
-          <div className="text-xs text-zinc-400">openId: {openDraft.id}</div>
-        ) : null}
+        {process.env.NODE_ENV === "development" && openDraft ? <div className="text-xs text-zinc-400">openId: {openDraft.id}</div> : null}
       </div>
     </Page>
   );
