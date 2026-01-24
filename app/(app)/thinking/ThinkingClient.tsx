@@ -28,7 +28,8 @@ type Decision = {
   review_at: string | null;
   origin: string | null;
   framed_at: string | null;
-  attachments: AttachmentMeta[] | null; // ✅ new (from decisions.attachments jsonb)
+
+  attachments: AttachmentMeta[] | null; // ✅ decisions.attachments (jsonb)
 };
 
 type DecisionSummary = {
@@ -61,12 +62,12 @@ function softKB(bytes?: number | null) {
   return `${Math.max(1, Math.round(bytes / 1024))} KB`;
 }
 
-function normalizeAttachments(raw: any): AttachmentMeta[] {
+function normalizeAttachments(raw: unknown): AttachmentMeta[] {
   if (!raw) return [];
   if (!Array.isArray(raw)) return [];
   return raw
-    .filter((a) => a && typeof a.path === "string")
-    .map((a) => ({
+    .filter((a: any) => a && typeof a.path === "string")
+    .map((a: any) => ({
       name: typeof a.name === "string" ? a.name : "Attachment",
       path: String(a.path),
       type: typeof a.type === "string" ? a.type : "application/octet-stream",
@@ -92,7 +93,7 @@ export default function ThinkingClient() {
   const [summaryStatus, setSummaryStatus] = useState<string>("");
   const [summaries, setSummaries] = useState<DecisionSummary[]>([]);
 
-  // Signed url cache for attachments (path -> signedUrl)
+  // signed url cache (path -> signedUrl)
   const [signed, setSigned] = useState<Record<string, string>>({});
   const signingRef = useRef<Record<string, boolean>>({});
 
@@ -166,8 +167,8 @@ export default function ThinkingClient() {
       return;
     }
 
-    const list = (data ?? []) as any[];
-    const normalized: Decision[] = list.map((r) => ({
+    const listRaw = (data ?? []) as any[];
+    const list: Decision[] = listRaw.map((r) => ({
       id: r.id,
       user_id: r.user_id,
       title: r.title ?? "",
@@ -181,8 +182,8 @@ export default function ThinkingClient() {
       attachments: normalizeAttachments(r.attachments),
     }));
 
-    setDrafts(normalized);
-    setStatusLine(normalized.length === 0 ? "No drafts right now." : "Loaded.");
+    setDrafts(list);
+    setStatusLine(list.length === 0 ? "No drafts right now." : "Loaded.");
   };
 
   useEffect(() => {
@@ -261,7 +262,7 @@ export default function ThinkingClient() {
     };
   }, [userId, openDraft?.id]);
 
-  // Realtime: draft decisions (includes attachments updates too)
+  // Realtime: draft decisions
   useEffect(() => {
     if (!userId) return;
 
@@ -466,6 +467,8 @@ export default function ThinkingClient() {
               const isOpen = openId === d.id;
               const isChatOpen = chatForId === d.id;
 
+              const attachmentsForCard = normalizeAttachments(d.attachments);
+
               return (
                 <Card
                   key={d.id}
@@ -513,11 +516,11 @@ export default function ThinkingClient() {
                         <div className="rounded-xl border border-zinc-200 bg-white p-3 space-y-2">
                           <div className="text-xs font-semibold text-zinc-700">Attachments</div>
 
-                          {openAttachments.length === 0 ? (
+                          {attachmentsForCard.length === 0 ? (
                             <div className="text-sm text-zinc-600">No attachments.</div>
                           ) : (
                             <div className="flex flex-wrap items-center gap-2">
-                              {openAttachments.map((a) => (
+                              {attachmentsForCard.map((a) => (
                                 <Chip
                                   key={a.path}
                                   onClick={() => void openAttachment(a)}
@@ -535,7 +538,9 @@ export default function ThinkingClient() {
                           <div className="text-xs font-semibold text-zinc-700">Memory</div>
                           {summaryStatus ? <div className="text-xs text-zinc-500">{summaryStatus}</div> : null}
 
-                          {!summaryStatus && summaries.length === 0 ? <div className="text-sm text-zinc-600">No saved summaries yet.</div> : null}
+                          {!summaryStatus && summaries.length === 0 ? (
+                            <div className="text-sm text-zinc-600">No saved summaries yet.</div>
+                          ) : null}
 
                           {summaries.map((s) => (
                             <div key={s.id} className="space-y-2">
