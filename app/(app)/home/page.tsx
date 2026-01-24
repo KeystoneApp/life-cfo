@@ -11,6 +11,45 @@ import { useHomeOrientation } from "@/lib/home/useHomeOrientation";
 
 export const dynamic = "force-dynamic";
 
+type BillsOrientation = {
+  due7: number;
+  due14: number;
+  autopayRisk: number;
+};
+
+function safeMs(iso: string | null | undefined) {
+  if (!iso) return null;
+  const ms = Date.parse(iso);
+  return Number.isNaN(ms) ? null : ms;
+}
+
+function isWithinDays(iso: string, days: number) {
+  const ms = safeMs(iso);
+  if (!ms) return false;
+  const now = Date.now();
+  const until = now + days * 24 * 60 * 60 * 1000;
+  return ms >= now && ms <= until;
+}
+
+function billsOrientationSentence(o: BillsOrientation) {
+  // One sentence. Calm. No urgency language.
+  if (o.autopayRisk > 0) {
+    return o.autopayRisk === 1
+      ? "One bill may need attention in the next two weeks."
+      : `${o.autopayRisk} bills may need attention in the next two weeks.`;
+  }
+
+  if (o.due7 > 0) {
+    return o.due7 === 1 ? "One bill is due in the next 7 days." : `${o.due7} bills are due in the next 7 days.`;
+  }
+
+  if (o.due14 > 0) {
+    return o.due14 === 1 ? "One bill is due in the next two weeks." : `${o.due14} bills are due in the next two weeks.`;
+  }
+
+  return "Bills look quiet for now.";
+}
+
 export default function HomePage() {
   const router = useRouter();
 
@@ -19,6 +58,8 @@ export default function HomePage() {
 
   const [text, setText] = useState("");
   const [affirmation, setAffirmation] = useState<"Saved." | "Held." | null>(null);
+
+  const [billsLine, setBillsLine] = useState<string>("");
 
   const affirmationTimerRef = useRef<number | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -49,6 +90,57 @@ export default function HomePage() {
   // --- Hooks (contracts) ---
   const unload = useHomeUnload({ userId });
   const orientation = useHomeOrientation({ userId });
+
+  // --- Bills -> Home Orientation (one calm sentence) ---
+  useEffect(() => {
+    if (!userId) {
+      setBillsLine("");
+      return;
+    }
+
+    let alive = true;
+
+    (async () => {
+      const { data, error } = await supabase
+        .from("recurring_bills")
+        .select("next_due_at,autopay,active")
+        .eq("user_id", userId)
+        .eq("active", true);
+
+      if (!alive) return;
+
+      if (error) {
+        setBillsLine("");
+        return;
+      }
+
+      const rows = (data ?? []) as any[];
+
+      let due7 = 0;
+      let due14 = 0;
+      let autopayRisk = 0;
+
+      for (const r of rows) {
+        const next_due_at = typeof r.next_due_at === "string" ? (r.next_due_at as string) : null;
+        const autopay = !!r.autopay;
+
+        if (!next_due_at) continue;
+
+        const in7 = isWithinDays(next_due_at, 7);
+        const in14 = isWithinDays(next_due_at, 14);
+
+        if (in7) due7 += 1;
+        if (in14) due14 += 1;
+        if (in14 && !autopay) autopayRisk += 1;
+      }
+
+      setBillsLine(billsOrientationSentence({ due7, due14, autopayRisk }));
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, [userId]);
 
   // --- Helpers ---
   const flashAffirmation = (v: "Saved." | "Held.") => {
@@ -86,7 +178,7 @@ export default function HomePage() {
     router.push(href);
   };
 
-  const hasOrientation = Boolean(orientation.item?.text);
+  const hasOrientation = Boolean(orientation.item?.text || billsLine);
   const canOpenOrientation = Boolean(orientation.item?.href);
 
   return (
@@ -121,13 +213,9 @@ export default function HomePage() {
           )}
 
           {/* Optional, conditional AI response (rare; may be empty) */}
-          {unload.response ? (
-            <div className="text-[15px] leading-relaxed text-zinc-800">{unload.response}</div>
-          ) : null}
+          {unload.response ? <div className="text-[15px] leading-relaxed text-zinc-800">{unload.response}</div> : null}
 
-          {authStatus === "signed_out" ? (
-            <div className="text-sm text-zinc-600">Sign in to use Home.</div>
-          ) : null}
+          {authStatus === "signed_out" ? <div className="text-sm text-zinc-600">Sign in to use Home.</div> : null}
         </div>
 
         {/* Orientation (separate; never competes with input) */}
@@ -137,7 +225,16 @@ export default function HomePage() {
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">
                   <div className="text-xs font-semibold text-zinc-600">Orientation</div>
-                  <div className="mt-2 text-[15px] leading-relaxed text-zinc-800">{orientation.item?.text}</div>
+
+                  {orientation.item?.text ? (
+                    <div className="mt-2 text-[15px] leading-relaxed text-zinc-800">{orientation.item?.text}</div>
+                  ) : null}
+
+                  {billsLine ? (
+                    <div className={orientation.item?.text ? "mt-2 text-[15px] leading-relaxed text-zinc-800" : "mt-2 text-[15px] leading-relaxed text-zinc-800"}>
+                      {billsLine}
+                    </div>
+                  ) : null}
                 </div>
 
                 {canOpenOrientation ? (
