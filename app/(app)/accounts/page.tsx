@@ -35,6 +35,10 @@ function formatMoney(cents: number, currency = "AUD") {
 
 const LOAD_THROTTLE_MS = 1500;
 
+function norm(s: string) {
+  return (s || "").toLowerCase().trim();
+}
+
 export default function AccountsPage() {
   const toastApi: any = useToast();
   const showToast =
@@ -67,6 +71,11 @@ export default function AccountsPage() {
   const [editBalance, setEditBalance] = useState<Record<string, string>>({});
   const [savingRow, setSavingRow] = useState<Record<string, boolean>>({});
   const [deletingRow, setDeletingRow] = useState<Record<string, boolean>>({});
+
+  // Search + calm visibility limit
+  const [query, setQuery] = useState("");
+  const [showAll, setShowAll] = useState(false);
+  const VISIBLE_LIMIT = 5;
 
   // Silent reload throttle
   const lastLoadAtRef = useRef<number>(0);
@@ -143,6 +152,16 @@ export default function AccountsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Focus refresh (silent)
+  useEffect(() => {
+    const onFocus = () => {
+      load({ silent: true });
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Realtime patching (user-scoped)
   useEffect(() => {
     if (!userId) return;
@@ -151,46 +170,40 @@ export default function AccountsPage() {
 
     const channel = supabase
       .channel(`accounts:${userId}`)
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "accounts", filter: `user_id=eq.${userId}` },
-        (payload) => {
-          try {
-            const evt = payload.eventType;
+      .on("postgres_changes", { event: "*", schema: "public", table: "accounts", filter: `user_id=eq.${userId}` }, (payload) => {
+        try {
+          const evt = payload.eventType;
 
-            if (evt === "INSERT") {
-              const row = payload.new as Account;
-              setRows((prev) => {
-                if (prev.some((x) => x.id === row.id)) return prev;
-                return [row, ...prev];
-              });
-              setEditName((prev) => (prev[row.id] == null ? { ...prev, [row.id]: row.name ?? "" } : prev));
-              setEditBalance((prev) =>
-                prev[row.id] == null
-                  ? { ...prev, [row.id]: ((row.current_balance_cents ?? 0) / 100).toFixed(2) }
-                  : prev
-              );
-              return;
-            }
-
-            if (evt === "UPDATE") {
-              const row = payload.new as Account;
-              setRows((prev) => prev.map((x) => (x.id === row.id ? { ...x, ...row } : x)));
-              return;
-            }
-
-            if (evt === "DELETE") {
-              const oldRow = payload.old as { id: string };
-              setRows((prev) => prev.filter((x) => x.id !== oldRow.id));
-              return;
-            }
-
-            load({ silent: true });
-          } catch {
-            load({ silent: true });
+          if (evt === "INSERT") {
+            const row = payload.new as Account;
+            setRows((prev) => {
+              if (prev.some((x) => x.id === row.id)) return prev;
+              return [row, ...prev];
+            });
+            setEditName((prev) => (prev[row.id] == null ? { ...prev, [row.id]: row.name ?? "" } : prev));
+            setEditBalance((prev) =>
+              prev[row.id] == null ? { ...prev, [row.id]: ((row.current_balance_cents ?? 0) / 100).toFixed(2) } : prev
+            );
+            return;
           }
+
+          if (evt === "UPDATE") {
+            const row = payload.new as Account;
+            setRows((prev) => prev.map((x) => (x.id === row.id ? { ...x, ...row } : x)));
+            return;
+          }
+
+          if (evt === "DELETE") {
+            const oldRow = payload.old as { id: string };
+            setRows((prev) => prev.filter((x) => x.id !== oldRow.id));
+            return;
+          }
+
+          load({ silent: true });
+        } catch {
+          load({ silent: true });
         }
-      )
+      })
       .subscribe((status) => {
         if (status === "SUBSCRIBED") setLive("live");
         else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") setLive("offline");
@@ -200,9 +213,34 @@ export default function AccountsPage() {
     return () => {
       supabase.removeChannel(channel);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId]);
 
   const totalBalanceCents = useMemo(() => rows.reduce((sum, a) => sum + (a.current_balance_cents ?? 0), 0), [rows]);
+
+  const filteredRows = useMemo(() => {
+    const q = norm(query);
+    if (!q) return rows;
+
+    return rows.filter((a) => {
+      const hay = `${a.name ?? ""} ${a.currency ?? ""} ${a.id ?? ""}`.toLowerCase();
+      return hay.includes(q);
+    });
+  }, [rows, query]);
+
+  const visibleRows = useMemo(() => {
+    const q = norm(query);
+    if (q) return filteredRows; // when searching, show matches (recognition-first)
+    if (showAll) return filteredRows;
+    return filteredRows.slice(0, VISIBLE_LIMIT);
+  }, [filteredRows, query, showAll]);
+
+  const hiddenCount = useMemo(() => {
+    const q = norm(query);
+    if (q) return 0;
+    if (showAll) return 0;
+    return Math.max(0, filteredRows.length - visibleRows.length);
+  }, [filteredRows.length, visibleRows.length, query, showAll]);
 
   const createAccount = async () => {
     if (!userId) return;
@@ -349,20 +387,12 @@ export default function AccountsPage() {
       ? "border border-rose-200 bg-rose-50 text-rose-700"
       : "border border-zinc-200 bg-zinc-50 text-zinc-700";
 
-  const liveChip = (
-    <Chip className={`ml-2 ${liveChipClass}`}>{live === "live" ? "Live" : live === "offline" ? "Offline" : "Connecting"}</Chip>
-  );
+  const liveChip = <Chip className={`ml-2 ${liveChipClass}`}>{live === "live" ? "Live" : live === "offline" ? "Offline" : "Connecting"}</Chip>;
 
   return (
     <Page
       title="Accounts"
-      subtitle={[
-        email ? `Signed in as: ${email}` : null,
-        `Total balance: ${formatMoney(totalBalanceCents, "AUD")}`,
-        statusLine,
-      ]
-        .filter(Boolean)
-        .join(" • ")}
+      subtitle={[email ? `Signed in as: ${email}` : null, `Total balance: ${formatMoney(totalBalanceCents, "AUD")}`, statusLine].filter(Boolean).join(" • ")}
       right={
         <div className="flex items-center gap-2">
           {liveChip}
@@ -405,9 +435,55 @@ export default function AccountsPage() {
           </CardContent>
         </Card>
 
+        {/* Search (recognition-first) */}
+        <Card>
+          <CardContent>
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div className="font-semibold">Search</div>
+              <div className="text-sm opacity-70">Find accounts by name, currency, or id.</div>
+            </div>
+
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <input
+                value={query}
+                onChange={(e) => {
+                  setQuery(e.target.value);
+                  setShowAll(false);
+                }}
+                placeholder="Search accounts…"
+                className="min-w-[260px] flex-1 rounded-xl border border-zinc-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
+              />
+
+              {query ? (
+                <Chip
+                  onClick={() => {
+                    setQuery("");
+                    setShowAll(false);
+                  }}
+                  title="Clear search"
+                >
+                  Clear
+                </Chip>
+              ) : (
+                <Chip onClick={() => setShowAll((v) => !v)} title="Show more or less">
+                  {showAll ? "Show less" : "Show all"}
+                </Chip>
+              )}
+
+              <Badge variant="muted">
+                {query ? `${filteredRows.length} match(es)` : `${visibleRows.length}/${rows.length} shown`}
+              </Badge>
+            </div>
+
+            {!query && hiddenCount > 0 ? (
+              <div className="mt-3 text-sm text-zinc-600">{hiddenCount} more hidden — use search to find anything.</div>
+            ) : null}
+          </CardContent>
+        </Card>
+
         {/* List */}
         <div className="grid gap-3">
-          {rows.map((a) => {
+          {visibleRows.map((a) => {
             const saving = !!savingRow[a.id];
             const deleting = !!deletingRow[a.id];
             const changed =
@@ -422,9 +498,7 @@ export default function AccountsPage() {
                       <div className="space-y-1">
                         <div className="flex flex-wrap items-center gap-2">
                           <strong className="text-base">{a.name}</strong>
-                          <Badge variant="muted">
-                            {formatMoney(a.current_balance_cents ?? 0, a.currency ?? "AUD")}
-                          </Badge>
+                          <Badge variant="muted">{formatMoney(a.current_balance_cents ?? 0, a.currency ?? "AUD")}</Badge>
                           {changed && <Badge variant="warning">Unsaved</Badge>}
                         </div>
                         <div className="text-xs text-zinc-500">id: {a.id}</div>
@@ -471,9 +545,18 @@ export default function AccountsPage() {
               <CardContent>
                 <div className="space-y-2">
                   <strong>No accounts yet.</strong>
-                  <div className="text-sm text-zinc-600">
-                    Add at least one account to start calculating safe-to-spend.
-                  </div>
+                  <div className="text-sm text-zinc-600">Add at least one account to start calculating safe-to-spend.</div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {rows.length > 0 && visibleRows.length === 0 && (
+            <Card className="bg-zinc-50">
+              <CardContent>
+                <div className="space-y-2">
+                  <strong>No results.</strong>
+                  <div className="text-sm text-zinc-600">Try a different search term.</div>
                 </div>
               </CardContent>
             </Card>
