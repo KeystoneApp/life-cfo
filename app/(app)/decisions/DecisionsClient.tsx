@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { Page } from "@/components/Page";
 import { Card, CardContent, Chip } from "@/components/ui";
-import { createSignedUrl, normalizeAttachments, softKB, type AttachmentMeta } from "@/lib/attachments";
+import { normalizeAttachments, softKB, type AttachmentMeta } from "@/lib/attachments";
 
 export const dynamic = "force-dynamic";
 
@@ -25,22 +25,8 @@ type Decision = {
   review_notes: string | null;
   review_history: unknown[] | null;
 
-  attachments: AttachmentMeta[] | null;
-};
-
-type DecisionsRow = {
-  id: string;
-  user_id: string;
-  title: string | null;
-  context: string | null;
-  status: string | null;
-  created_at: string | null;
-  decided_at: string | null;
-  review_at: string | null;
-  reviewed_at: string | null;
-  review_notes: string | null;
-  review_history: unknown[] | null;
-  attachments: unknown;
+  attachments: AttachmentMeta[] | null; // decisions.attachments (jsonb)
+  chaptered_at?: string | null;
 };
 
 function safeMs(iso: string | null | undefined) {
@@ -69,6 +55,7 @@ export default function DecisionsClient() {
 
   const [userId, setUserId] = useState<string | null>(null);
   const [statusLine, setStatusLine] = useState<string>("Loading…");
+
   const [items, setItems] = useState<Decision[]>([]);
   const [openId, setOpenId] = useState<string | null>(null);
 
@@ -82,6 +69,8 @@ export default function DecisionsClient() {
   const lastFetchAtRef = useRef(0);
   const queuedRefetchRef = useRef(false);
 
+  const openItem = useMemo(() => items.find((x) => x.id === openId) ?? null, [items, openId]);
+
   const ensureSignedUrl = async (path: string) => {
     if (!path) return null;
     if (signed[path]) return signed[path];
@@ -89,11 +78,11 @@ export default function DecisionsClient() {
 
     signingRef.current[path] = true;
     try {
-      const url = await createSignedUrl(supabase, path, { bucket: "captures", expiresInSec: 60 * 10 });
-      if (!url) return null;
+      const { data, error } = await supabase.storage.from("captures").createSignedUrl(path, 60 * 10);
+      if (error || !data?.signedUrl) return null;
 
-      setSigned((prev) => ({ ...prev, [path]: url }));
-      return url;
+      setSigned((prev) => ({ ...prev, [path]: data.signedUrl }));
+      return data.signedUrl;
     } finally {
       signingRef.current[path] = false;
     }
@@ -134,10 +123,11 @@ export default function DecisionsClient() {
     const { data, error } = await supabase
       .from("decisions")
       .select(
-        "id,user_id,title,context,status,created_at,decided_at,review_at,reviewed_at,review_notes,review_history,attachments"
+        "id,user_id,title,context,status,created_at,decided_at,review_at,reviewed_at,review_notes,review_history,attachments,chaptered_at"
       )
       .eq("user_id", uid)
       .neq("status", "draft")
+      .neq("status", "chapter") // ✅ hide chaptered decisions from this list
       .order("decided_at", { ascending: false, nullsFirst: false })
       .order("created_at", { ascending: false });
 
@@ -151,8 +141,7 @@ export default function DecisionsClient() {
       return;
     }
 
-    const rows = (data ?? []) as DecisionsRow[];
-
+    const rows = (data ?? []) as any[];
     const normalized: Decision[] = rows.map((r) => ({
       id: r.id,
       user_id: r.user_id,
@@ -166,12 +155,14 @@ export default function DecisionsClient() {
       review_notes: r.review_notes ?? null,
       review_history: r.review_history ?? null,
       attachments: normalizeAttachments(r.attachments),
+      chaptered_at: r.chaptered_at ?? null,
     }));
 
     setItems(normalized);
     setStatusLine(normalized.length === 0 ? "Nothing committed yet." : `Loaded ${normalized.length}.`);
   };
 
+  // ----- boot -----
   useEffect(() => {
     isMountedRef.current = true;
 
@@ -196,14 +187,17 @@ export default function DecisionsClient() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ----- realtime -----
   useEffect(() => {
     if (!userId) return;
 
     const channel = supabase
       .channel(`decisions_ledger_${userId}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "decisions", filter: `user_id=eq.${userId}` }, () => {
-        void load(userId);
-      })
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "decisions", filter: `user_id=eq.${userId}` },
+        () => void load(userId)
+      )
       .subscribe();
 
     return () => {
@@ -212,6 +206,7 @@ export default function DecisionsClient() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId]);
 
+  // ----- actions -----
   const setReviewAt = async (d: Decision, preset: "1w" | "1m" | "3m" | "6m" | "clear") => {
     if (!userId) return;
 
@@ -228,6 +223,35 @@ export default function DecisionsClient() {
     }
 
     setStatusLine(preset === "clear" ? "Revisit cleared." : "Revisit scheduled.");
+  };
+
+  const moveToChapters = async (d: Decision) => {
+    if (!userId) return;
+
+    const nowIso = new Date().toISOString();
+
+    // optimistic: remove from list & close card
+    setItems((prev) => prev.filter((x) => x.id !== d.id));
+    setOpenId((cur) => (cur === d.id ? null : cur));
+
+    const { error } = await supabase
+      .from("decisions")
+      .update({
+        status: "chapter",
+        chaptered_at: nowIso,
+        review_at: null, // once it’s honoured/closed, it shouldn’t resurface
+        reviewed_at: null,
+      })
+      .eq("id", d.id)
+      .eq("user_id", userId);
+
+    if (error) {
+      setStatusLine(`Update failed: ${error.message}`);
+      void load(userId);
+      return;
+    }
+
+    setStatusLine("Moved to Chapters.");
   };
 
   return (
@@ -327,6 +351,15 @@ export default function DecisionsClient() {
                               Clear revisit
                             </Chip>
                             <Chip onClick={() => setOpenId(null)}>Done</Chip>
+                          </div>
+                        </div>
+
+                        <div className="space-y-2 pt-2">
+                          <div className="text-xs text-zinc-500">Optional: honour and close</div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Chip onClick={() => void moveToChapters(d)} title="Move this decision into Chapters">
+                              Put this down
+                            </Chip>
                           </div>
                         </div>
                       </div>
