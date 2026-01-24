@@ -47,6 +47,7 @@ type InboxUpsertRow = {
   title: string;
   body?: string | null;
   severity?: number | null;
+  action_href?: string | null; // ✅ for Home Orientation (and future engine links)
 };
 
 function isObject(v: unknown): v is Record<string, unknown> {
@@ -87,6 +88,55 @@ function parseNextActionPayload(payload: unknown): NextActionPayload {
     action: typeof payload.action === "string" ? payload.action : undefined,
     message: typeof payload.message === "string" ? payload.message : undefined,
   };
+}
+
+type HomeOrientationDraft = {
+  text: string;
+  href: string | null;
+  severity: number;
+} | null;
+
+/**
+ * Home Orientation is ONE calm conclusion (no numbers, no lists) written by Engine.
+ * It must not be derived from UI state; it’s an engine-authored synthesis.
+ */
+function buildHomeOrientation(insights: Array<{ type: string; severity?: number | null; payload: unknown }>): HomeOrientationDraft {
+  // priority order (v1)
+  const pick = (t: string) => insights.find((i) => i.type === t) ?? null;
+
+  const upcoming = pick("upcoming_bills");
+  if (upcoming) {
+    return {
+      text: "One upcoming bill may need a look.",
+      href: "/bills",
+      severity: upcoming.severity ?? 2,
+    };
+  }
+
+  const safe = pick("safe_to_spend_week");
+  if (safe) {
+    return {
+      text: "You look steady within your usual range.",
+      href: null,
+      severity: safe.severity ?? 1,
+    };
+  }
+
+  const next = pick("next_action");
+  if (next) {
+    const payload = parseNextActionPayload(next.payload);
+    const msg = (payload.message ?? "").trim();
+
+    // Keep calm + non-urgent. Also avoid empty.
+    const text = msg.length > 0 ? msg : "There’s one small next step worth considering.";
+    return {
+      text,
+      href: "/inbox",
+      severity: next.severity ?? 2,
+    };
+  }
+
+  return null;
 }
 
 export async function runEngine(userId: string, startBalance = 0, startDateISO?: string) {
@@ -211,6 +261,7 @@ export async function runEngine(userId: string, startBalance = 0, startDateISO?:
         title: `Upcoming bills (${payload.count ?? items.length})`,
         body: lines || "No upcoming bills found.",
         severity: ins.severity ?? 1,
+        action_href: "/bills",
       });
     }
 
@@ -225,6 +276,7 @@ export async function runEngine(userId: string, startBalance = 0, startDateISO?:
         title: "Safe to spend this week",
         body: `Estimated safe-to-spend: $${payload.amount ?? 0}`,
         severity: ins.severity ?? 1,
+        action_href: "/inputs",
       });
     }
 
@@ -240,8 +292,27 @@ export async function runEngine(userId: string, startBalance = 0, startDateISO?:
         title: "Next action",
         body: payload.message ?? "",
         severity: ins.severity ?? 2,
+        action_href: "/inbox",
       });
     }
+  }
+
+  // ✅ 5.1) Home Orientation (ONE calm sentence, no numbers, no lists)
+  const home = buildHomeOrientation(
+    insights.map((i) => ({ type: i.type, severity: i.severity ?? null, payload: i.payload }))
+  );
+
+  if (home) {
+    inboxItems.push({
+      user_id: userId,
+      run_id: runId,
+      dedupe_key: "home_orientation_v1",
+      type: "engine",
+      title: home.text,
+      body: null,
+      severity: home.severity,
+      action_href: home.href,
+    });
   }
 
   // ---- decision inbox: respect done + snoozed (do not overwrite them) ----

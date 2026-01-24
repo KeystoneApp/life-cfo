@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { Page } from "@/components/Page";
+import { Card, CardContent, Chip } from "@/components/ui";
 import { useHomeUnload } from "@/lib/home/useHomeUnload";
 import { useHomeOrientation } from "@/lib/home/useHomeOrientation";
 
@@ -14,6 +15,8 @@ export default function HomePage() {
   const router = useRouter();
 
   const [userId, setUserId] = useState<string | null>(null);
+  const [authStatus, setAuthStatus] = useState<"loading" | "signed_out" | "signed_in">("loading");
+
   const [text, setText] = useState("");
   const [affirmation, setAffirmation] = useState<"Saved." | "Held." | null>(null);
 
@@ -30,10 +33,12 @@ export default function HomePage() {
 
       if (error || !data?.user) {
         setUserId(null);
+        setAuthStatus("signed_out");
         return;
       }
 
       setUserId(data.user.id);
+      setAuthStatus("signed_in");
     })();
 
     return () => {
@@ -63,7 +68,7 @@ export default function HomePage() {
     const raw = text.trim();
     if (!raw) return;
 
-    // Release moment (critical): clear immediately.
+    // Release moment: clear immediately.
     setText("");
     flashAffirmation("Saved.");
 
@@ -76,9 +81,13 @@ export default function HomePage() {
 
   // Orientation click: navigate away (no inline expansion)
   const onOrientationClick = () => {
-    if (!orientation.item?.href) return;
-    router.push(orientation.item.href);
+    const href = orientation.item?.href;
+    if (!href) return;
+    router.push(href);
   };
+
+  const hasOrientation = Boolean(orientation.item?.text);
+  const canOpenOrientation = Boolean(orientation.item?.href);
 
   return (
     <Page title="Home">
@@ -92,13 +101,14 @@ export default function HomePage() {
             placeholder="What’s on your mind?"
             className="w-full min-h-[140px] resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[15px] leading-relaxed text-zinc-900 outline-none focus:ring-2 focus:ring-zinc-200"
             onKeyDown={(e) => {
-              // No mode UI. Natural: Enter submits; Shift+Enter creates a new line.
+              // Natural: Enter submits; Shift+Enter creates a new line.
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 void submit();
               }
             }}
-            aria-label="Unload"
+            aria-label="What’s on your mind?"
+            disabled={authStatus !== "signed_in"}
           />
 
           {/* Soft confirmation (brief, fades) */}
@@ -114,24 +124,35 @@ export default function HomePage() {
           {unload.response ? (
             <div className="text-[15px] leading-relaxed text-zinc-800">{unload.response}</div>
           ) : null}
+
+          {authStatus === "signed_out" ? (
+            <div className="text-sm text-zinc-600">Sign in to use Home.</div>
+          ) : null}
         </div>
 
-          {/* Orientation (AI conclusions) — separate; never competes with input */}
-        {orientation.item?.text ? (
-<button
-  type="button"
-  disabled={!orientation.item?.href}
-  onClick={onOrientationClick}
-  className={`w-full text-left text-[15px] leading-relaxed text-zinc-800 ${
-    orientation.item?.href
-      ? "cursor-pointer hover:text-zinc-900"
-      : "cursor-default opacity-70"
-  }`}
-  aria-label="Orientation"
->
-  {orientation.item.text}
-</button>
+        {/* Orientation (separate; never competes with input) */}
+        {hasOrientation ? (
+          <Card className="border-zinc-200 bg-white">
+            <CardContent>
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs font-semibold text-zinc-600">Orientation</div>
+                  <div className="mt-2 text-[15px] leading-relaxed text-zinc-800">{orientation.item?.text}</div>
+                </div>
 
+                {canOpenOrientation ? (
+                  <div className="shrink-0">
+                    <Chip onClick={onOrientationClick} title="Open">
+                      Open
+                    </Chip>
+                  </div>
+                ) : null}
+              </div>
+
+              {/* If it has no href, it stays as a calm signal only */}
+              {!canOpenOrientation ? <div className="mt-2 text-xs text-zinc-500">No action needed.</div> : null}
+            </CardContent>
+          </Card>
         ) : null}
       </div>
     </Page>

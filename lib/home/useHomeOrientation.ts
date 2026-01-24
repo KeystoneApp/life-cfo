@@ -16,7 +16,7 @@ export type UseHomeOrientationOptions = {
 
 /**
  * Contract: Home Orientation
- * - AI conclusions about life & money
+ * - AI conclusions (synthesised by Engine), not lists/state proxies
  * - No raw data, no numbers, no lists
  * - Render only when meaningful
  * - Never stack multiple messages (pick best 1)
@@ -53,10 +53,19 @@ export function useHomeOrientation(opts: UseHomeOrientationOptions) {
 
       const row = data[0] as any;
 
-      // If it exists but is done/snoozed, treat as absent (Home should rest)
+      // Respect "done" (Home should rest)
       if (row?.status === "done") {
         setItem(null);
         return;
+      }
+
+      // Respect snoozed-until (if snoozed into the future, Home should rest)
+      if (row?.status === "snoozed" && row?.snoozed_until) {
+        const untilMs = Date.parse(String(row.snoozed_until));
+        if (!Number.isNaN(untilMs) && untilMs > Date.now()) {
+          setItem(null);
+          return;
+        }
       }
 
       const textRaw =
@@ -100,7 +109,7 @@ export function useHomeOrientation(opts: UseHomeOrientationOptions) {
 
     return () => {
       mounted = false;
-      supabase.removeChannel(channel);
+      void supabase.removeChannel(channel);
     };
   }, [userId]);
 
