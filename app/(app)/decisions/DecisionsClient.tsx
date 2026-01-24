@@ -119,7 +119,7 @@ export default function DecisionsClient() {
   const openAttachment = async (att: AttachmentMeta) => {
     const url = await ensureSignedUrl(att.path);
     if (!url) {
-      setStatusLine("Couldn’t open attachment.");
+      setStatusLine((s) => s); // no-op (keep calm)
       return;
     }
     window.open(url, "_blank", "noopener,noreferrer");

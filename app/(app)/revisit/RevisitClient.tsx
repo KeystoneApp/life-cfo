@@ -1,3 +1,4 @@
+// app/(app)/revisit/RevisitClient.tsx
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -29,7 +30,7 @@ type Decision = {
   review_history: any[] | null;
   reviewed_at?: string | null;
 
-  attachments: AttachmentMeta[] | null; // ✅ decisions.attachments (jsonb)
+  attachments: AttachmentMeta[] | null; // decisions.attachments (jsonb)
 };
 
 const SOON_DAYS = 7;
@@ -120,13 +121,6 @@ export default function RevisitClient() {
   const lastFetchAtRef = useRef(0);
   const queuedRefetchRef = useRef(false);
 
-  const openItem = useMemo(() => items.find((x) => x.id === openId) ?? null, [items, openId]);
-
-  const openAttachments = useMemo(() => {
-    if (!openItem) return [];
-    return normalizeAttachments(openItem.attachments);
-  }, [openItem?.id, openItem?.attachments]);
-
   const ensureSignedUrl = async (path: string) => {
     if (!path) return null;
     if (signed[path]) return signed[path];
@@ -146,10 +140,7 @@ export default function RevisitClient() {
 
   const openAttachment = async (att: AttachmentMeta) => {
     const url = await ensureSignedUrl(att.path);
-    if (!url) {
-      setStatusLine("Couldn’t open attachment.");
-      return;
-    }
+    if (!url) return; // keep calm
     window.open(url, "_blank", "noopener,noreferrer");
   };
 
@@ -277,7 +268,6 @@ export default function RevisitClient() {
         "postgres_changes",
         { event: "*", schema: "public", table: "decisions", filter: `user_id=eq.${userId}` },
         () => {
-          // Keep this page calm: just re-load quietly (throttled)
           void load(userId);
         }
       )
@@ -292,7 +282,6 @@ export default function RevisitClient() {
   // ----- actions -----
   const pushUndo = (decisionId: string, label: string, prev: Partial<Decision>) => {
     setLastUndo({ decisionId, label, prev });
-    // auto-clear after a short, calm window
     window.setTimeout(() => {
       if (!isMountedRef.current) return;
       setLastUndo((cur) => (cur?.decisionId === decisionId ? null : cur));
@@ -327,7 +316,7 @@ export default function RevisitClient() {
 
     const nowIso = new Date().toISOString();
     const nextReview =
-      preset === "clear" ? null : preset ? nextReviewFromPreset(preset) : d.review_at; // default: keep cadence
+      preset === "clear" ? null : preset ? nextReviewFromPreset(preset) : d.review_at;
 
     const prevHistory = Array.isArray(d.review_history) ? d.review_history : [];
     const entry = { at: nowIso, kind: "reviewed", next_review_at: nextReview };
@@ -338,7 +327,6 @@ export default function RevisitClient() {
       review_at: nextReview,
     };
 
-    // optimistic
     pushUndo(d.id, "Undo", {
       reviewed_at: d.reviewed_at ?? null,
       review_at: d.review_at ?? null,
@@ -354,7 +342,6 @@ export default function RevisitClient() {
     const { error } = await supabase.from("decisions").update(patch).eq("id", d.id).eq("user_id", userId);
 
     if (error) {
-      // revert quietly if it fails
       setStatusLine(`Update failed: ${error.message}`);
       await undoLast();
       return;
@@ -367,7 +354,6 @@ export default function RevisitClient() {
   const setCustomReviewAt = async (d: Decision, iso: string | null) => {
     if (!userId) return;
 
-    // optimistic + undo
     pushUndo(d.id, "Undo", { review_at: d.review_at ?? null });
 
     setItems((prev) => prev.map((x) => (x.id === d.id ? { ...x, review_at: iso } : x)));
@@ -383,7 +369,6 @@ export default function RevisitClient() {
     setStatusLine("Updated.");
   };
 
-  // UI helpers
   const dueLabel = (d: Decision) => {
     const iso = d.review_at;
     if (!iso) return "";
@@ -396,32 +381,28 @@ export default function RevisitClient() {
     return `Due in ${diff}d`;
   };
 
-  const AttachmentsStrip = () => {
-    if (!openItem) return null;
-
-    if (openAttachments.length === 0) {
-      return (
-        <div className="rounded-xl border border-zinc-200 bg-white p-3 space-y-2">
-          <div className="text-xs font-semibold text-zinc-700">Attachments</div>
-          <div className="text-sm text-zinc-600">No attachments.</div>
-        </div>
-      );
-    }
+  const AttachmentsStrip = ({ decision }: { decision: Decision }) => {
+    const atts = normalizeAttachments(decision.attachments);
 
     return (
       <div className="rounded-xl border border-zinc-200 bg-white p-3 space-y-2">
         <div className="text-xs font-semibold text-zinc-700">Attachments</div>
-        <div className="flex flex-wrap items-center gap-2">
-          {openAttachments.map((a) => (
-            <Chip
-              key={a.path}
-              onClick={() => void openAttachment(a)}
-              title={`${a.type}${a.size ? ` • ${softKB(a.size)}` : ""}`}
-            >
-              {a.name}
-            </Chip>
-          ))}
-        </div>
+
+        {atts.length === 0 ? (
+          <div className="text-sm text-zinc-600">No attachments.</div>
+        ) : (
+          <div className="flex flex-wrap items-center gap-2">
+            {atts.map((a) => (
+              <Chip
+                key={a.path}
+                onClick={() => void openAttachment(a)}
+                title={`${a.type}${a.size ? ` • ${softKB(a.size)}` : ""}`}
+              >
+                {a.name}
+              </Chip>
+            ))}
+          </div>
+        )}
       </div>
     );
   };
@@ -492,8 +473,7 @@ export default function RevisitClient() {
                               <div className="text-sm text-zinc-600">No extra context saved.</div>
                             )}
 
-                            {/* ✅ Attachments */}
-                            <AttachmentsStrip />
+                            <AttachmentsStrip decision={d} />
 
                             <div className="flex flex-wrap items-center gap-2">
                               <Chip onClick={() => void markReviewed(d)} title="Mark reviewed (keep the same cadence)">
@@ -528,8 +508,6 @@ export default function RevisitClient() {
                                   onChange={(e) => {
                                     const v = e.target.value;
                                     if (!v) return void setCustomReviewAt(d, null);
-
-                                    // Local morning (keeps “calm day” semantics; avoids UTC day shift bugs)
                                     const iso = new Date(`${v}T09:00:00`).toISOString();
                                     void setCustomReviewAt(d, iso);
                                   }}
@@ -581,8 +559,7 @@ export default function RevisitClient() {
                               <div className="text-sm text-zinc-600">No extra context saved.</div>
                             )}
 
-                            {/* ✅ Attachments */}
-                            <AttachmentsStrip />
+                            <AttachmentsStrip decision={d} />
 
                             <div className="flex flex-wrap items-center gap-2">
                               <Chip onClick={() => void markReviewed(d)} title="Reviewed (keep cadence)">

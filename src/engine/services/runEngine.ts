@@ -6,20 +6,95 @@ import { forecastCashflow30d } from "../domain/forecast";
 import { generateInsights } from "../domain/insights";
 import { autoReopenExpiredSnoozes } from "./autoReopenSnoozed";
 
-export async function runEngine(
-  userId: string,
-  startBalance = 0,
-  startDateISO?: string
-) {
+type StoredRecurringPatternRow = {
+  merchant_key: string;
+  status: string | null;
+  confirmed_at: string | null;
+  ignored_at: string | null;
+};
+
+type UpcomingBillsItem = {
+  merchant_key: string;
+  amount: number;
+  date: string;
+};
+
+type UpcomingBillsPayload = {
+  count?: number;
+  items?: UpcomingBillsItem[];
+};
+
+type SafeToSpendPayload = {
+  amount?: number;
+};
+
+type NextActionPayload = {
+  action?: string;
+  message?: string;
+};
+
+type ExistingInboxRow = {
+  dedupe_key: string;
+  status: string | null;
+  snoozed_until: string | null;
+};
+
+type InboxUpsertRow = {
+  user_id: string;
+  run_id: string;
+  dedupe_key: string;
+  type: string;
+  title: string;
+  body?: string | null;
+  severity?: number | null;
+};
+
+function isObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null;
+}
+
+function asNumber(v: unknown): number | undefined {
+  return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+}
+
+function parseUpcomingBillsPayload(payload: unknown): UpcomingBillsPayload {
+  if (!isObject(payload)) return {};
+
+  const rawItems = payload.items;
+  const items: UpcomingBillsItem[] = Array.isArray(rawItems)
+    ? rawItems
+        .filter(isObject)
+        .map((it) => ({
+          merchant_key: typeof it.merchant_key === "string" ? it.merchant_key : "Unknown",
+          amount: asNumber(it.amount) ?? 0,
+          date: typeof it.date === "string" ? it.date : "",
+        }))
+    : [];
+
+  const count = asNumber(payload.count);
+
+  return { count, items };
+}
+
+function parseSafeToSpendPayload(payload: unknown): SafeToSpendPayload {
+  if (!isObject(payload)) return {};
+  return { amount: asNumber(payload.amount) };
+}
+
+function parseNextActionPayload(payload: unknown): NextActionPayload {
+  if (!isObject(payload)) return {};
+  return {
+    action: typeof payload.action === "string" ? payload.action : undefined,
+    message: typeof payload.message === "string" ? payload.message : undefined,
+  };
+}
+
+export async function runEngine(userId: string, startBalance = 0, startDateISO?: string) {
   // Auto-reopen any snoozes that have expired
   await autoReopenExpiredSnoozes(userId);
 
   // 1) Load data
-  const { data: bills, error: billsErr } = await supabase
-    .from("bills")
-    .select("*")
-    .eq("user_id", userId);
-
+  const { data: bills, error: billsErr } = await supabase.from("bills").select("*").eq("user_id", userId);
   if (billsErr) throw billsErr;
 
   const { data: txs, error: txErr } = await supabase
@@ -63,27 +138,25 @@ export async function runEngine(
 
   if (storedErr) throw storedErr;
 
-  const storedByMerchant = new Map(
-    (storedPatterns ?? []).map((p: any) => [p.merchant_key as string, p])
+  const storedByMerchant = new Map<string, StoredRecurringPatternRow>(
+    (storedPatterns ?? []).map((p) => p as StoredRecurringPatternRow).map((p) => [p.merchant_key, p])
   );
 
   // 2.3) Merge stored status fields onto detected patterns (for insights + output)
   const patternsWithStatus: Array<Omit<RecurringPattern, "id" | "created_at">> = patterns.map((p) => {
-  const stored = storedByMerchant.get(p.merchant_key) as any;
+    const stored = storedByMerchant.get(p.merchant_key);
 
-  const status: RecurringPattern["status"] =
-    stored?.status === "confirmed" || stored?.status === "ignored" || stored?.status === "pending"
-      ? stored.status
-      : "pending";
+    const rawStatus = stored?.status ?? "pending";
+    const status: RecurringPattern["status"] =
+      rawStatus === "confirmed" || rawStatus === "ignored" || rawStatus === "pending" ? rawStatus : "pending";
 
-  return {
-    ...p,
-    status,
-    confirmed_at: (stored?.confirmed_at as string | null) ?? null,
-    ignored_at: (stored?.ignored_at as string | null) ?? null,
-  };
-});
-
+    return {
+      ...p,
+      status,
+      confirmed_at: stored?.confirmed_at ?? null,
+      ignored_at: stored?.ignored_at ?? null,
+    };
+  });
 
   const forecast = forecastCashflow30d({
     startBalance,
@@ -107,7 +180,7 @@ export async function runEngine(
 
   if (runErr) throw runErr;
 
-  const runId = runRow.id as string;
+  const runId = String((runRow as { id: unknown }).id);
 
   // 4) Write insights
   const insightRows = insights.map((i) => ({
@@ -122,23 +195,13 @@ export async function runEngine(
   if (insErr) throw insErr;
 
   // 5) Decision Inbox (deduped)
-  const inboxItems: Array<{
-    user_id: string;
-    run_id: string;
-    dedupe_key: string;
-    type: string;
-    title: string;
-    body?: string | null;
-    severity?: number | null;
-  }> = [];
+  const inboxItems: InboxUpsertRow[] = [];
 
   for (const ins of insights) {
     if (ins.type === "upcoming_bills") {
-      const payload = ins.payload as any;
-      const items = (payload.items ?? []) as Array<any>;
-      const lines = items
-        .map((b) => `• ${b.merchant_key} — $${b.amount} on ${b.date}`)
-        .join("\n");
+      const payload = parseUpcomingBillsPayload(ins.payload);
+      const items = payload.items ?? [];
+      const lines = items.map((b) => `• ${b.merchant_key} — $${b.amount} on ${b.date}`).join("\n");
 
       inboxItems.push({
         user_id: userId,
@@ -152,7 +215,7 @@ export async function runEngine(
     }
 
     if (ins.type === "safe_to_spend_week") {
-      const payload = ins.payload as any;
+      const payload = parseSafeToSpendPayload(ins.payload);
 
       inboxItems.push({
         user_id: userId,
@@ -160,13 +223,13 @@ export async function runEngine(
         dedupe_key: "safe_to_spend_week",
         type: "safe_to_spend_week",
         title: "Safe to spend this week",
-        body: `Estimated safe-to-spend: $${payload.amount}`,
+        body: `Estimated safe-to-spend: $${payload.amount ?? 0}`,
         severity: ins.severity ?? 1,
       });
     }
 
     if (ins.type === "next_action") {
-      const payload = ins.payload as any;
+      const payload = parseNextActionPayload(ins.payload);
       const action = payload.action ?? "unknown";
 
       inboxItems.push({
@@ -181,19 +244,11 @@ export async function runEngine(
     }
   }
 
-    // ---- decision inbox: respect done + snoozed (do not overwrite them) ----
-
-  // inboxItems MUST include dedupe_key for this to work
+  // ---- decision inbox: respect done + snoozed (do not overwrite them) ----
   const now = new Date();
   const nowISO = now.toISOString();
 
-  const dedupeKeys = Array.from(
-    new Set(
-      inboxItems
-        .map((x: any) => x.dedupe_key)
-        .filter((k: any) => typeof k === "string" && k.length > 0)
-    )
-  );
+  const dedupeKeys = Array.from(new Set(inboxItems.map((x) => x.dedupe_key).filter((k) => k.length > 0)));
 
   let inboxItemsToUpsert = inboxItems;
 
@@ -206,11 +261,11 @@ export async function runEngine(
 
     if (existingErr) throw existingErr;
 
-    const existingByKey = new Map<string, any>(
-      (existing ?? []).map((r: any) => [r.dedupe_key, r])
+    const existingByKey = new Map<string, ExistingInboxRow>(
+      (existing ?? []).map((r) => r as ExistingInboxRow).map((r) => [r.dedupe_key, r])
     );
 
-    inboxItemsToUpsert = inboxItems.filter((item: any) => {
+    inboxItemsToUpsert = inboxItems.filter((item) => {
       const current = existingByKey.get(item.dedupe_key);
 
       // If no existing row, allow insert/upsert
@@ -221,8 +276,8 @@ export async function runEngine(
 
       // If snoozed into the future, don't touch it
       if (current.status === "snoozed" && current.snoozed_until) {
-        const snoozeUntil = new Date(current.snoozed_until).toISOString();
-        if (snoozeUntil > nowISO) return false;
+        const snoozeUntilISO = new Date(current.snoozed_until).toISOString();
+        if (snoozeUntilISO > nowISO) return false;
       }
 
       // Otherwise, ok to upsert (open or snooze expired)
