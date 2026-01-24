@@ -8,6 +8,10 @@ import { Page } from "@/components/Page";
 import { Chip, Card, CardContent, useToast } from "@/components/ui";
 import { ConversationPanel } from "./ConversationPanel";
 
+// ✅ Assisted retrieval + tiles (you created these in steps 1–4)
+import { AssistedSearch } from "@/components/AssistedSearch";
+import { TilesRow } from "@/components/TilesRow";
+
 export const dynamic = "force-dynamic";
 
 type AttachmentMeta = {
@@ -38,6 +42,18 @@ type DecisionSummary = {
   decision_id: string;
   summary_text: string;
   created_at: string;
+};
+
+type Domain = {
+  id: string;
+  name: string;
+  sort_order?: number | null;
+};
+
+type Constellation = {
+  id: string;
+  name: string;
+  sort_order?: number | null;
 };
 
 function safeMs(iso: string | null | undefined) {
@@ -75,6 +91,16 @@ function normalizeAttachments(raw: unknown): AttachmentMeta[] {
     }));
 }
 
+function sortByName<T extends { name: string; sort_order?: number | null }>(items: T[]): T[] {
+  return [...items].sort((a, b) => {
+    const ao = typeof a.sort_order === "number" ? a.sort_order : 9999;
+    const bo = typeof b.sort_order === "number" ? b.sort_order : 9999;
+    if (ao !== bo) return ao - bo;
+    return a.name.localeCompare(b.name);
+  });
+}
+
+
 export default function ThinkingClient() {
   const router = useRouter();
   const { showToast } = useToast();
@@ -93,12 +119,26 @@ export default function ThinkingClient() {
   const [summaryStatus, setSummaryStatus] = useState<string>("");
   const [summaries, setSummaries] = useState<DecisionSummary[]>([]);
 
+  // ✅ Domains + Constellations (tiles + assignment)
+  const [domains, setDomains] = useState<Domain[]>([]);
+  const [constellations, setConstellations] = useState<Constellation[]>([]);
+  const [activeDomainId, setActiveDomainId] = useState<string | null>(null);
+  const [activeConstellationId, setActiveConstellationId] = useState<string | null>(null);
+
+  // decision_id -> domain_id
+  const [domainByDecision, setDomainByDecision] = useState<Record<string, string | null>>({});
+  // decision_id -> constellation_ids[]
+  const [constellationsByDecision, setConstellationsByDecision] = useState<Record<string, string[]>>({});
+
   // signed url cache (path -> signedUrl)
   const [signed, setSigned] = useState<Record<string, string>>({});
   const signingRef = useRef<Record<string, boolean>>({});
 
   const loadRef = useRef<(opts?: { silent?: boolean }) => void>(() => {});
   const reloadTimerRef = useRef<number | null>(null);
+
+  // ✅ card refs for scroll-to-open
+  const cardRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   const scheduleReload = () => {
     if (reloadTimerRef.current) window.clearTimeout(reloadTimerRef.current);
@@ -152,12 +192,14 @@ export default function ThinkingClient() {
       return;
     }
 
-    setUserId(auth.user.id);
+    const uid = auth.user.id;
+    setUserId(uid);
 
+    // 1) Load draft decisions
     const { data, error } = await supabase
       .from("decisions")
       .select("id,user_id,title,context,status,created_at,decided_at,review_at,origin,framed_at,attachments")
-      .eq("user_id", auth.user.id)
+      .eq("user_id", uid)
       .eq("status", "draft")
       .order("created_at", { ascending: false });
 
@@ -183,6 +225,84 @@ export default function ThinkingClient() {
     }));
 
     setDrafts(list);
+
+    // 2) Load domains + constellations (for tiles and assignment)
+    // Keep calm: small lists, no extra UI if empty.
+    const [domRes, conRes] = await Promise.all([
+      supabase.from("domains").select("id,name,sort_order").eq("user_id", uid).order("sort_order", { ascending: true }),
+      supabase
+        .from("constellations")
+        .select("id,name,sort_order")
+        .eq("user_id", uid)
+        .order("sort_order", { ascending: true }),
+    ]);
+
+    if (!domRes.error) {
+  const rows = (domRes.data ?? []) as any[];
+  const next: Domain[] = rows
+    .filter((r) => r && r.id && r.name)
+    .map((r) => ({
+      id: String(r.id),
+      name: String(r.name),
+      sort_order: typeof r.sort_order === "number" ? r.sort_order : null,
+    }));
+  setDomains(sortByName(next));
+}
+
+if (!conRes.error) {
+  const rows = (conRes.data ?? []) as any[];
+  const next: Constellation[] = rows
+    .filter((r) => r && r.id && r.name)
+    .map((r) => ({
+      id: String(r.id),
+      name: String(r.name),
+      sort_order: typeof r.sort_order === "number" ? r.sort_order : null,
+    }));
+  setConstellations(sortByName(next));
+}
+
+    // 3) Load membership maps for current list (so tiles filter instantly)
+    const decisionIds = list.map((d) => d.id);
+    if (decisionIds.length > 0) {
+      const [ddRes, ciRes] = await Promise.all([
+        supabase
+          .from("decision_domains")
+          .select("decision_id,domain_id")
+          .eq("user_id", uid)
+          .in("decision_id", decisionIds),
+        supabase
+          .from("constellation_items")
+          .select("decision_id,constellation_id")
+          .eq("user_id", uid)
+          .in("decision_id", decisionIds),
+      ]);
+
+      if (!ddRes.error) {
+        const next: Record<string, string | null> = {};
+        for (const row of ddRes.data ?? []) {
+          next[String((row as any).decision_id)] = String((row as any).domain_id);
+        }
+        setDomainByDecision(next);
+      } else {
+        setDomainByDecision({});
+      }
+
+      if (!ciRes.error) {
+        const next: Record<string, string[]> = {};
+        for (const row of ciRes.data ?? []) {
+          const did = String((row as any).decision_id);
+          const cid = String((row as any).constellation_id);
+          next[did] = next[did] ? [...next[did], cid] : [cid];
+        }
+        setConstellationsByDecision(next);
+      } else {
+        setConstellationsByDecision({});
+      }
+    } else {
+      setDomainByDecision({});
+      setConstellationsByDecision({});
+    }
+
     setStatusLine(list.length === 0 ? "No drafts right now." : "Loaded.");
   };
 
@@ -201,7 +321,7 @@ export default function ThinkingClient() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Auto-open draft from query (?open=...)
+  // ✅ Auto-open draft from query (?open=...) + scroll into view + clear param
   useEffect(() => {
     if (!openFromQuery) return;
     if (drafts.length === 0) return;
@@ -212,9 +332,19 @@ export default function ThinkingClient() {
     setOpenId(match.id);
     setHighlightId(match.id);
 
+    // scroll once layout has painted
+    window.setTimeout(() => {
+      const el = cardRefs.current[match.id];
+      if (el?.scrollIntoView) el.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 60);
+
+    // clear the param (prevents repeat-open on refresh)
+    // Keep this simple and safe: replace with base route.
+    router.replace("/thinking");
+
     const t = window.setTimeout(() => setHighlightId(null), 1600);
     return () => window.clearTimeout(t);
-  }, [openFromQuery, drafts]);
+  }, [openFromQuery, drafts, router]);
 
   // Keep chat only for the open card
   useEffect(() => {
@@ -327,6 +457,10 @@ export default function ThinkingClient() {
 
             return merged;
           });
+
+          // membership maps may have changed (domain/constellation assignment)
+          // reload silently to keep truth without complex realtime joins
+          scheduleReload();
         }
       )
       .subscribe();
@@ -438,6 +572,95 @@ export default function ThinkingClient() {
     showToast({ message: "Added to context." }, 2500);
   };
 
+  // ✅ Domain assignment (single domain per decision in V1)
+  const setDecisionDomain = async (decisionId: string, domainId: string | null) => {
+    if (!userId) return;
+
+    // optimistic
+    setDomainByDecision((prev) => ({ ...prev, [decisionId]: domainId }));
+
+    try {
+      if (!domainId) {
+        const { error } = await supabase
+          .from("decision_domains")
+          .delete()
+          .eq("user_id", userId)
+          .eq("decision_id", decisionId);
+
+        if (error) throw error;
+        showToast({ message: "Domain cleared." }, 2000);
+        return;
+      }
+
+      const { error } = await supabase
+        .from("decision_domains")
+        .upsert(
+          { user_id: userId, decision_id: decisionId, domain_id: domainId },
+          { onConflict: "decision_id" }
+        );
+
+      if (error) throw error;
+      showToast({ message: "Domain set." }, 2000);
+    } catch (e: any) {
+      showToast({ message: `Couldn’t update domain.` }, 2500);
+      loadRef.current({ silent: true });
+    }
+  };
+
+  // ✅ Constellation membership toggle (multi)
+  const toggleConstellation = async (decisionId: string, constellationId: string) => {
+    if (!userId) return;
+
+    const current = constellationsByDecision[decisionId] ?? [];
+    const has = current.includes(constellationId);
+    const next = has ? current.filter((x) => x !== constellationId) : [...current, constellationId];
+
+    // optimistic
+    setConstellationsByDecision((prev) => ({ ...prev, [decisionId]: next }));
+
+    try {
+      if (has) {
+        const { error } = await supabase
+          .from("constellation_items")
+          .delete()
+          .eq("user_id", userId)
+          .eq("decision_id", decisionId)
+          .eq("constellation_id", constellationId);
+
+        if (error) throw error;
+        showToast({ message: "Removed." }, 2000);
+        return;
+      }
+
+      const { error } = await supabase.from("constellation_items").insert({
+        user_id: userId,
+        decision_id: decisionId,
+        constellation_id: constellationId,
+      });
+
+      if (error) throw error;
+      showToast({ message: "Added." }, 2000);
+    } catch (e: any) {
+      showToast({ message: `Couldn’t update constellation.` }, 2500);
+      loadRef.current({ silent: true });
+    }
+  };
+
+  // ✅ Apply calm filters from tiles
+  const visibleDrafts = useMemo(() => {
+    let list = drafts;
+
+    if (activeDomainId) {
+      list = list.filter((d) => (domainByDecision[d.id] ?? null) === activeDomainId);
+    }
+
+    if (activeConstellationId) {
+      list = list.filter((d) => (constellationsByDecision[d.id] ?? []).includes(activeConstellationId));
+    }
+
+    return list;
+  }, [drafts, activeDomainId, activeConstellationId, domainByDecision, constellationsByDecision]);
+
   return (
     <Page
       title="Thinking"
@@ -450,158 +673,241 @@ export default function ThinkingClient() {
       }
     >
       <div className="mx-auto w-full max-w-[760px] space-y-6">
+        {/* ✅ Assisted retrieval (recognition-first) */}
+        <AssistedSearch scope="thinking" placeholder="Search drafts and decisions…" />
+
+        {/* ✅ Calm tiles (filters). Only appear if there are items to show. */}
+        <div className="space-y-4">
+          <TilesRow
+            title="Domains"
+            items={domains}
+            activeId={activeDomainId}
+            onSelect={(id) => setActiveDomainId(id)}
+          />
+          <TilesRow
+            title="Constellations"
+            items={constellations}
+            activeId={activeConstellationId}
+            onSelect={(id) => setActiveConstellationId(id)}
+          />
+        </div>
+
         <div className="text-xs text-zinc-500">{statusLine}</div>
 
-        {drafts.length === 0 ? (
+        {visibleDrafts.length === 0 ? (
           <Card className="border-zinc-200 bg-white">
             <CardContent>
               <div className="space-y-2">
                 <div className="text-sm font-semibold text-zinc-900">All clear.</div>
-                <div className="text-sm text-zinc-600">When something needs thinking time, it can live here without pressure.</div>
+                <div className="text-sm text-zinc-600">
+                  When something needs thinking time, it can live here without pressure.
+                </div>
               </div>
             </CardContent>
           </Card>
         ) : (
           <div className="grid gap-3">
-            {drafts.map((d) => {
+            {visibleDrafts.map((d) => {
               const isOpen = openId === d.id;
               const isChatOpen = chatForId === d.id;
 
               const attachmentsForCard = normalizeAttachments(d.attachments);
 
-              return (
-                <Card
-                  key={d.id}
-                  className={`border-zinc-200 bg-white transition ${highlightId === d.id ? "ring-2 ring-zinc-300" : ""}`}
-                >
-                  <CardContent>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const nextOpen = isOpen ? null : d.id;
-                        setOpenId(nextOpen);
-                        if (nextOpen !== d.id) setChatForId(null);
-                      }}
-                      className="w-full text-left"
-                      aria-expanded={isOpen}
-                      title={isOpen ? "Collapse" : "Open"}
-                    >
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div className="min-w-[240px] flex-1">
-                          <div className="text-base font-semibold text-zinc-900">{d.title}</div>
+              const domainId = domainByDecision[d.id] ?? null;
+              const domainName = domainId ? domains.find((x) => x.id === domainId)?.name ?? null : null;
 
-                          <div className="mt-1 text-xs text-zinc-500">
-                            Started {softWhen(d.created_at)}
-                            {d.review_at ? ` • Revisit ${softWhen(d.review_at)}` : ""}
+              const memberIds = constellationsByDecision[d.id] ?? [];
+              const memberNames = memberIds
+                .map((cid) => constellations.find((c) => c.id === cid)?.name)
+                .filter(Boolean) as string[];
+
+              return (
+                <div
+                  key={d.id}
+                  ref={(el) => {
+                    cardRefs.current[d.id] = el;
+                  }}
+                >
+                  <Card className={`border-zinc-200 bg-white transition ${highlightId === d.id ? "ring-2 ring-zinc-300" : ""}`}>
+                    <CardContent>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const nextOpen = isOpen ? null : d.id;
+                          setOpenId(nextOpen);
+                          if (nextOpen !== d.id) setChatForId(null);
+                        }}
+                        className="w-full text-left"
+                        aria-expanded={isOpen}
+                        title={isOpen ? "Collapse" : "Open"}
+                      >
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="min-w-[240px] flex-1">
+                            <div className="text-base font-semibold text-zinc-900">{d.title}</div>
+
+                            <div className="mt-1 text-xs text-zinc-500">
+                              Started {softWhen(d.created_at)}
+                              {d.review_at ? ` • Revisit ${softWhen(d.review_at)}` : ""}
+                            </div>
+
+                            {/* Quiet meaning hints (not a dashboard) */}
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              {domainName ? <Chip title="Domain">{domainName}</Chip> : null}
+                              {memberNames.slice(0, 2).map((n) => (
+                                <Chip key={n} title="Constellation">{n}</Chip>
+                              ))}
+                              {memberNames.length > 2 ? <Chip title="More constellations">+{memberNames.length - 2}</Chip> : null}
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <Chip>{isOpen ? "Hide" : "Open"}</Chip>
                           </div>
                         </div>
+                      </button>
 
-                        <div className="flex items-center gap-2">
-                          <Chip>{isOpen ? "Hide" : "Open"}</Chip>
-                        </div>
-                      </div>
-                    </button>
+                      {isOpen ? (
+                        <div className="mt-4 space-y-4">
+                          {d.origin === "framing" ? <div className="mt-1 text-xs text-zinc-500">Prepared in Framing.</div> : null}
 
-                    {isOpen ? (
-                      <div className="mt-4 space-y-4">
-                        {d.origin === "framing" ? <div className="mt-1 text-xs text-zinc-500">Prepared in Framing.</div> : null}
-
-                        {d.context ? (
-                          <div className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-700">{d.context}</div>
-                        ) : (
-                          <div className="text-sm text-zinc-600">No extra context yet.</div>
-                        )}
-
-                        {/* Attachments strip (calm) */}
-                        <div className="rounded-xl border border-zinc-200 bg-white p-3 space-y-2">
-                          <div className="text-xs font-semibold text-zinc-700">Attachments</div>
-
-                          {attachmentsForCard.length === 0 ? (
-                            <div className="text-sm text-zinc-600">No attachments.</div>
+                          {d.context ? (
+                            <div className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-700">{d.context}</div>
                           ) : (
-                            <div className="flex flex-wrap items-center gap-2">
-                              {attachmentsForCard.map((a) => (
-                                <Chip
-                                  key={a.path}
-                                  onClick={() => void openAttachment(a)}
-                                  title={`${a.type}${a.size ? ` • ${softKB(a.size)}` : ""}`}
-                                >
-                                  {a.name}
-                                </Chip>
-                              ))}
-                            </div>
+                            <div className="text-sm text-zinc-600">No extra context yet.</div>
                           )}
-                        </div>
 
-                        {/* Memory strip (capped, calm) */}
-                        <div className="rounded-xl border border-zinc-200 bg-white p-3 space-y-2">
-                          <div className="text-xs font-semibold text-zinc-700">Memory</div>
-                          {summaryStatus ? <div className="text-xs text-zinc-500">{summaryStatus}</div> : null}
+                          {/* ✅ Domain + Constellations (quiet assignment UI) */}
+                          <div className="rounded-xl border border-zinc-200 bg-white p-3 space-y-3">
+                            <div className="text-xs font-semibold text-zinc-700">Meaning</div>
 
-                          {!summaryStatus && summaries.length === 0 ? (
-                            <div className="text-sm text-zinc-600">No saved summaries yet.</div>
-                          ) : null}
-
-                          {summaries.map((s) => (
-                            <div key={s.id} className="space-y-2">
-                              <div className="text-xs text-zinc-500">Saved {softWhen(s.created_at)}</div>
-                              <div className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-800">{s.summary_text}</div>
+                            <div className="space-y-2">
+                              <div className="text-xs text-zinc-500">Domain</div>
                               <div className="flex flex-wrap items-center gap-2">
-                                <Chip onClick={() => useSummaryAsContext(d, s)} title="Append this summary into the draft context">
-                                  Use as context
+                                <Chip active={!domainId} onClick={() => void setDecisionDomain(d.id, null)}>
+                                  None
                                 </Chip>
+                                {domains.map((dom) => (
+                                  <Chip
+                                    key={dom.id}
+                                    active={domainId === dom.id}
+                                    onClick={() => void setDecisionDomain(d.id, dom.id)}
+                                  >
+                                    {dom.name}
+                                  </Chip>
+                                ))}
                               </div>
                             </div>
-                          ))}
-                        </div>
 
-                        <div className="flex flex-wrap items-center gap-2">
-                          <Chip onClick={() => decideNow(d)} title="Move to Decisions (decided)">
-                            Decide
-                          </Chip>
-
-                          <Chip onClick={() => scheduleRevisit(d, 7)} title="Schedule a revisit in 7 days">
-                            Revisit 7d
-                          </Chip>
-
-                          <Chip onClick={() => scheduleRevisit(d, 30)} title="Schedule a revisit in 30 days">
-                            Revisit 30d
-                          </Chip>
-
-                          <Chip onClick={() => router.push("/revisit")} title="Open the revisit page">
-                            Go to Revisit
-                          </Chip>
-
-                          <Chip onClick={() => deleteDraft(d)} title="Delete this draft">
-                            Delete
-                          </Chip>
-
-                          <Chip
-                            onClick={() => setChatForId((cur) => (cur === d.id ? null : d.id))}
-                            title="Have a conversation with Keystone about this decision"
-                          >
-                            {isChatOpen ? "Hide chat" : "Talk this through"}
-                          </Chip>
-
-                          <Chip onClick={() => router.push("/home")} title="Return to Home">
-                            Put this down
-                          </Chip>
-                        </div>
-
-                        {isChatOpen ? (
-                          <div className="pt-2">
-                            <ConversationPanel
-                              decisionId={d.id}
-                              decisionTitle={d.title}
-                              frame={{ decision_statement: d.title }}
-                              onClose={() => setChatForId(null)}
-                            />
+                            <div className="space-y-2">
+                              <div className="text-xs text-zinc-500">Constellations</div>
+                              {constellations.length === 0 ? (
+                                <div className="text-sm text-zinc-600">No constellations yet.</div>
+                              ) : (
+                                <div className="flex flex-wrap items-center gap-2">
+                                  {constellations.map((c) => {
+                                    const active = memberIds.includes(c.id);
+                                    return (
+                                      <Chip key={c.id} active={active} onClick={() => void toggleConstellation(d.id, c.id)}>
+                                        {c.name}
+                                      </Chip>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
                           </div>
-                        ) : null}
-                      </div>
-                    ) : null}
-                  </CardContent>
-                </Card>
+
+                          {/* Attachments strip (calm) */}
+                          <div className="rounded-xl border border-zinc-200 bg-white p-3 space-y-2">
+                            <div className="text-xs font-semibold text-zinc-700">Attachments</div>
+
+                            {attachmentsForCard.length === 0 ? (
+                              <div className="text-sm text-zinc-600">No attachments.</div>
+                            ) : (
+                              <div className="flex flex-wrap items-center gap-2">
+                                {attachmentsForCard.map((a) => (
+                                  <Chip
+                                    key={a.path}
+                                    onClick={() => void openAttachment(a)}
+                                    title={`${a.type}${a.size ? ` • ${softKB(a.size)}` : ""}`}
+                                  >
+                                    {a.name}
+                                  </Chip>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Memory strip (capped, calm) */}
+                          <div className="rounded-xl border border-zinc-200 bg-white p-3 space-y-2">
+                            <div className="text-xs font-semibold text-zinc-700">Memory</div>
+                            {summaryStatus ? <div className="text-xs text-zinc-500">{summaryStatus}</div> : null}
+
+                            {!summaryStatus && summaries.length === 0 ? (
+                              <div className="text-sm text-zinc-600">No saved summaries yet.</div>
+                            ) : null}
+
+                            {summaries.map((s) => (
+                              <div key={s.id} className="space-y-2">
+                                <div className="text-xs text-zinc-500">Saved {softWhen(s.created_at)}</div>
+                                <div className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-800">{s.summary_text}</div>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <Chip onClick={() => useSummaryAsContext(d, s)} title="Append this summary into the draft context">
+                                    Use as context
+                                  </Chip>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Chip onClick={() => decideNow(d)} title="Move to Decisions (decided)">
+                              Decide
+                            </Chip>
+
+                            <Chip onClick={() => scheduleRevisit(d, 7)} title="Schedule a revisit in 7 days">
+                              Revisit 7d
+                            </Chip>
+
+                            <Chip onClick={() => scheduleRevisit(d, 30)} title="Schedule a revisit in 30 days">
+                              Revisit 30d
+                            </Chip>
+
+                            <Chip onClick={() => router.push("/revisit")} title="Open the revisit page">
+                              Go to Revisit
+                            </Chip>
+
+                            <Chip onClick={() => deleteDraft(d)} title="Delete this draft">
+                              Delete
+                            </Chip>
+
+                            <Chip
+                              onClick={() => setChatForId((cur) => (cur === d.id ? null : d.id))}
+                              title="Have a conversation with Keystone about this decision"
+                            >
+                              {isChatOpen ? "Hide chat" : "Talk this through"}
+                            </Chip>
+
+                            <Chip onClick={() => router.push("/home")} title="Return to Home">
+                              Put this down
+                            </Chip>
+                          </div>
+
+                          {isChatOpen ? (
+                            <div className="pt-2">
+                              <ConversationPanel
+                                decisionId={d.id}
+                                decisionTitle={d.title}
+                                frame={{ decision_statement: d.title }}
+                                onClose={() => setChatForId(null)}
+                              />
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </CardContent>
+                  </Card>
+                </div>
               );
             })}
           </div>
