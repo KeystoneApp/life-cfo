@@ -385,6 +385,36 @@ export default function DecisionsClient() {
     setStatusLine("Moved to Chapters.");
   };
 
+  // ✅ Reopen: move a decided decision back to Thinking as a draft (safe valve)
+  const reopenToThinking = async (d: Decision) => {
+    if (!userId) return;
+
+    // optimistic: remove from list & close card
+    setItems((prev) => prev.filter((x) => x.id !== d.id));
+    setOpenId((cur) => (cur === d.id ? null : cur));
+    setStatusLine("Reopened in Thinking.");
+
+    const { error } = await supabase
+      .from("decisions")
+      .update({
+        status: "draft",
+        decided_at: null,
+        review_at: null,
+        reviewed_at: null,
+      })
+      .eq("id", d.id)
+      .eq("user_id", userId)
+      .eq("status", "decided");
+
+    if (error) {
+      setStatusLine(`Couldn’t reopen: ${error.message}`);
+      void load(userId);
+      return;
+    }
+
+    router.push(`/thinking?open=${d.id}`);
+  };
+
   // ✅ Domain assignment (single domain per decision in V1)
   const setDecisionDomain = async (decisionId: string, domainId: string | null) => {
     if (!userId) return;
@@ -648,6 +678,15 @@ export default function DecisionsClient() {
                           <div className="flex flex-wrap items-center gap-2">
                             <Chip onClick={() => void moveToChapters(d)} title="Move this decision into Chapters">
                               Put this down
+                            </Chip>
+                          </div>
+                        </div>
+
+                        <div className="space-y-2 pt-2">
+                          <div className="text-xs text-zinc-500">Optional: reopen</div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Chip onClick={() => void reopenToThinking(d)} title="Move back to Thinking (draft)">
+                              Reopen
                             </Chip>
                           </div>
                         </div>
