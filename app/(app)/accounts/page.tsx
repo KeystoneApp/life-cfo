@@ -37,10 +37,6 @@ function formatMoney(cents: number, currency = "AUD") {
 
 const LOAD_THROTTLE_MS = 1500;
 
-function norm(s: string) {
-  return (s || "").toLowerCase().trim();
-}
-
 export default function AccountsPage() {
   const toastApi: any = useToast();
   const showToast =
@@ -74,8 +70,7 @@ export default function AccountsPage() {
   const [savingRow, setSavingRow] = useState<Record<string, boolean>>({});
   const [deletingRow, setDeletingRow] = useState<Record<string, boolean>>({});
 
-  // Search + calm visibility limit (kept for V1)
-  const [query, setQuery] = useState("");
+  // Calm visibility limit (V1)
   const [showAll, setShowAll] = useState(false);
   const VISIBLE_LIMIT = 5;
 
@@ -156,9 +151,7 @@ export default function AccountsPage() {
 
   // Focus refresh (silent)
   useEffect(() => {
-    const onFocus = () => {
-      load({ silent: true });
-    };
+    const onFocus = () => load({ silent: true });
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -220,29 +213,15 @@ export default function AccountsPage() {
 
   const totalBalanceCents = useMemo(() => rows.reduce((sum, a) => sum + (a.current_balance_cents ?? 0), 0), [rows]);
 
-  const filteredRows = useMemo(() => {
-    const q = norm(query);
-    if (!q) return rows;
-
-    return rows.filter((a) => {
-      const hay = `${a.name ?? ""} ${a.currency ?? ""} ${a.id ?? ""}`.toLowerCase();
-      return hay.includes(q);
-    });
-  }, [rows, query]);
-
   const visibleRows = useMemo(() => {
-    const q = norm(query);
-    if (q) return filteredRows; // when searching, show matches (recognition-first)
-    if (showAll) return filteredRows;
-    return filteredRows.slice(0, VISIBLE_LIMIT);
-  }, [filteredRows, query, showAll]);
+    if (showAll) return rows;
+    return rows.slice(0, VISIBLE_LIMIT);
+  }, [rows, showAll]);
 
   const hiddenCount = useMemo(() => {
-    const q = norm(query);
-    if (q) return 0;
     if (showAll) return 0;
-    return Math.max(0, filteredRows.length - visibleRows.length);
-  }, [filteredRows.length, visibleRows.length, query, showAll]);
+    return Math.max(0, rows.length - visibleRows.length);
+  }, [rows.length, visibleRows.length, showAll]);
 
   const createAccount = async () => {
     if (!userId) return;
@@ -404,14 +383,14 @@ export default function AccountsPage() {
         </div>
       }
     >
-      {/* Assisted search (top) */}
-      <Card>
-        <CardContent>
-          <AssistedSearch scope="accounts" placeholder="Search accounts…" />
-        </CardContent>
-      </Card>
-
       <div className="space-y-6">
+        {/* Assisted search (top) */}
+        <Card>
+          <CardContent>
+            <AssistedSearch scope="accounts" placeholder="Search accounts…" />
+          </CardContent>
+        </Card>
+
         {/* Create */}
         <Card>
           <CardContent>
@@ -444,45 +423,22 @@ export default function AccountsPage() {
           </CardContent>
         </Card>
 
-        {/* (Optional) Local filter + visibility limit */}
+        {/* List header (calm limit) */}
         <Card>
           <CardContent>
             <div className="flex items-center justify-between gap-3 flex-wrap">
-              <div className="font-semibold">List</div>
-              <div className="text-sm opacity-70">Showing a small set by default. Use search to find anything.</div>
-            </div>
-
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              <input
-                value={query}
-                onChange={(e) => {
-                  setQuery(e.target.value);
-                  setShowAll(false);
-                }}
-                placeholder="Filter this page…"
-                className="min-w-[260px] flex-1 rounded-xl border border-zinc-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
-              />
-
-              {query ? (
-                <Chip
-                  onClick={() => {
-                    setQuery("");
-                    setShowAll(false);
-                  }}
-                  title="Clear filter"
-                >
-                  Clear
-                </Chip>
-              ) : (
+              <div className="font-semibold">Your accounts</div>
+              <div className="flex items-center gap-2">
                 <Chip onClick={() => setShowAll((v) => !v)} title="Show more or less">
                   {showAll ? "Show less" : "Show all"}
                 </Chip>
-              )}
-
-              <Badge variant="muted">{query ? `${filteredRows.length} match(es)` : `${visibleRows.length}/${rows.length} shown`}</Badge>
+                <Badge variant="muted">{showAll ? `${rows.length} shown` : `${visibleRows.length}/${rows.length} shown`}</Badge>
+              </div>
             </div>
 
-            {!query && hiddenCount > 0 ? <div className="mt-3 text-sm text-zinc-600">{hiddenCount} more hidden — use search to find anything.</div> : null}
+            {!showAll && hiddenCount > 0 ? (
+              <div className="mt-2 text-sm text-zinc-600">{hiddenCount} more hidden — use search to find anything.</div>
+            ) : null}
           </CardContent>
         </Card>
 
@@ -492,7 +448,8 @@ export default function AccountsPage() {
             const saving = !!savingRow[a.id];
             const deleting = !!deletingRow[a.id];
             const changed =
-              (editName[a.id] ?? "").trim() !== a.name || toCents((editBalance[a.id] ?? "").trim()) !== (a.current_balance_cents ?? 0);
+              (editName[a.id] ?? "").trim() !== a.name ||
+              toCents((editBalance[a.id] ?? "").trim()) !== (a.current_balance_cents ?? 0);
 
             return (
               <Card key={a.id}>
@@ -550,17 +507,6 @@ export default function AccountsPage() {
                 <div className="space-y-2">
                   <strong>No accounts yet.</strong>
                   <div className="text-sm text-zinc-600">Add at least one account to start calculating safe-to-spend.</div>
-                </div>
-              </CardContent>
-            </Card>
-          )}
-
-          {rows.length > 0 && visibleRows.length === 0 && (
-            <Card className="bg-zinc-50">
-              <CardContent>
-                <div className="space-y-2">
-                  <strong>No results.</strong>
-                  <div className="text-sm text-zinc-600">Try a different search term.</div>
                 </div>
               </CardContent>
             </Card>
