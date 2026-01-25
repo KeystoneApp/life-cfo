@@ -117,6 +117,10 @@ export default function ThinkingClient() {
   const [openId, setOpenId] = useState<string | null>(null);
   const [chatForId, setChatForId] = useState<string | null>(null);
 
+  // ✅ Top-5 default (V1 pattern)
+  const DEFAULT_LIMIT = 5;
+  const [showAll, setShowAll] = useState(false);
+
   // Summaries for the currently open draft (small, capped)
   const [summaryStatus, setSummaryStatus] = useState<string>("");
   const [summaries, setSummaries] = useState<DecisionSummary[]>([]);
@@ -590,10 +594,7 @@ export default function ThinkingClient() {
       // ✅ Correct conflict target
       const { error } = await supabase
         .from("decision_domains")
-        .upsert(
-          { user_id: userId, decision_id: decisionId, domain_id: domainId },
-          { onConflict: "user_id,decision_id" }
-        );
+        .upsert({ user_id: userId, decision_id: decisionId, domain_id: domainId }, { onConflict: "user_id,decision_id" });
 
       if (error) throw error;
       showToast({ message: "Domain set." }, 2000);
@@ -642,7 +643,7 @@ export default function ThinkingClient() {
   };
 
   // ✅ Apply calm filters from tiles
-  const visibleDrafts = useMemo(() => {
+  const filteredDrafts = useMemo(() => {
     let list = drafts;
 
     if (activeDomainId) {
@@ -655,6 +656,14 @@ export default function ThinkingClient() {
 
     return list;
   }, [drafts, activeDomainId, activeConstellationId, domainByDecision, constellationsByDecision]);
+
+  // ✅ V1: show top 5 by default (after filters)
+  const visibleDrafts = useMemo(() => {
+    if (showAll) return filteredDrafts;
+    return filteredDrafts.slice(0, DEFAULT_LIMIT);
+  }, [filteredDrafts, showAll]);
+
+  const hasMore = filteredDrafts.length > DEFAULT_LIMIT;
 
   return (
     <Page
@@ -682,7 +691,14 @@ export default function ThinkingClient() {
 
         <div className="text-xs text-zinc-500">{statusLine}</div>
 
-        {visibleDrafts.length === 0 ? (
+        {filteredDrafts.length > 0 && hasMore ? (
+          <div className="flex items-center gap-2">
+            <Chip onClick={() => setShowAll((v) => !v)}>{showAll ? "Show less" : "Show all"}</Chip>
+            {!showAll ? <div className="text-xs text-zinc-500">Showing {DEFAULT_LIMIT} of {filteredDrafts.length}</div> : null}
+          </div>
+        ) : null}
+
+        {filteredDrafts.length === 0 ? (
           <Card className="border-zinc-200 bg-white">
             <CardContent>
               <div className="space-y-2">
@@ -861,7 +877,10 @@ export default function ThinkingClient() {
                               Delete
                             </Chip>
 
-                            <Chip onClick={() => setChatForId((cur) => (cur === d.id ? null : d.id))} title="Have a conversation with Keystone about this decision">
+                            <Chip
+                              onClick={() => setChatForId((cur) => (cur === d.id ? null : d.id))}
+                              title="Have a conversation with Keystone about this decision"
+                            >
                               {isChatOpen ? "Hide chat" : "Talk this through"}
                             </Chip>
 
@@ -895,4 +914,3 @@ export default function ThinkingClient() {
     </Page>
   );
 }
-
