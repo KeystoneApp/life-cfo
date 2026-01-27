@@ -1,252 +1,151 @@
-// app/(app)/fine-print/page.tsx
+// app/(app)/fine-print/FinePrintClient.tsx
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
-import { Page } from "@/components/Page";
-import { Card, CardContent, Chip } from "@/components/ui";
-import FinePrintClient from "./FinePrintClient";
+import { Card, CardContent, Chip, Button, useToast } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
 
-type Profile = {
-  fine_print_accepted_at: string | null;
-  fine_print_version: string | null;
-  fine_print_signed_name: string | null;
+type FinePrintClientProps = {
+  nextPath: string;
 };
 
-function softDateTime(iso: string) {
-  const ms = Date.parse(iso);
-  if (Number.isNaN(ms)) return iso;
-  return new Date(ms).toLocaleString();
+function safeStr(v: unknown) {
+  return typeof v === "string" ? v : "";
 }
 
-export default function FinePrintPage() {
+export default function FinePrintClient({ nextPath }: FinePrintClientProps) {
   const router = useRouter();
-  const sp = useSearchParams();
+  const toastApi: any = useToast();
 
-  const nextPath = useMemo(() => {
-    const raw = sp.get("next");
-    if (!raw) return "/home";
-    // basic safety: keep it internal
-    if (!raw.startsWith("/")) return "/home";
-    return raw;
-  }, [sp]);
+  const showToast =
+    toastApi?.showToast ??
+    ((args: any) => {
+      if (toastApi?.toast) {
+        toastApi.toast({
+          title: args?.title ?? "Done",
+          description: args?.description ?? args?.message ?? "",
+          variant: args?.variant,
+          action: args?.action,
+        });
+      }
+    });
 
-  const [status, setStatus] = useState<"loading" | "signed_out" | "ready">("loading");
-  const [profile, setProfile] = useState<Profile | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const VERSION = "v1";
 
-  useEffect(() => {
-    let alive = true;
+  const [name, setName] = useState("");
+  const [working, setWorking] = useState(false);
 
-    (async () => {
-      setStatus("loading");
-      setLoadError(null);
+  const canSave = useMemo(() => name.trim().length >= 2 && !working, [name, working]);
 
+  const save = async () => {
+    if (!canSave) {
+      showToast({ title: "Add your name", description: "Please type your name to continue." });
+      return;
+    }
+
+    setWorking(true);
+
+    try {
       const { data: auth, error: authErr } = await supabase.auth.getUser();
-      if (!alive) return;
-
       if (authErr || !auth?.user) {
-        setStatus("signed_out");
-        setProfile(null);
+        router.push("/login");
         return;
       }
 
-      const uid = auth.user.id;
+      const payload = {
+        user_id: auth.user.id,
+        fine_print_accepted_at: new Date().toISOString(),
+        fine_print_version: VERSION,
+        fine_print_signed_name: name.trim(),
+        updated_at: new Date().toISOString(),
+      };
 
-      const { data, error } = await supabase
-        .from("profiles")
-        .select("fine_print_accepted_at,fine_print_version,fine_print_signed_name")
-        .eq("user_id", uid)
-        .maybeSingle();
+      const { error } = await supabase.from("profiles").upsert(payload, { onConflict: "user_id" });
+      if (error) throw error;
 
-      if (!alive) return;
+      showToast({ title: "Saved", description: "Thank you. You’re all set." });
 
-      if (error) {
-        setLoadError(error.message);
-        setProfile(null);
-        setStatus("ready");
-        return;
-      }
-
-      setProfile((data ?? null) as any);
-      setStatus("ready");
-    })();
-
-    return () => {
-      alive = false;
-    };
-  }, []);
-
-  const acceptedAt = profile?.fine_print_accepted_at ?? null;
-  const signedName = profile?.fine_print_signed_name ?? null;
-  const signedVersion = profile?.fine_print_version ?? null;
-
-  const isAccepted = !!acceptedAt;
+      router.push(nextPath || "/home");
+      router.refresh();
+    } catch (e: any) {
+      showToast({ title: "Couldn’t save", description: safeStr(e?.message) || "Something went wrong." });
+    } finally {
+      setWorking(false);
+    }
+  };
 
   return (
-    <Page
-      title="Fine print"
-      subtitle="Plain-language boundaries. Trust comes from clarity."
-      right={
-        <div className="flex items-center gap-2">
-          <Chip onClick={() => router.push("/how-keystone-works")}>How it works</Chip>
-          <Chip onClick={() => router.push("/settings")}>Settings</Chip>
-          <Chip onClick={() => router.push("/home")}>Home</Chip>
-        </div>
-      }
-    >
-      <div className="mx-auto w-full max-w-[760px] space-y-4">
-        {/* Status */}
-        {status === "loading" ? <div className="text-xs text-zinc-500">Loading…</div> : null}
-        {status === "signed_out" ? (
-          <Card className="border-zinc-200 bg-white">
-            <CardContent>
-              <div className="space-y-2">
-                <div className="text-sm font-semibold text-zinc-900">Sign in required</div>
-                <div className="text-sm text-zinc-700">Please sign in to view and accept the fine print.</div>
-                <div className="pt-1">
-                  <Chip onClick={() => router.push("/login")}>Go to login</Chip>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        ) : null}
-
-        {/* ✅ Signature area:
-            - If NOT accepted yet → show signature client
-            - If accepted → show read-only “Signed” record (no signature box)
-        */}
-        {status === "ready" ? (
-          isAccepted ? (
-            <Card className="border-zinc-200 bg-white">
-              <CardContent>
-                <div className="flex items-start justify-between gap-3 flex-wrap">
-                  <div className="space-y-1">
-                    <div className="text-sm font-semibold text-zinc-900">Signed</div>
-                    <div className="text-sm text-zinc-700">
-                      {signedName ? (
-                        <>
-                          Name: <span className="font-medium text-zinc-900">{signedName}</span>
-                        </>
-                      ) : (
-                        "Name: —"
-                      )}
-                    </div>
-                    <div className="text-xs text-zinc-500">Signed at: {acceptedAt ? softDateTime(acceptedAt) : "—"}</div>
-                    <div className="text-xs text-zinc-500">Version: {signedVersion || "—"}</div>
-                  </div>
-
-                  {/* Optional: keep this calm; if you want re-sign later, do it from Settings */}
-                  <div className="flex items-center gap-2">
-                    <Chip onClick={() => router.push(nextPath)} title="Continue">
-                      Continue
-                    </Chip>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          ) : (
-            <FinePrintClient nextPath={nextPath} />
-          )
-        ) : null}
-
-        {loadError ? (
-          <Card className="border-zinc-200 bg-white">
-            <CardContent>
-              <div className="text-sm font-semibold text-zinc-900">Couldn’t load profile</div>
-              <div className="mt-1 text-xs text-zinc-500">{loadError}</div>
-              <div className="mt-2 text-sm text-zinc-700">
-                You can still read the fine print below. If acceptance isn’t recognized, try refreshing.
-              </div>
-            </CardContent>
-          </Card>
-        ) : null}
-
-        {/* Content (always readable) */}
-        <Card className="border-zinc-200 bg-white">
-          <CardContent>
-            <div className="space-y-2">
-              <div className="text-sm font-semibold text-zinc-900">What Keystone is</div>
-              <div className="text-sm text-zinc-700">
-                Keystone is a calm place to hold decisions and inputs so you can see life more clearly and stop carrying mental loops.
-              </div>
-              <div className="text-sm text-zinc-700">It’s built for orientation and repeatable good decisions — not dashboards, not hustle.</div>
+    <div className="space-y-4">
+      <Card className="border-zinc-200 bg-white">
+        <CardContent>
+          <div className="space-y-2">
+            <div className="text-sm font-semibold text-zinc-900">What Keystone is</div>
+            <div className="text-sm text-zinc-700">
+              Keystone is a calm place to hold decisions and inputs so you can see life more clearly and stop carrying mental loops.
             </div>
-          </CardContent>
-        </Card>
-
-        <Card className="border-zinc-200 bg-white">
-          <CardContent>
-            <div className="space-y-2">
-              <div className="text-sm font-semibold text-zinc-900">What Keystone is not</div>
-              <ul className="list-disc pl-5 text-sm text-zinc-700 space-y-1">
-                <li>Not financial, legal, medical, or tax advice.</li>
-                <li>Not a forecast or guarantee.</li>
-                <li>Not accounting software.</li>
-                <li>Not a replacement for professional help when you need it.</li>
-              </ul>
+            <div className="text-sm text-zinc-700">
+              It’s built for orientation and repeatable good decisions — not dashboards, not hustle.
             </div>
-          </CardContent>
-        </Card>
+          </div>
+        </CardContent>
+      </Card>
 
-        <Card className="border-zinc-200 bg-white">
-          <CardContent>
-            <div className="space-y-2">
-              <div className="text-sm font-semibold text-zinc-900">Money pages: “picture”, not precision</div>
-              <div className="text-sm text-zinc-700">
-                Accounts, Bills, Income, Investments, Budget and Transactions are inputs that Keystone converts into a simple monthly picture.
-                The goal is clarity — not perfect accuracy.
-              </div>
-              <div className="text-sm text-zinc-700">If something looks off, treat it as a prompt to check your inputs — not a truth statement.</div>
+      <Card className="border-zinc-200 bg-white">
+        <CardContent>
+          <div className="space-y-2">
+            <div className="text-sm font-semibold text-zinc-900">What Keystone is not</div>
+            <ul className="list-disc space-y-1 pl-5 text-sm text-zinc-700">
+              <li>Not financial, legal, medical, or tax advice.</li>
+              <li>Not a forecast or guarantee.</li>
+              <li>Not accounting software.</li>
+              <li>Not a replacement for professional help when you need it.</li>
+            </ul>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="border-zinc-200 bg-white">
+        <CardContent>
+          <div className="space-y-2">
+            <div className="text-sm font-semibold text-zinc-900">AI boundaries</div>
+            <ul className="list-disc space-y-1 pl-5 text-sm text-zinc-700">
+              <li>AI helps when you ask.</li>
+              <li>No auto-decisions. No auto-saving.</li>
+              <li>Summaries are preview-first, then explicitly attached by you.</li>
+            </ul>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="border-zinc-200 bg-white">
+        <CardContent>
+          <div className="space-y-3">
+            <div className="text-sm font-semibold text-zinc-900">Signature</div>
+            <div className="text-sm text-zinc-700">Type your name once to confirm you understand these boundaries.</div>
+
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Your name"
+              className="w-full rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[15px] text-zinc-900 outline-none focus:ring-2 focus:ring-zinc-200"
+            />
+
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              <Button onClick={() => void save()} disabled={!canSave}>
+                {working ? "Saving…" : "Save and continue"}
+              </Button>
+              <Chip onClick={() => router.push("/login")} className="text-zinc-500">
+                Cancel
+              </Chip>
             </div>
-          </CardContent>
-        </Card>
 
-        <Card className="border-zinc-200 bg-white">
-          <CardContent>
-            <div className="space-y-2">
-              <div className="text-sm font-semibold text-zinc-900">AI boundaries (V1 posture)</div>
-              <ul className="list-disc pl-5 text-sm text-zinc-700 space-y-1">
-                <li>Keystone should speak sparingly: to ground, reflect, and clarify.</li>
-                <li>Chats do not auto-commit into durable memory without your explicit action.</li>
-                <li>Summaries are user-invited: preview first, then explicitly attach to a decision if you choose.</li>
-                <li>Automation stays background; no urgent or pressuring language.</li>
-              </ul>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="border-zinc-200 bg-white">
-          <CardContent>
-            <div className="space-y-2">
-              <div className="text-sm font-semibold text-zinc-900">Your control</div>
-              <ul className="list-disc pl-5 text-sm text-zinc-700 space-y-1">
-                <li>You decide what gets saved.</li>
-                <li>You decide what gets revisited.</li>
-                <li>You can keep things rough and incomplete — it still helps.</li>
-              </ul>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="border-zinc-200 bg-white">
-          <CardContent>
-            <div className="space-y-2">
-              <div className="text-sm font-semibold text-zinc-900">Privacy & safety (simple statement)</div>
-              <div className="text-sm text-zinc-700">
-                Keystone is designed to minimize cognitive load and avoid manipulative patterns. If anything feels noisy, it’s a bug.
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <div className="pt-1">
-          <Chip onClick={() => router.push("/home")}>Done</Chip>
-        </div>
-      </div>
-    </Page>
+            <div className="text-xs text-zinc-500">Version: {VERSION}</div>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
   );
 }
