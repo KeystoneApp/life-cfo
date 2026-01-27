@@ -1,4 +1,3 @@
-// app/(app)/fine-print/page.tsx
 "use client";
 
 import { Suspense, useEffect, useMemo, useState } from "react";
@@ -49,21 +48,23 @@ function FinePrintInner() {
 
       const uid = auth.user.id;
 
+      // 🔑 MUST match the write path exactly
       const { data: prof, error: profErr } = await supabase
         .from("profiles")
         .select("fine_print_accepted_at,fine_print_version,fine_print_signed_name")
-        .eq("id", uid)
+        .eq("user_id", uid)
         .maybeSingle();
 
       if (!alive) return;
 
       if (profErr) {
+        console.error("Fine print profile read error:", profErr);
         setProfile(null);
         setStatus("ready");
         return;
       }
 
-      setProfile((prof ?? null) as any);
+      setProfile(prof ?? null);
       setStatus("ready");
     })();
 
@@ -72,7 +73,7 @@ function FinePrintInner() {
     };
   }, []);
 
-  const hasSigned = !!profile?.fine_print_accepted_at;
+  const hasSigned = Boolean(profile?.fine_print_accepted_at);
 
   return (
     <div className="mx-auto w-full max-w-[760px] space-y-4">
