@@ -319,10 +319,7 @@ function FramingClient() {
       if (note.length > 0) {
         await supabase
           .from("decision_notes")
-          .upsert(
-            { user_id: userId, decision_id: decisionId, kind: "framing", body: note },
-            { onConflict: "user_id,decision_id,kind" }
-          );
+          .upsert({ user_id: userId, decision_id: decisionId, kind: "framing", body: note }, { onConflict: "user_id,decision_id,kind" });
       }
 
       const { error: updErr } = await supabase
@@ -379,7 +376,7 @@ function FramingClient() {
   return (
     <Page
       title="Framing"
-      subtitle="Capture your thoughts in Capture. Framing turns one capture into a clear decision draft."
+      subtitle="We’ll help turn one capture into a clear decision — step by step."
       right={
         <div className="flex items-center gap-2">
           <Chip onClick={() => router.push("/capture")}>Capture</Chip>
@@ -502,11 +499,7 @@ function FramingClient() {
                       <div className="text-xs font-semibold text-zinc-700">Attachments</div>
                       <div className="flex flex-wrap items-center gap-2">
                         {parsed.attachments.map((a) => (
-                          <Chip
-                            key={a.path}
-                            onClick={() => void openAttachment(a)}
-                            title={`${a.type}${a.size ? ` • ${softKB(a.size)}` : ""}`}
-                          >
+                          <Chip key={a.path} onClick={() => void openAttachment(a)} title={`${a.type}${a.size ? ` • ${softKB(a.size)}` : ""}`}>
                             {a.name}
                           </Chip>
                         ))}
@@ -516,28 +509,26 @@ function FramingClient() {
                 </div>
 
                 <div className="space-y-2">
-                  <div className="text-xs font-semibold text-zinc-700">Decision title</div>
+                  <div className="text-xs font-semibold text-zinc-700">What is this really about?</div>
                   <input
                     ref={titleRef}
                     value={decisionTitle}
                     onChange={(e) => setDecisionTitle(e.target.value)}
                     className="w-full rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[15px] text-zinc-900 outline-none focus:ring-2 focus:ring-zinc-200"
-                    placeholder="A short, clear title"
+                    placeholder="A short way to describe the choice"
                   />
                 </div>
 
                 <div className="space-y-2">
-                  <div className="text-xs font-semibold text-zinc-700">Decision statement</div>
+                  <div className="text-xs font-semibold text-zinc-700">The decision, in plain words</div>
                   <textarea
                     value={decisionStatement}
                     onChange={(e) => setDecisionStatement(e.target.value)}
                     rows={4}
                     className="w-full resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[15px] leading-relaxed text-zinc-900 outline-none focus:ring-2 focus:ring-zinc-200"
-                    placeholder="What are you deciding, exactly?"
+                    placeholder="For example: Should we sell the car this year?"
                   />
-                  <div className="text-xs text-zinc-500">
-                    When you send this to Thinking, Keystone creates a <span className="font-medium">draft</span>. Nothing is final yet.
-                  </div>
+                  <div className="text-xs text-zinc-500">Doesn’t need to be perfect. You can change this later.</div>
                 </div>
 
                 <div className="space-y-2">
@@ -547,7 +538,7 @@ function FramingClient() {
                     onChange={(e) => setFramingNote(e.target.value)}
                     rows={3}
                     className="w-full resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[15px] leading-relaxed text-zinc-900 outline-none focus:ring-2 focus:ring-zinc-200"
-                    placeholder="Why it matters, constraints, values signals…"
+                    placeholder="Anything that matters: constraints, values, timing, context…"
                   />
                   <div className="text-xs text-zinc-500">Quiet notes, just for you.</div>
                 </div>
