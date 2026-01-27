@@ -35,7 +35,6 @@ function buildSystemPrompt(args: {
       .join("\n");
   }
 
-  // Default: conversation mode
   return [
     "You are Keystone — a calm, values-anchored decision partner.",
     "You are helping the user think, not forcing a decision.",
@@ -52,6 +51,14 @@ function buildSystemPrompt(args: {
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+function buildTranscript(messages: InMsg[]) {
+  // Simple, robust transcript for both modes.
+  // Avoids content-block typing + avoids input_text/output_text mismatch.
+  return messages
+    .map((m) => `${m.role === "user" ? "You" : "Keystone"}: ${m.content}`)
+    .join("\n\n");
 }
 
 export async function POST(req: Request) {
@@ -88,39 +95,37 @@ export async function POST(req: Request) {
       mode,
     });
 
-    // Responses API expects content blocks with type: "input_text"
-    const input = [
-      {
-        role: "system" as const,
-        content: [{ type: "input_text" as const, text: system }],
-      },
-      ...safeMessages.map((m) => ({
-        role: m.role as "user" | "assistant",
-        content: [{ type: "input_text" as const, text: m.content }],
-      })),
-    ];
+    const transcript = buildTranscript(safeMessages);
+
+    const userContent =
+      mode === "summarise"
+        ? `Summarise this conversation.\n\nCONVERSATION:\n${transcript}`
+        : `Continue the conversation based on the transcript so far.\n\nCONVERSATION:\n${transcript}`;
 
     const model = process.env.OPENAI_MODEL || "gpt-4.1";
 
     const resp = await client.responses.create({
       model,
-      input,
+      input: [
+        // Use "system" here because your installed SDK typings accept it (as shown in your other route).
+        { role: "system", content: system },
+        { role: "user", content: userContent },
+      ],
       temperature: mode === "summarise" ? 0.3 : 0.6,
       max_output_tokens: mode === "summarise" ? 400 : 700,
     });
 
-    const assistantText = String(resp.output_text ?? "").trim();
+    const text = String(resp.output_text ?? "").trim();
 
-    if (!assistantText) {
+    if (!text) {
       return NextResponse.json({ error: "Empty AI response." }, { status: 502 });
     }
 
-    // Return a stable shape your frontend already expects
     if (mode === "summarise") {
-      return NextResponse.json({ summaryText: assistantText });
+      return NextResponse.json({ summaryText: text });
     }
 
-    return NextResponse.json({ assistantText });
+    return NextResponse.json({ assistantText: text });
   } catch (err: any) {
     const message = err?.message ? String(err.message) : "AI request failed.";
     return NextResponse.json({ error: message }, { status: 500 });
