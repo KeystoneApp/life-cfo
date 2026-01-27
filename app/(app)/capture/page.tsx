@@ -328,10 +328,12 @@ export default function CapturePage() {
     }
   };
 
+  const showExamples = recent.length === 0 && !text.trim() && files.length === 0;
+
   return (
     <Page
       title="Capture"
-      subtitle="Capture your thoughts here. Framing helps turn them into clear decisions."
+      subtitle="Drop raw thoughts here — messy is welcome. Keystone will help shape them into a clear decision when you’re ready."
       right={
         <div className="flex items-center gap-2">
           <Chip onClick={() => router.push("/home")}>Back to Home</Chip>
@@ -346,12 +348,14 @@ export default function CapturePage() {
         <AssistedSearch scope="capture" placeholder="Search captures…" />
 
         {/* Input */}
-        <div className="space-y-2">
+        <div className="space-y-3">
+          <div className="text-xs text-zinc-500">No perfect wording needed. We’ll carry the clarity work with you.</div>
+
           <textarea
             ref={inputRef}
             value={text}
             onChange={(e) => setText(e.target.value)}
-            placeholder="Capture anything you want to come back to."
+            placeholder="Drop it here."
             className="w-full min-h-[180px] resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[15px] leading-relaxed text-zinc-900 outline-none focus:ring-2 focus:ring-zinc-200"
             onKeyDown={(e) => {
               // Enter submits; Shift+Enter newline
@@ -363,8 +367,21 @@ export default function CapturePage() {
             aria-label="Capture"
           />
 
+          {showExamples ? (
+            <div className="text-xs text-zinc-500">
+              <div className="font-medium text-zinc-600">Examples</div>
+              <ul className="mt-2 list-disc space-y-1 pl-5">
+                <li>I’m stressed about money.</li>
+                <li>We need a break but I feel guilty spending.</li>
+                <li>I don’t know if we should sell the car.</li>
+                <li>Bills feel out of control.</li>
+                <li>I want to start homeschool but finances…</li>
+              </ul>
+            </div>
+          ) : null}
+
           <div className="text-xs text-zinc-500">
-            If it’s something you may want to decide later, use <span className="font-medium">Frame next</span>.
+            When you want, <span className="font-medium">Frame next</span> helps turn this into a clear decision.
           </div>
         </div>
 
@@ -439,10 +456,7 @@ export default function CapturePage() {
           <div className="text-xs text-zinc-500">Enter saves • Shift+Enter adds a new line</div>
 
           <div className="flex items-center gap-2">
-            <Chip
-              onClick={() => void submit()}
-              title={!canSubmit ? "Add text or a file" : isSubmitting ? "Working…" : "Save capture"}
-            >
+            <Chip onClick={() => void submit()} title={!canSubmit ? "Add text or a file" : isSubmitting ? "Working…" : "Save capture"}>
               {isSubmitting ? "Saving…" : "Save"}
             </Chip>
           </div>
@@ -463,7 +477,7 @@ export default function CapturePage() {
             <div className="flex items-start justify-between gap-3">
               <div className="space-y-1">
                 <div className="text-sm font-semibold text-zinc-900">Recent captures</div>
-                <div className="text-sm text-zinc-600">These are safely held until you frame them or close them.</div>
+                <div className="text-sm text-zinc-600">These are safely held until you frame them.</div>
               </div>
 
               <div className="flex items-center gap-2">
@@ -502,9 +516,7 @@ export default function CapturePage() {
                               {meta ? meta : "Open capture"}
                               {hasAtts ? " • Attachments" : ""}
                             </div>
-                            {displayText ? (
-                              <div className="mt-2 text-sm text-zinc-700">{snippetFromText(displayText, 140)}</div>
-                            ) : null}
+                            {displayText ? <div className="mt-2 text-sm text-zinc-700">{snippetFromText(displayText, 140)}</div> : null}
                           </div>
                           <div className="flex items-center gap-2">
                             <Chip>{isOpen ? "Hide" : "Open"}</Chip>
@@ -521,10 +533,7 @@ export default function CapturePage() {
                           )}
 
                           <div className="flex flex-wrap items-center gap-2">
-                            <Chip
-                              onClick={() => router.push("/framing")}
-                              title="Go to Framing to shape this into a decision"
-                            >
+                            <Chip onClick={() => router.push("/framing")} title="Go to Framing to shape this into a decision">
                               Frame this
                             </Chip>
                             <Chip onClick={() => setOpenId(null)}>Done</Chip>
