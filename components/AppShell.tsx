@@ -115,16 +115,20 @@ export function AppShell({ children }: AppShellProps) {
   // Group definitions
   const home: NavItem = { href: "/home", label: "Home" };
 
-  const decisionsItems: NavItem[] = [
+  // ✅ Split: “Work” (Capture/Framing/Thinking) vs “Library” (Decisions/Revisit/Chapters)
+  const workItems: NavItem[] = [
     { href: "/capture", label: "Capture" },
     { href: "/framing", label: "Framing" },
     { href: "/thinking", label: "Thinking" },
+  ];
+
+  const libraryItems: NavItem[] = [
     { href: "/decisions", label: "Decisions" },
     { href: "/revisit", label: "Revisit" },
     { href: "/chapters", label: "Chapters" },
   ];
 
-   // ✅ Money
+  // ✅ Money
   const moneyItems: NavItem[] = [
     { href: "/accounts", label: "Accounts" },
     { href: "/bills", label: "Bills" },
@@ -136,10 +140,11 @@ export function AppShell({ children }: AppShellProps) {
 
   const helpItems: NavItem[] = [
     { href: "/how-keystone-works", label: "How it works" },
-    { href: "/fine-print", label: "Fine print" }
+    { href: "/fine-print", label: "Fine print" },
   ];
 
-  const decisionsActive = useMemo(() => decisionsItems.some((i) => isActive(i.href)), [pathname]); // eslint-disable-line react-hooks/exhaustive-deps
+  const workActive = useMemo(() => workItems.some((i) => isActive(i.href)), [pathname]); // eslint-disable-line react-hooks/exhaustive-deps
+  const libraryActive = useMemo(() => libraryItems.some((i) => isActive(i.href)), [pathname]); // eslint-disable-line react-hooks/exhaustive-deps
   const moneyActive = useMemo(() => moneyItems.some((i) => isActive(i.href)), [pathname]); // eslint-disable-line react-hooks/exhaustive-deps
   const helpActive = useMemo(() => helpItems.some((i) => isActive(i.href)), [pathname]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -167,7 +172,8 @@ export function AppShell({ children }: AppShellProps) {
               </Chip>
             </Link>
 
-            <Menu label="Decisions" active={decisionsActive} items={decisionsItems} />
+            <Menu label="Work" active={workActive} items={workItems} />
+            <Menu label="Library" active={libraryActive} items={libraryItems} />
             <Menu label="Money" active={moneyActive} items={moneyItems} />
             <Menu label="Help" active={helpActive} items={helpItems} />
           </nav>
@@ -225,6 +231,16 @@ function AccountMenu({ onSignOut }: { onSignOut: () => void }) {
               }}
             >
               <div className="rounded-xl px-3 py-2 text-sm text-zinc-800 hover:bg-zinc-50">How it works</div>
+            </Link>
+
+            <Link
+              href="/fine-print"
+              className="block no-underline"
+              onClick={() => {
+                setOpen(false);
+              }}
+            >
+              <div className="rounded-xl px-3 py-2 text-sm text-zinc-800 hover:bg-zinc-50">Fine print</div>
             </Link>
 
             <div className="my-2 h-px bg-zinc-100" />
