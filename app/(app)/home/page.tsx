@@ -181,60 +181,43 @@ export default function HomePage() {
   const hasOrientation = Boolean(orientation.item?.text || billsLine);
   const canOpenOrientation = Boolean(orientation.item?.href);
 
+  const showExamples = text.trim().length === 0;
+
   return (
     <Page
       title="Home"
-      subtitle="Keystone Money helps you make everyday money decisions — simply and safely."
-      right={
-        <div className="flex items-center gap-2">
-        </div>
-      }
+      subtitle="A quiet place to unload what’s on your mind — then Keystone helps you orient."
+      right={<div className="flex items-center gap-2"></div>}
     >
       <div className="mx-auto w-full max-w-[680px] space-y-8">
         {/* Unload (primary) */}
         <div className="space-y-3">
-          <div className="text-xs text-zinc-500">Keystone Money can be used for household and small-business finances.</div>
-
           <textarea
             ref={inputRef}
             value={text}
             onChange={(e) => setText(e.target.value)}
-            placeholder="What do you want to figure out about money?"
+            placeholder="What’s on your mind?"
             className="w-full min-h-[140px] resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[15px] leading-relaxed text-zinc-900 outline-none focus:ring-2 focus:ring-zinc-200"
             onKeyDown={(e) => {
               // Natural: Enter submits; Shift+Enter creates a new line.
+              // (We don’t need to tell the user this—just make it work.)
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 void submit();
               }
             }}
-            aria-label="What do you want to figure out about money?"
+            aria-label="What’s on your mind?"
             disabled={authStatus !== "signed_in"}
           />
 
-          {/* Friendly helper + examples (only when empty) */}
-          <div className="space-y-2">
-            <div className="text-xs text-zinc-500">Type what you’re trying to decide — we’ll help you make it clear.</div>
-
-            {text.trim().length === 0 ? (
-              <div className="text-xs text-zinc-500">
-                <div className="font-medium text-zinc-600">Examples</div>
-                <ul className="mt-2 list-disc space-y-1 pl-5">
-                  <li>“What bills should we pay first this week?”</li>
-                  <li>“How much can we spend on groceries?”</li>
-                  <li>“Can we afford this purchase?”</li>
-                  <li>“What’s a simple plan for debt and savings?”</li>
-                  <li>“Are we on track this month?”</li>
-                  <li>“How much should we set aside for tax, insurance, and yearly bills?”</li>
-                  <li>“What should our buffer be before we book something?”</li>
-                  <li>“Which account should this come from?”</li>
-                </ul>
-              </div>
-            ) : null}
-          </div>
-
-          {/* ✅ Tiny role clarity (Home ≠ Capture) */}
-          <div className="text-xs text-zinc-500">Capture is for raw thoughts. Framing helps turn them into a clear decision.</div>
+          {/* 3 neat examples (only when empty; disappears once typing starts) */}
+          {showExamples ? (
+            <div className="text-xs text-zinc-500 space-y-1">
+              <div>• “Can we afford this right now?”</div>
+              <div>• “What should we pay first this week?”</div>
+              <div>• “I feel unsure about a money decision.”</div>
+            </div>
+          ) : null}
 
           {/* Soft confirmation (brief, fades) */}
           {affirmation ? (
