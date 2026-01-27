@@ -56,6 +56,8 @@ export default function HomePage() {
   const [userId, setUserId] = useState<string | null>(null);
   const [authStatus, setAuthStatus] = useState<"loading" | "signed_out" | "signed_in">("loading");
 
+  const [displayName, setDisplayName] = useState<string>("");
+
   const [text, setText] = useState("");
   const [affirmation, setAffirmation] = useState<"Saved." | "Held." | null>(null);
 
@@ -86,6 +88,34 @@ export default function HomePage() {
       mounted = false;
     };
   }, []);
+
+  // --- Name (from Fine Print signature) ---
+  useEffect(() => {
+    if (!userId) {
+      setDisplayName("");
+      return;
+    }
+
+    let alive = true;
+
+    (async () => {
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("fine_print_signed_name")
+        .eq("user_id", userId)
+        .maybeSingle();
+
+      if (!alive) return;
+      if (error) return;
+
+      const n = typeof (data as any)?.fine_print_signed_name === "string" ? (data as any).fine_print_signed_name.trim() : "";
+      setDisplayName(n);
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, [userId]);
 
   // --- Hooks (contracts) ---
   const unload = useHomeUnload({ userId });
@@ -187,7 +217,7 @@ export default function HomePage() {
     <Page
       title="Home"
       subtitle="A quiet place to unload what’s on your mind — then Keystone helps you orient."
-      right={<div className="flex items-center gap-2"></div>}
+      right={displayName ? <div className="text-sm text-zinc-600">Hi, {displayName}</div> : <div className="flex items-center gap-2"></div>}
     >
       <div className="mx-auto w-full max-w-[680px] space-y-8">
         {/* Unload (primary) */}
