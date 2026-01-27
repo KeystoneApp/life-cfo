@@ -1,15 +1,25 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+
+type Mode = "signin" | "signup" | "reset";
+
+function safeStr(v: unknown) {
+  return typeof v === "string" ? v : "";
+}
 
 export default function LoginClient({ nextPath }: { nextPath: string }) {
   const router = useRouter();
   const searchParams = useSearchParams();
 
+  const [mode, setMode] = useState<Mode>("signin");
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+
+  const [working, setWorking] = useState(false);
   const [status, setStatus] = useState<string>("");
 
   // Surface auth errors passed back via redirect
@@ -22,24 +32,74 @@ export default function LoginClient({ nextPath }: { nextPath: string }) {
     if (err) setStatus(decodeURIComponent(err));
   }, [searchParams]);
 
-  const signIn = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setStatus("Signing in…");
+  const canSubmit = useMemo(() => {
+    const e = email.trim();
+    if (!e.includes("@")) return false;
+    if (working) return false;
+    if (mode === "reset") return true;
+    return password.length >= 6;
+  }, [email, password, mode, working]);
 
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
-
-    if (error) {
-      setStatus(`Login failed: ${error.message}`);
-      return;
-    }
-
-    setStatus(`Signed in ✅ ${data.user?.email ?? ""}`);
-
+  const goNext = () => {
     router.replace(nextPath || "/home");
     router.refresh();
+  };
+
+  const signIn = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!canSubmit) return;
+
+    setWorking(true);
+    setStatus("Signing in…");
+
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      });
+
+      if (error) {
+        setStatus(`Login failed: ${error.message}`);
+        return;
+      }
+
+      setStatus(`Signed in ✅ ${data.user?.email ?? ""}`);
+      goNext();
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  const signUp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!canSubmit) return;
+
+    setWorking(true);
+    setStatus("Creating account…");
+
+    try {
+      const { data, error } = await supabase.auth.signUp({
+        email: email.trim(),
+        password,
+      });
+
+      if (error) {
+        setStatus(`Sign up failed: ${error.message}`);
+        return;
+      }
+
+      // If email confirmations are enabled, session can be null until confirmed.
+      if (!data.session) {
+        setStatus("Account created ✅ Check your email to confirm, then come back and sign in.");
+        setMode("signin");
+        return;
+      }
+
+      setStatus("Account created ✅ You’re signed in.");
+      goNext();
+    } finally {
+      setWorking(false);
+    }
   };
 
   const sendReset = async () => {
@@ -48,21 +108,50 @@ export default function LoginClient({ nextPath }: { nextPath: string }) {
       return;
     }
 
+    setWorking(true);
     setStatus("Sending reset email…");
 
-    const redirectTo = `${window.location.origin}/auth/reset`;
+    try {
+      const redirectTo = `${window.location.origin}/auth/reset`;
+      const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), { redirectTo });
 
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo,
-    });
+      if (error) {
+        setStatus(`Reset failed: ${error.message}`);
+        return;
+      }
 
-    if (error) {
-      setStatus(`Reset failed: ${error.message}`);
-      return;
+      setStatus("Reset email sent ✅ Check your inbox.");
+    } finally {
+      setWorking(false);
     }
-
-    setStatus("Reset email sent ✅ Check your inbox.");
   };
+
+  const onSubmit = (e: React.FormEvent) => {
+    if (mode === "signin") return void signIn(e);
+    if (mode === "signup") return void signUp(e);
+    e.preventDefault();
+    void sendReset();
+  };
+
+  const primaryLabel =
+    mode === "signin"
+      ? working
+        ? "Signing in…"
+        : "Sign in"
+      : mode === "signup"
+      ? working
+        ? "Creating…"
+        : "Create account"
+      : working
+      ? "Sending…"
+      : "Send reset email";
+
+  const subtitle =
+    mode === "signin"
+      ? "Sign in to continue."
+      : mode === "signup"
+      ? "Create an account to get started."
+      : "We’ll email you a reset link.";
 
   return (
     <main className="min-h-screen bg-neutral-50 flex items-center justify-center px-4 py-12">
@@ -73,17 +162,27 @@ export default function LoginClient({ nextPath }: { nextPath: string }) {
             K
           </div>
 
-          <h1 className="text-2xl font-semibold tracking-tight">Welcome to Keystone</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            {mode === "signin" ? "Welcome to Keystone" : mode === "signup" ? "Create your account" : "Reset your password"}
+          </h1>
 
           <p className="text-sm text-neutral-600 leading-relaxed">
-            Keystone is a values-first decision and money operating system. Capture what matters, make clear decisions,
-            and review them over time — without noise or guilt.
+            {mode === "reset"
+              ? subtitle
+              : "Keystone is a values-first decision and money operating system. Capture what matters, make clear decisions, and review them over time — without noise or guilt."}
           </p>
+
+          {/* tiny tester hint */}
+          {mode !== "reset" ? (
+            <p className="text-xs text-neutral-500">
+              Tip: after signing in, open <span className="font-medium">Menu → Demo</span> to load sample data.
+            </p>
+          ) : null}
         </div>
 
         {/* Login card */}
         <div className="rounded-2xl border border-neutral-200 bg-white shadow-sm p-6">
-          <form onSubmit={signIn} className="space-y-4">
+          <form onSubmit={onSubmit} className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-neutral-800">Email</label>
               <input
@@ -96,43 +195,81 @@ export default function LoginClient({ nextPath }: { nextPath: string }) {
               />
             </div>
 
-            <div>
-              <label className="block text-sm font-medium text-neutral-800">Password</label>
-              <input
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                type="password"
-                className="mt-1 w-full rounded-xl border border-neutral-300 px-3 py-2 outline-none focus:ring-2 focus:ring-black/10 focus:border-neutral-400"
-                autoComplete="current-password"
-              />
-            </div>
+            {mode !== "reset" ? (
+              <div>
+                <label className="block text-sm font-medium text-neutral-800">Password</label>
+                <input
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  type="password"
+                  className="mt-1 w-full rounded-xl border border-neutral-300 px-3 py-2 outline-none focus:ring-2 focus:ring-black/10 focus:border-neutral-400"
+                  autoComplete={mode === "signup" ? "new-password" : "current-password"}
+                />
+                <div className="mt-1 text-xs text-neutral-500">Minimum 6 characters.</div>
+              </div>
+            ) : null}
 
             {/* Actions */}
             <div className="pt-1 space-y-3">
               <button
                 type="submit"
-                className="w-full inline-flex items-center justify-center rounded-xl bg-black text-white px-4 py-2 text-sm font-medium hover:bg-black/90 transition focus:outline-none focus:ring-2 focus:ring-black/10"
+                disabled={!canSubmit}
+                className={[
+                  "w-full inline-flex items-center justify-center rounded-xl px-4 py-2 text-sm font-medium transition focus:outline-none focus:ring-2 focus:ring-black/10",
+                  !canSubmit ? "bg-black/40 text-white cursor-not-allowed" : "bg-black text-white hover:bg-black/90",
+                ].join(" ")}
               >
-                Sign in
+                {primaryLabel}
               </button>
 
               <div className="flex items-center justify-between gap-3">
+                {mode === "signin" ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMode("signup");
+                      setStatus("");
+                    }}
+                    className="inline-flex items-center rounded-full border border-neutral-200 bg-white px-3 py-1 text-sm text-neutral-800 hover:bg-neutral-50 transition focus:outline-none focus:ring-2 focus:ring-black/10"
+                  >
+                    Create account
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMode("signin");
+                      setStatus("");
+                    }}
+                    className="inline-flex items-center rounded-full border border-neutral-200 bg-white px-3 py-1 text-sm text-neutral-800 hover:bg-neutral-50 transition focus:outline-none focus:ring-2 focus:ring-black/10"
+                  >
+                    Back to sign in
+                  </button>
+                )}
+
                 <button
                   type="button"
-                  onClick={sendReset}
+                  onClick={() => {
+                    if (mode === "reset") {
+                      setMode("signin");
+                      setStatus("");
+                      return;
+                    }
+                    setMode("reset");
+                    setStatus("");
+                  }}
                   className="inline-flex items-center rounded-full border border-neutral-200 bg-white px-3 py-1 text-sm text-neutral-800 hover:bg-neutral-50 transition focus:outline-none focus:ring-2 focus:ring-black/10"
                 >
-                  Forgot password
+                  {mode === "reset" ? "Back" : "Forgot password"}
                 </button>
-
-                {/* (Optional) tiny hint that reset uses the email above */}
-                <div className="text-xs text-neutral-500">Uses the email above</div>
               </div>
+
+              {mode === "reset" ? <div className="text-xs text-neutral-500">Uses the email above</div> : null}
             </div>
 
             {status && (
               <div className="rounded-xl bg-neutral-50 border border-neutral-200 p-3 text-sm text-neutral-800">
-                {status}
+                {safeStr(status)}
               </div>
             )}
           </form>
