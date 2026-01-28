@@ -77,8 +77,6 @@ function isoNowPlusDays(days: number) {
 }
 
 function isoFromDateInput(dateStr: string) {
-  // dateStr is YYYY-MM-DD. Use midday local time to avoid DST edge weirdness.
-  // If invalid, return null.
   if (!dateStr) return null;
   const ms = Date.parse(`${dateStr}T12:00:00`);
   if (Number.isNaN(ms)) return null;
@@ -344,7 +342,7 @@ export default function ThinkingClient() {
 
     window.setTimeout(() => {
       const el = cardRefs.current[match.id];
-      if (el?.scrollIntoView) el.scrollIntoView({ behavior: "smooth", block: "center" });
+      if (el?.scrollIntoView) el.scrollIntoView({ behavior: "smooth", block: "start" });
     }, 60);
 
     router.replace("/thinking");
@@ -673,28 +671,28 @@ export default function ThinkingClient() {
   const PrimaryChipClass = "border-zinc-900 bg-zinc-900 text-white hover:bg-zinc-800 hover:text-white";
 
   return (
-    <Page
-      title="Thinking"
-      subtitle="Work on drafts here. When you’re ready to commit, save it into Decisions."
-      right={
-        <div className="flex items-center gap-2">
-          <Chip onClick={() => router.push("/home")}>Back to Home</Chip>
-          <Chip onClick={() => loadRef.current({ silent: false })}>Refresh</Chip>
-        </div>
-      }
-    >
+    <Page title="Thinking" subtitle="Work on drafts here. When you’re ready to commit, save it into Decisions." right={null}>
       <div className="mx-auto w-full max-w-[760px] space-y-6">
+        {/* Flow controls (consistent, top-of-page) */}
+        <div className="flex items-center justify-between gap-3">
+          <div className="text-xs text-zinc-500">Step 3 of 3</div>
+
+          <div className="flex items-center gap-2">
+            <Chip onClick={() => router.push("/framing")} title="Back: Framing">
+              <span className="mr-1 opacity-70">‹</span> Back: Framing
+            </Chip>
+
+            <Chip onClick={() => router.push("/decisions")} title="Next: Decisions">
+              Next: Decisions <span className="ml-1 opacity-70">›</span>
+            </Chip>
+          </div>
+        </div>
+
         <AssistedSearch scope="thinking" placeholder="Search drafts and decisions…" />
 
         <div className="space-y-4">
-          {/* User-facing: no “Domains/Constellations” wording */}
           <TilesRow title="Filter by area" items={domains} activeId={activeDomainId} onSelect={(id) => setActiveDomainId(id)} />
-          <TilesRow
-            title="Filter by group"
-            items={constellations}
-            activeId={activeConstellationId}
-            onSelect={(id) => setActiveConstellationId(id)}
-          />
+          <TilesRow title="Filter by group" items={constellations} activeId={activeConstellationId} onSelect={(id) => setActiveConstellationId(id)} />
         </div>
 
         <div className="text-xs text-zinc-500">{statusLine}</div>
@@ -773,7 +771,6 @@ export default function ThinkingClient() {
                               {d.review_at ? ` • Revisit ${softWhen(d.review_at)}` : ""}
                             </div>
 
-                            {/* Calm summary chips (not “Domain/Constellation”) */}
                             <div className="mt-2 flex flex-wrap gap-2">
                               {domainName ? <Chip title="Filed under">{domainName}</Chip> : null}
                               {memberNames.slice(0, 2).map((n) => (
@@ -801,10 +798,8 @@ export default function ThinkingClient() {
                             <div className="text-sm text-zinc-600">No extra context yet.</div>
                           )}
 
-                          {/* ✅ Notes */}
                           <DecisionNotes decisionId={d.id} kind="thinking" />
 
-                          {/* ✅ Filed under (collapsed by default) */}
                           <div className="rounded-xl border border-zinc-200 bg-white p-3 space-y-2">
                             <div className="flex flex-wrap items-center justify-between gap-2">
                               <div className="text-xs font-semibold text-zinc-700">Filed under</div>
@@ -815,11 +810,7 @@ export default function ThinkingClient() {
 
                             {!isEditingLabels ? (
                               <div className="text-sm text-zinc-700">
-                                {filedUnder.length > 0 ? (
-                                  <span>{filedUnder.join(", ")}</span>
-                                ) : (
-                                  <span className="text-zinc-600">Not set.</span>
-                                )}
+                                {filedUnder.length > 0 ? <span>{filedUnder.join(", ")}</span> : <span className="text-zinc-600">Not set.</span>}
                               </div>
                             ) : (
                               <div className="space-y-3">
@@ -860,7 +851,6 @@ export default function ThinkingClient() {
                             )}
                           </div>
 
-                          {/* Attachments */}
                           <div className="rounded-xl border border-zinc-200 bg-white p-3 space-y-2">
                             <div className="text-xs font-semibold text-zinc-700">Attachments</div>
 
@@ -869,11 +859,7 @@ export default function ThinkingClient() {
                             ) : (
                               <div className="flex flex-wrap items-center gap-2">
                                 {attachmentsForCard.map((a) => (
-                                  <Chip
-                                    key={a.path}
-                                    onClick={() => void openAttachment(a)}
-                                    title={`${a.type}${a.size ? ` • ${softKB(a.size)}` : ""}`}
-                                  >
+                                  <Chip key={a.path} onClick={() => void openAttachment(a)} title={`${a.type}${a.size ? ` • ${softKB(a.size)}` : ""}`}>
                                     {a.name}
                                   </Chip>
                                 ))}
@@ -881,7 +867,6 @@ export default function ThinkingClient() {
                             )}
                           </div>
 
-                          {/* Saved summaries */}
                           <div className="rounded-xl border border-zinc-200 bg-white p-3 space-y-2">
                             <div className="space-y-1">
                               <div className="text-xs font-semibold text-zinc-700">Saved summaries</div>
@@ -905,19 +890,13 @@ export default function ThinkingClient() {
                             ))}
                           </div>
 
-                          {/* Actions */}
                           <div className="space-y-2">
                             <div className="text-xs text-zinc-500">
                               Talk it through if you’re unsure. Decide saves it into <span className="font-medium">Decisions</span>.
                             </div>
 
                             <div className="flex flex-wrap items-center gap-2">
-                              {/* Primary first/leftmost */}
-                              <Chip
-                                className={PrimaryChipClass}
-                                onClick={() => setChatForId((cur) => (cur === d.id ? null : d.id))}
-                                title="Talk it through with Keystone"
-                              >
+                              <Chip className={PrimaryChipClass} onClick={() => setChatForId((cur) => (cur === d.id ? null : d.id))} title="Talk it through with Keystone">
                                 {isChatOpen ? "Hide chat" : "Talk this through"}
                               </Chip>
 
@@ -925,7 +904,6 @@ export default function ThinkingClient() {
                                 Decide
                               </Chip>
 
-                              {/* Revisit control (presets + custom date) */}
                               <div className="flex flex-wrap items-center gap-2">
                                 <div className="text-xs text-zinc-500">Revisit</div>
 
@@ -984,21 +962,12 @@ export default function ThinkingClient() {
                               <Chip onClick={() => deleteDraft(d)} title="Delete this draft">
                                 Delete
                               </Chip>
-
-                              <Chip onClick={() => router.push("/home")} title="Return to Home">
-                                Back to Home
-                              </Chip>
                             </div>
                           </div>
 
                           {isChatOpen ? (
                             <div className="pt-2">
-                              <ConversationPanel
-                                decisionId={d.id}
-                                decisionTitle={d.title}
-                                frame={{ decision_statement: d.title }}
-                                onClose={() => setChatForId(null)}
-                              />
+                              <ConversationPanel decisionId={d.id} decisionTitle={d.title} frame={{ decision_statement: d.title }} onClose={() => setChatForId(null)} />
                             </div>
                           ) : null}
                         </div>
