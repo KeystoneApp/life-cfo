@@ -1,58 +1,15 @@
 // app/(app)/home/page.tsx
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { Page } from "@/components/Page";
 import { Card, CardContent, Chip } from "@/components/ui";
 import { useHomeUnload } from "@/lib/home/useHomeUnload";
 import { useHomeOrientation } from "@/lib/home/useHomeOrientation";
+import { useRouter } from "next/navigation";
 
 export const dynamic = "force-dynamic";
-
-type BillsOrientation = {
-  due7: number;
-  due14: number;
-  autopayRisk: number;
-};
-
-type NoteItem = {
-  text: string;
-  href?: string | null;
-};
-
-function safeMs(iso: string | null | undefined) {
-  if (!iso) return null;
-  const ms = Date.parse(iso);
-  return Number.isNaN(ms) ? null : ms;
-}
-
-function isWithinDays(iso: string, days: number) {
-  const ms = safeMs(iso);
-  if (!ms) return false;
-  const now = Date.now();
-  const until = now + days * 24 * 60 * 60 * 1000;
-  return ms >= now && ms <= until;
-}
-
-function billsOrientationSentence(o: BillsOrientation) {
-  if (o.autopayRisk > 0) {
-    return o.autopayRisk === 1
-      ? "One bill may need attention in the next two weeks."
-      : `${o.autopayRisk} bills may need attention in the next two weeks.`;
-  }
-
-  if (o.due7 > 0) {
-    return o.due7 === 1 ? "One bill is due in the next 7 days." : `${o.due7} bills are due in the next 7 days.`;
-  }
-
-  if (o.due14 > 0) {
-    return o.due14 === 1 ? "One bill is due in the next two weeks." : `${o.due14} bills are due in the next two weeks.`;
-  }
-
-  return "Bills look quiet for now.";
-}
 
 function firstNameOf(full: string) {
   const s = (full || "").trim();
@@ -69,8 +26,6 @@ export default function HomePage() {
 
   const [text, setText] = useState("");
   const [affirmation, setAffirmation] = useState<"Saved." | "Held." | null>(null);
-
-  const [billsLine, setBillsLine] = useState<string>("");
 
   const affirmationTimerRef = useRef<number | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -134,57 +89,6 @@ export default function HomePage() {
   const unload = useHomeUnload({ userId });
   const orientation = useHomeOrientation({ userId });
 
-  // --- Bills -> Home Notes sentence ---
-  useEffect(() => {
-    if (!userId) {
-      setBillsLine("");
-      return;
-    }
-
-    let alive = true;
-
-    (async () => {
-      const { data, error } = await supabase
-        .from("recurring_bills")
-        .select("next_due_at,autopay,active")
-        .eq("user_id", userId)
-        .eq("active", true);
-
-      if (!alive) return;
-
-      if (error) {
-        setBillsLine("");
-        return;
-      }
-
-      const rows = (data ?? []) as any[];
-
-      let due7 = 0;
-      let due14 = 0;
-      let autopayRisk = 0;
-
-      for (const r of rows) {
-        const next_due_at = typeof r.next_due_at === "string" ? (r.next_due_at as string) : null;
-        const autopay = !!r.autopay;
-
-        if (!next_due_at) continue;
-
-        const in7 = isWithinDays(next_due_at, 7);
-        const in14 = isWithinDays(next_due_at, 14);
-
-        if (in7) due7 += 1;
-        if (in14) due14 += 1;
-        if (in14 && !autopay) autopayRisk += 1;
-      }
-
-      setBillsLine(billsOrientationSentence({ due7, due14, autopayRisk }));
-    })();
-
-    return () => {
-      alive = false;
-    };
-  }, [userId]);
-
   // --- Helpers ---
   const flashAffirmation = (v: "Saved." | "Held.") => {
     setAffirmation(v);
@@ -215,16 +119,6 @@ export default function HomePage() {
     router.push(href);
   };
 
-  // Build up to 3 notes (calm, not dashboard-y)
-  const notes: NoteItem[] = [];
-  if (orientation.item?.text) notes.push({ text: orientation.item.text, href: orientation.item.href ?? null });
-
-  // Bills note becomes linkable to Bills page (so “may need attention” can be acted on)
-  if (billsLine) notes.push({ text: billsLine, href: "/bills" });
-
-  const topNotes = notes.slice(0, 3);
-  const hasNotes = topNotes.length > 0;
-
   const showExamples = text.trim().length === 0;
   const canSend = authStatus === "signed_in" && text.trim().length > 0;
 
@@ -252,7 +146,6 @@ export default function HomePage() {
               disabled={authStatus !== "signed_in"}
             />
 
-            {/* Send arrow (only when there is text) */}
             {canSend ? (
               <button
                 type="button"
@@ -266,7 +159,6 @@ export default function HomePage() {
             ) : null}
           </div>
 
-          {/* helper line (locked) */}
           <div className="text-xs text-zinc-600">Unload it here. Ask if you want help.</div>
 
           {showExamples ? (
@@ -285,46 +177,37 @@ export default function HomePage() {
             <div className="h-5" aria-hidden="true" />
           )}
 
-          {/* AI response (if the unload hook returns one) */}
+          {/* AI response appears here (below the box) */}
           {unload.response ? <div className="text-[15px] leading-relaxed text-zinc-800">{unload.response}</div> : null}
 
           {authStatus === "signed_out" ? <div className="text-sm text-zinc-600">Sign in to use Home.</div> : null}
         </div>
 
         {/* Notes from Keystone */}
-        {hasNotes ? (
+        {orientation.items.length > 0 ? (
           <Card className="border-zinc-200 bg-white">
             <CardContent>
               <div className="text-xs font-medium text-zinc-600">Notes from Keystone</div>
 
               <div className="mt-2 space-y-3">
-                {topNotes.map((n, idx) => {
-                  const linked = Boolean(n.href);
-                  return (
-                    <div key={`${idx}-${n.text}`} className="flex items-start justify-between gap-3">
-                      {linked ? (
-                        <button
-                          type="button"
-                          onClick={() => openHref(n.href)}
-                          className="min-w-0 flex-1 text-left text-[15px] leading-relaxed text-zinc-800 hover:underline underline-offset-4"
-                          title="Open"
-                        >
-                          {n.text}
-                        </button>
-                      ) : (
-                        <div className="min-w-0 flex-1 text-[15px] leading-relaxed text-zinc-800">{n.text}</div>
-                      )}
+                {orientation.items.slice(0, 3).map((n, idx) => (
+                  <div key={`${idx}-${n.href}-${n.text}`} className="flex items-start justify-between gap-3">
+                    <button
+                      type="button"
+                      onClick={() => openHref(n.href)}
+                      className="min-w-0 flex-1 text-left text-[15px] leading-relaxed text-zinc-800 hover:underline underline-offset-4"
+                      title="Open"
+                    >
+                      {n.text}
+                    </button>
 
-                      {linked ? (
-                        <div className="shrink-0">
-                          <Chip onClick={() => openHref(n.href)} title="Open">
-                            Open
-                          </Chip>
-                        </div>
-                      ) : null}
+                    <div className="shrink-0">
+                      <Chip onClick={() => openHref(n.href)} title="Open">
+                        Open
+                      </Chip>
                     </div>
-                  );
-                })}
+                  </div>
+                ))}
               </div>
             </CardContent>
           </Card>
