@@ -1,4 +1,3 @@
-// app/(app)/revisit/RevisitClient.tsx
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -472,7 +471,7 @@ export default function RevisitClient() {
     if (diff === -1) return "Due yesterday";
     if (diff === 0) return "Due today";
     if (diff === 1) return "Due tomorrow";
-    return `Due in ${diff}d`;
+    return `Due in ${diff} days`;
   };
 
   const setDecisionDomain = async (decisionId: string, domainId: string | null) => {
@@ -557,21 +556,19 @@ export default function RevisitClient() {
   const AttachmentsStrip = ({ decision }: { decision: Decision }) => {
     const atts = normalizeAttachments(decision.attachments);
 
+    if (atts.length === 0) return null;
+
     return (
       <div className="rounded-xl border border-zinc-200 bg-white p-3 space-y-2">
         <div className="text-xs font-semibold text-zinc-700">Attachments</div>
 
-        {atts.length === 0 ? (
-          <div className="text-sm text-zinc-600">No attachments.</div>
-        ) : (
-          <div className="flex flex-wrap items-center gap-2">
-            {atts.map((a) => (
-              <Chip key={a.path} onClick={() => void openAttachment(a)} title={`${a.type}${a.size ? ` • ${softKB(a.size)}` : ""}`}>
-                {a.name}
-              </Chip>
-            ))}
-          </div>
-        )}
+        <div className="flex flex-wrap items-center gap-2">
+          {atts.map((a) => (
+            <Chip key={a.path} onClick={() => void openAttachment(a)} title={`${a.type}${a.size ? ` • ${softKB(a.size)}` : ""}`}>
+              {a.name}
+            </Chip>
+          ))}
+        </div>
       </div>
     );
   };
@@ -593,18 +590,23 @@ export default function RevisitClient() {
     ].filter(Boolean) as string[];
 
     const isEditing = labelsEditForId === d.id;
+    const hasAny = filedUnder.length > 0;
 
     return (
       <div className="rounded-xl border border-zinc-200 bg-white p-3 space-y-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="text-xs font-semibold text-zinc-700">Filed under</div>
-          <Chip onClick={() => setLabelsEditForId((cur) => (cur === d.id ? null : d.id))}>{isEditing ? "Done" : "Edit"}</Chip>
+          <div className="text-xs font-semibold text-zinc-700">Labels</div>
+          <Chip onClick={() => setLabelsEditForId((cur) => (cur === d.id ? null : d.id))}>
+            {isEditing ? "Done" : hasAny ? "Edit" : "Add"}
+          </Chip>
         </div>
 
         {!isEditing ? (
-          <div className="text-sm text-zinc-700">
-            {filedUnder.length > 0 ? <span>{filedUnder.join(", ")}</span> : <span className="text-zinc-600">Not set.</span>}
-          </div>
+          hasAny ? (
+            <div className="text-sm text-zinc-700">{filedUnder.join(", ")}</div>
+          ) : (
+            <div className="text-sm text-zinc-500">Add labels (optional).</div>
+          )
         ) : (
           <div className="space-y-3">
             <div className="text-xs text-zinc-500">Optional. Helps you group and filter later.</div>
@@ -740,6 +742,8 @@ export default function RevisitClient() {
       .map((cid) => constellations.find((c) => c.id === cid) ?? null)
       .filter(Boolean) as Constellation[];
 
+    const context = (d.context ?? "").trim();
+
     return (
       <Card key={d.id} className="border-zinc-200 bg-white">
         <CardContent>
@@ -779,11 +783,7 @@ export default function RevisitClient() {
 
           {isOpen ? (
             <div className="mt-4 space-y-4">
-              {d.context ? (
-                <div className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-700">{d.context}</div>
-              ) : (
-                <div className="text-sm text-zinc-600">No extra context saved.</div>
-              )}
+              {context ? <div className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-700">{context}</div> : null}
 
               <FiledUnderBox decision={d} />
               <AttachmentsStrip decision={d} />
@@ -811,7 +811,7 @@ export default function RevisitClient() {
       <div className="mx-auto w-full max-w-[760px] space-y-6">
         {/* Flow controls (consistent, top-of-page) */}
         <div className="flex items-center justify-between gap-3">
-          <div className="text-xs text-zinc-500">Step 4 of 4</div>
+          <div className="text-xs text-zinc-500">&nbsp;</div>
 
           <div className="flex items-center gap-2">
             <Chip onClick={() => router.push("/decisions")} title="Back: Decisions">
@@ -857,7 +857,11 @@ export default function RevisitClient() {
                   {filteredDueItems.due.length > DEFAULT_LIMIT ? (
                     <div className="flex items-center gap-2">
                       <Chip onClick={() => setShowAllDue((v) => !v)}>{showAllDue ? "Show less" : "Show all"}</Chip>
-                      {!showAllDue ? <div className="text-xs text-zinc-500">Showing {DEFAULT_LIMIT} of {filteredDueItems.due.length}</div> : null}
+                      {!showAllDue ? (
+                        <div className="text-xs text-zinc-500">
+                          Showing {DEFAULT_LIMIT} of {filteredDueItems.due.length}
+                        </div>
+                      ) : null}
                     </div>
                   ) : null}
                 </div>
@@ -875,7 +879,11 @@ export default function RevisitClient() {
                   {filteredDueItems.soon.length > DEFAULT_LIMIT ? (
                     <div className="flex items-center gap-2">
                       <Chip onClick={() => setShowAllSoon((v) => !v)}>{showAllSoon ? "Show less" : "Show all"}</Chip>
-                      {!showAllSoon ? <div className="text-xs text-zinc-500">Showing {DEFAULT_LIMIT} of {filteredDueItems.soon.length}</div> : null}
+                      {!showAllSoon ? (
+                        <div className="text-xs text-zinc-500">
+                          Showing {DEFAULT_LIMIT} of {filteredDueItems.soon.length}
+                        </div>
+                      ) : null}
                     </div>
                   ) : null}
                 </div>
