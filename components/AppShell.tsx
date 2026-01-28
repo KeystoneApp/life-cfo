@@ -59,13 +59,7 @@ function Menu({
 
   return (
     <div className="relative" ref={ref}>
-      <Chip
-        active={!!active}
-        onClick={() => setOpen((v) => !v)}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        title={label}
-      >
+      <Chip active={!!active} onClick={() => setOpen((v) => !v)} aria-haspopup="menu" aria-expanded={open} title={label}>
         {label} <span className="ml-1 text-xs opacity-60">▾</span>
       </Chip>
 
@@ -113,10 +107,11 @@ export function AppShell({ children }: AppShellProps) {
     { href: "/thinking", label: "Thinking" },
   ];
 
-  // Review (Decisions/Revisit/Chapters)
+  // Review (Decisions/Review/Chapters)
+  // NOTE: route stays /revisit, label is user-facing "Review"
   const reviewItems: NavItem[] = [
     { href: "/decisions", label: "Decisions" },
-    { href: "/revisit", label: "Revisit" },
+    { href: "/revisit", label: "Review" },
     { href: "/chapters", label: "Chapters" },
   ];
 
@@ -194,10 +189,7 @@ function AccountMenu({ onSignOut }: { onSignOut: () => void }) {
       </Chip>
 
       {open ? (
-        <div
-          role="menu"
-          className="absolute right-0 z-50 mt-2 min-w-[220px] overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm"
-        >
+        <div role="menu" className="absolute right-0 z-50 mt-2 min-w-[220px] overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm">
           <div className="p-2">
             <Link href="/settings" className="block no-underline" onClick={() => setOpen(false)}>
               <div className="rounded-xl px-3 py-2 text-sm text-zinc-800 hover:bg-zinc-50">Settings</div>
