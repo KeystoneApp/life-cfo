@@ -67,25 +67,26 @@ function Menu({
         <div
           role="menu"
           className={[
-            // tighter dropdown: less padding + slightly narrower + less “air”
-            "absolute z-50 mt-2 min-w-[190px] overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm",
+            "absolute z-50 mt-2 min-w-[160px] overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm",
             align === "right" ? "right-0" : "left-0",
           ].join(" ")}
         >
-          <div className="p-1.5">
-            {items.map((it) => (
-              <Link
-                key={it.href}
-                href={it.href}
-                className="block no-underline"
-                onClick={() => {
-                  setOpen(false);
-                  onNavigate?.();
-                }}
-              >
-                <div className="rounded-lg px-2.5 py-1.5 text-sm text-zinc-800 hover:bg-zinc-50">{it.label}</div>
-              </Link>
-            ))}
+          <div className="p-1">
+            <div className="space-y-0.5">
+              {items.map((it) => (
+                <Link
+                  key={it.href}
+                  href={it.href}
+                  className="block no-underline"
+                  onClick={() => {
+                    setOpen(false);
+                    onNavigate?.();
+                  }}
+                >
+                  <div className="rounded-lg px-2 py-1 text-sm leading-tight text-zinc-800 hover:bg-zinc-50">{it.label}</div>
+                </Link>
+              ))}
+            </div>
           </div>
         </div>
       ) : null}
@@ -101,14 +102,12 @@ export function AppShell({ children }: AppShellProps) {
 
   const home: NavItem = { href: "/home", label: "Home" };
 
-  // Decide (Capture/Framing/Thinking)
   const decideItems: NavItem[] = [
     { href: "/capture", label: "Capture" },
     { href: "/framing", label: "Framing" },
     { href: "/thinking", label: "Thinking" },
   ];
 
-  // Review (Decisions/Review/Chapters)
   // NOTE: route stays /revisit, label is user-facing "Review"
   const reviewItems: NavItem[] = [
     { href: "/decisions", label: "Decisions" },
@@ -116,7 +115,6 @@ export function AppShell({ children }: AppShellProps) {
     { href: "/chapters", label: "Chapters" },
   ];
 
-  // Money
   const moneyItems: NavItem[] = [
     { href: "/accounts", label: "Accounts" },
     { href: "/bills", label: "Bills" },
@@ -192,41 +190,43 @@ function AccountMenu({ onSignOut }: { onSignOut: () => void }) {
       {open ? (
         <div
           role="menu"
-          className="absolute right-0 z-50 mt-2 min-w-[190px] overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm"
+          className="absolute right-0 z-50 mt-2 min-w-[160px] overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm"
         >
-          <div className="p-1.5">
-            <Link href="/settings" className="block no-underline" onClick={() => setOpen(false)}>
-              <div className="rounded-lg px-2.5 py-1.5 text-sm text-zinc-800 hover:bg-zinc-50">Settings</div>
-            </Link>
+          <div className="p-1">
+            <div className="space-y-0.5">
+              <Link href="/settings" className="block no-underline" onClick={() => setOpen(false)}>
+                <div className="rounded-lg px-2 py-1 text-sm leading-tight text-zinc-800 hover:bg-zinc-50">Settings</div>
+              </Link>
 
-            <Link href="/how-keystone-works" className="block no-underline" onClick={() => setOpen(false)}>
-              <div className="rounded-lg px-2.5 py-1.5 text-sm text-zinc-800 hover:bg-zinc-50">How it works</div>
-            </Link>
+              <Link href="/how-keystone-works" className="block no-underline" onClick={() => setOpen(false)}>
+                <div className="rounded-lg px-2 py-1 text-sm leading-tight text-zinc-800 hover:bg-zinc-50">How it works</div>
+              </Link>
 
-            <Link href="/feedback" className="block no-underline" onClick={() => setOpen(false)}>
-              <div className="rounded-lg px-2.5 py-1.5 text-sm text-zinc-800 hover:bg-zinc-50">Feedback</div>
-            </Link>
+              <Link href="/feedback" className="block no-underline" onClick={() => setOpen(false)}>
+                <div className="rounded-lg px-2 py-1 text-sm leading-tight text-zinc-800 hover:bg-zinc-50">Feedback</div>
+              </Link>
 
-            <Link href="/demo" className="block no-underline" onClick={() => setOpen(false)}>
-              <div className="rounded-lg px-2.5 py-1.5 text-sm text-zinc-800 hover:bg-zinc-50">Demo</div>
-            </Link>
+              <Link href="/demo" className="block no-underline" onClick={() => setOpen(false)}>
+                <div className="rounded-lg px-2 py-1 text-sm leading-tight text-zinc-800 hover:bg-zinc-50">Demo</div>
+              </Link>
 
-            <Link href="/fine-print" className="block no-underline" onClick={() => setOpen(false)}>
-              <div className="rounded-lg px-2.5 py-1.5 text-sm text-zinc-800 hover:bg-zinc-50">Fine print</div>
-            </Link>
+              <Link href="/fine-print" className="block no-underline" onClick={() => setOpen(false)}>
+                <div className="rounded-lg px-2 py-1 text-sm leading-tight text-zinc-800 hover:bg-zinc-50">Fine print</div>
+              </Link>
 
-            <div className="my-2 h-px bg-zinc-100" />
+              <div className="my-1 h-px bg-zinc-100" />
 
-            <button
-              type="button"
-              onClick={() => {
-                setOpen(false);
-                onSignOut();
-              }}
-              className="w-full rounded-lg px-2.5 py-1.5 text-left text-sm text-zinc-800 hover:bg-zinc-50"
-            >
-              Sign out
-            </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setOpen(false);
+                  onSignOut();
+                }}
+                className="w-full rounded-lg px-2 py-1 text-left text-sm leading-tight text-zinc-800 hover:bg-zinc-50"
+              >
+                Sign out
+              </button>
+            </div>
           </div>
         </div>
       ) : null}
