@@ -1,7 +1,7 @@
 // app/(app)/home/page.tsx
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { Page } from "@/components/Page";
 import { Card, CardContent, Chip } from "@/components/ui";
@@ -137,6 +137,18 @@ export default function HomePage() {
               placeholder="What’s on your mind?"
               className="w-full min-h-[140px] resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 pr-14 text-[15px] leading-relaxed text-zinc-900 outline-none focus:ring-2 focus:ring-zinc-200"
               onKeyDown={(e) => {
+                const isMac =
+                  typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+                const cmdOrCtrl = isMac ? e.metaKey : e.ctrlKey;
+
+                // Cmd/Ctrl + Enter sends
+                if (cmdOrCtrl && e.key === "Enter") {
+                  e.preventDefault();
+                  void submit();
+                  return;
+                }
+
+                // Enter sends (Shift+Enter makes a newline)
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
                   void submit();
@@ -152,7 +164,7 @@ export default function HomePage() {
                 onClick={() => void submit()}
                 className="absolute bottom-3 right-3 inline-flex h-9 w-9 items-center justify-center rounded-full border border-zinc-200 bg-white text-zinc-800 hover:bg-zinc-50 focus:outline-none focus:ring-2 focus:ring-zinc-200"
                 aria-label="Send"
-                title="Send"
+                title="Send (Enter)"
               >
                 →
               </button>
