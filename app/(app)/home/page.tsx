@@ -44,8 +44,24 @@ function looksLikeBillsQuestion(q: string) {
   const s = q.trim().toLowerCase();
   if (!s) return false;
   const hasBillsWord = s.includes("bill") || s.includes("bills");
-  const hasMonthCue = s.includes("this month") || s.includes("month") || s.includes("due") || s.includes("upcoming") || s.includes("coming up");
+  const hasMonthCue =
+    s.includes("this month") || s.includes("month") || s.includes("due") || s.includes("upcoming") || s.includes("coming up");
   return hasBillsWord && hasMonthCue;
+}
+
+// --- micro polish: strip trivial markdown for calmer UI ---
+function stripLightMarkdown(input: string) {
+  let s = (input || "").trim();
+  if (!s) return s;
+  // bold/italic/code
+  s = s.replace(/\*\*(.*?)\*\*/g, "$1");
+  s = s.replace(/\*(.*?)\*/g, "$1");
+  s = s.replace(/`([^`]+)`/g, "$1");
+  // headings
+  s = s.replace(/^#{1,6}\s+/gm, "");
+  // link [text](url) -> text
+  s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1");
+  return s.trim();
 }
 
 type AskState =
@@ -231,7 +247,9 @@ export default function HomePage() {
         return;
       }
 
-      const answer = typeof json?.answer === "string" ? json.answer : "";
+      const answerRaw = typeof json?.answer === "string" ? json.answer : "";
+      const answer = stripLightMarkdown(answerRaw);
+
       const action = typeof json?.action === "string" ? json.action : "none";
 
       let actionHref: string | null = null;
@@ -298,9 +316,13 @@ export default function HomePage() {
   const subtitle = preferredName ? `Good to see you, ${preferredName}.` : undefined;
   const greeting = "A quiet place to unload or ask.";
 
+  // --- Notes UI: avoid “glitchy pop-in” by reserving space while loading ---
+  const notesVisible = orientation.loading || orientation.items.length > 0;
+
   return (
     <Page title="Home" subtitle={subtitle} right={<div className="flex items-center gap-2"></div>}>
       <div className="mx-auto w-full max-w-[760px] space-y-6">
+        {/* Primary input */}
         <Card className="border-zinc-200 bg-white">
           <CardContent>
             <div className="space-y-3">
@@ -388,11 +410,22 @@ export default function HomePage() {
           </CardContent>
         </Card>
 
+        {/* Answer (Ask) */}
         {ask.status !== "idle" ? (
           <Card className="border-zinc-200 bg-white">
             <CardContent>
               <div className="space-y-2">
-                <div className="text-xs font-medium text-zinc-600">Answer</div>
+                <div className="space-y-1">
+                  <div className="text-xs font-medium text-zinc-600">Answer</div>
+
+                  {/* Anchor the response to what they asked (quiet) */}
+                  {ask.status === "done" || ask.status === "error" ? (
+                    <div className="text-xs text-zinc-500">
+                      <span className="text-zinc-400">You asked:</span>{" "}
+                      <span className="text-zinc-600">{ask.question}</span>
+                    </div>
+                  ) : null}
+                </div>
 
                 {ask.status === "loading" ? (
                   <div className="text-sm text-zinc-700">Thinking…</div>
@@ -428,30 +461,45 @@ export default function HomePage() {
           </Card>
         ) : null}
 
-        {orientation.items.length > 0 ? (
+        {/* Notes from Keystone (balanced + bullets + reserved space while loading) */}
+        {notesVisible ? (
           <Card className="border-zinc-200 bg-white">
             <CardContent>
-              <div className="text-xs font-medium text-zinc-600">Notes from Keystone</div>
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-sm font-medium text-zinc-700">Notes from Keystone</div>
+                {orientation.loading ? <div className="text-xs text-zinc-500">Updating…</div> : <div className="h-4" aria-hidden="true" />}
+              </div>
 
-              <div className="mt-2 space-y-3">
-                {orientation.items.slice(0, 3).map((n, idx) => (
-                  <div key={`${idx}-${n.href}-${n.text}`} className="flex items-start justify-between gap-3">
-                    <button
-                      type="button"
-                      onClick={() => openHref(n.href)}
-                      className="min-w-0 flex-1 text-left text-[15px] leading-relaxed text-zinc-800 hover:underline underline-offset-4"
-                      title="Open"
-                    >
-                      {n.text}
-                    </button>
-
-                    <div className="shrink-0">
-                      <Chip onClick={() => openHref(n.href)} title="Open">
-                        Open
-                      </Chip>
-                    </div>
+              <div className="mt-4">
+                {orientation.loading && orientation.items.length === 0 ? (
+                  // reserve height so it doesn’t “pop in” lower down
+                  <div className="space-y-3" aria-hidden="true">
+                    <div className="h-5 w-3/4 rounded bg-zinc-100" />
+                    <div className="h-5 w-2/3 rounded bg-zinc-100" />
                   </div>
-                ))}
+                ) : (
+                  <ul className="space-y-3">
+                    {orientation.items.slice(0, 3).map((n, idx) => (
+                      <li key={`${idx}-${n.href}-${n.text}`} className="flex items-start justify-between gap-3">
+                        <button
+                          type="button"
+                          onClick={() => openHref(n.href)}
+                          className="min-w-0 flex-1 text-left text-[15px] leading-relaxed text-zinc-800 hover:underline underline-offset-4"
+                          title="Open"
+                        >
+                          <span className="mr-2 text-zinc-400">•</span>
+                          {n.text}
+                        </button>
+
+                        <div className="shrink-0">
+                          <Chip onClick={() => openHref(n.href)} title="Open">
+                            Open
+                          </Chip>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
             </CardContent>
           </Card>
