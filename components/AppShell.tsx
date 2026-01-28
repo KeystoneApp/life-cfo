@@ -213,6 +213,10 @@ function AccountMenu({ onSignOut }: { onSignOut: () => void }) {
                 <div className="whitespace-nowrap rounded-lg px-2 py-1 text-sm leading-tight text-zinc-800 hover:bg-zinc-50">How it works</div>
               </Link>
 
+              <Link href="/planned-upgrades" className="block no-underline" onClick={() => setOpen(false)}>
+                <div className="whitespace-nowrap rounded-lg px-2 py-1 text-sm leading-tight text-zinc-800 hover:bg-zinc-50">Planned upgrades</div>
+              </Link>
+
               <Link href="/feedback" className="block no-underline" onClick={() => setOpen(false)}>
                 <div className="whitespace-nowrap rounded-lg px-2 py-1 text-sm leading-tight text-zinc-800 hover:bg-zinc-50">Feedback</div>
               </Link>
