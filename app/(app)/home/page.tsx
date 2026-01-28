@@ -17,56 +17,17 @@ function firstNameOf(full: string) {
   return s.split(/\s+/)[0] || "";
 }
 
-function monthKey(d: Date) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-}
-
 function moneyAUD(n: number | null | undefined) {
-  if (typeof n !== "number" || !Number.isFinite(n)) return null;
-  return new Intl.NumberFormat(undefined, { style: "currency", currency: "AUD" }).format(n);
+  const x = typeof n === "number" ? n : n == null ? null : Number(n);
+  if (typeof x !== "number" || !Number.isFinite(x)) return null;
+  return new Intl.NumberFormat(undefined, { style: "currency", currency: "AUD" }).format(x);
 }
 
-type BillRow = {
-  id: string;
-  user_id: string;
-  merchant_key: string;
-  nickname: string | null;
-  due_day_or_date: string; // text
-  expected_amount: number | null; // numeric
-  status: string | null; // 'active' default
-  created_at: string | null;
-  updated_at: string | null;
-};
-
-type ParsedDue =
-  | { kind: "date"; date: Date; label: string }
-  | { kind: "day"; day: number; label: string }
-  | { kind: "unknown"; label: string };
-
-function parseDue(due_day_or_date: string): ParsedDue {
-  const raw = (due_day_or_date || "").trim();
-  if (!raw) return { kind: "unknown", label: "Due date not set" };
-
-  // ISO date e.g. 2026-01-15
-  const isoMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (isoMatch) {
-    const ms = Date.parse(`${raw}T12:00:00`);
-    if (!Number.isNaN(ms)) {
-      const dt = new Date(ms);
-      return { kind: "date", date: dt, label: dt.toLocaleDateString() };
-    }
-  }
-
-  // Day-of-month: allow "15", "15th", "15th of month", etc.
-  const dayMatch = raw.match(/(\d{1,2})/);
-  if (dayMatch) {
-    const day = Number(dayMatch[1]);
-    if (day >= 1 && day <= 31) {
-      return { kind: "day", day, label: `Day ${day}` };
-    }
-  }
-
-  return { kind: "unknown", label: raw };
+function monthBoundsLocal() {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+  const end = new Date(now.getFullYear(), now.getMonth() + 1, 1, 0, 0, 0, 0);
+  return { start, end };
 }
 
 function isYesish(s: string) {
@@ -99,6 +60,17 @@ type AskState =
   | { status: "done"; question: string; answer: string; actionHref?: string | null }
   | { status: "error"; question: string; message: string };
 
+type RecurringBillRow = {
+  id: string;
+  user_id: string;
+  merchant_key: string | null;
+  nickname: string | null;
+  expected_amount: number | null;
+  next_due_at: string | null;
+  autopay: boolean | null;
+  active: boolean | null;
+};
+
 export default function HomePage() {
   const router = useRouter();
 
@@ -109,7 +81,6 @@ export default function HomePage() {
   const [text, setText] = useState("");
   const [affirmation, setAffirmation] = useState<"Saved." | "Held." | null>(null);
 
-  // Real “Ask” response
   const [ask, setAsk] = useState<AskState>({ status: "idle" });
 
   const affirmationTimerRef = useRef<number | null>(null);
@@ -138,7 +109,7 @@ export default function HomePage() {
     };
   }, []);
 
-  // --- Load name (from Fine Print signature) ---
+  // --- Load name ---
   useEffect(() => {
     if (!userId) {
       setPreferredName("");
@@ -165,11 +136,10 @@ export default function HomePage() {
     };
   }, [userId]);
 
-  // --- Hooks (contracts) ---
+  // --- Hooks ---
   const unload = useHomeUnload({ userId });
   const orientation = useHomeOrientation({ userId });
 
-  // --- Helpers ---
   const flashAffirmation = (v: "Saved." | "Held.") => {
     setAffirmation(v);
     if (affirmationTimerRef.current) window.clearTimeout(affirmationTimerRef.current);
@@ -188,69 +158,66 @@ export default function HomePage() {
     router.push(href);
   };
 
-  // --------- Local bills fallback (useful even before full “next_due_at” exists) ----------
+  // ✅ Deterministic bills answer (prefers recurring_bills because it has next_due_at)
   const localBillsAnswer = async (uid: string) => {
-    const { data, error } = await supabase
+    const { start, end } = monthBoundsLocal();
+
+    // 1) Prefer recurring_bills (truthy “due this month”)
+    const { data: rb, error: rbErr } = await supabase
+      .from("recurring_bills")
+      .select("id,user_id,merchant_key,nickname,expected_amount,next_due_at,autopay,active")
+      .eq("user_id", uid)
+      .eq("active", true)
+      .gte("next_due_at", start.toISOString())
+      .lt("next_due_at", end.toISOString())
+      .order("next_due_at", { ascending: true })
+      .limit(100);
+
+    if (!rbErr) {
+      const rows = (rb ?? []) as RecurringBillRow[];
+      if (rows.length === 0) {
+        return { ok: true as const, answer: "There are no bills due this month (from what I can see)." };
+      }
+
+      const lines = rows.map((b) => {
+        const name = b.nickname?.trim() ? b.nickname.trim() : b.merchant_key || "Bill";
+        const due = b.next_due_at ? new Date(b.next_due_at).toLocaleDateString() : "—";
+        const amt = b.expected_amount != null ? moneyAUD(b.expected_amount) : null;
+        return `• ${name} — ${due}${amt ? ` — ${amt}` : ""}`;
+      });
+
+      const total = rows.reduce((sum, b) => sum + (typeof b.expected_amount === "number" && Number.isFinite(b.expected_amount) ? b.expected_amount : 0), 0);
+
+      return {
+        ok: true as const,
+        answer: `${lines.join("\n")}\n\nEstimated total: ${moneyAUD(total) ?? "—"}`,
+      };
+    }
+
+    // 2) Fallback (older bills table) — if recurring_bills unavailable
+    const { data: bills, error } = await supabase
       .from("bills")
-      .select("id,user_id,merchant_key,nickname,due_day_or_date,expected_amount,status,created_at,updated_at")
+      .select("id,nickname,merchant_key,due_day_or_date,expected_amount,status")
       .eq("user_id", uid)
       .eq("status", "active");
 
     if (error) return { ok: false as const, answer: "I couldn’t load bills right now." };
 
-    const rows = (data ?? []) as BillRow[];
+    const rows = (bills ?? []) as any[];
     if (rows.length === 0) return { ok: true as const, answer: "I can’t see any active bills yet." };
 
-    const now = new Date();
-    const thisMonth = monthKey(now);
-    const year = now.getFullYear();
-    const month = now.getMonth(); // 0-based
-
-    const enriched = rows
-      .map((b) => {
-        const parsed = parseDue(b.due_day_or_date);
-        let sortKey = 9999;
-        let dueLabel = parsed.label;
-
-        if (parsed.kind === "date") {
-          const mk = monthKey(parsed.date);
-          if (mk !== thisMonth) return null; // ✅ only this month
-          sortKey = parsed.date.getDate();
-          dueLabel = parsed.date.toLocaleDateString();
-        } else if (parsed.kind === "day") {
-          sortKey = parsed.day;
-          const dt = new Date(year, month, parsed.day, 12, 0, 0, 0);
-          dueLabel = dt.toLocaleDateString();
-        }
-
-        return { bill: b, sortKey, dueLabel };
-      })
-      .filter(Boolean)
-      .sort((a: any, b: any) => a.sortKey - b.sortKey);
-
-    if (enriched.length === 0) {
-      return { ok: true as const, answer: "No bills due this month (from what I can see)." };
-    }
-
-    const lines = (enriched as any[]).map(({ bill, dueLabel }) => {
-      const name = bill.nickname?.trim() ? bill.nickname.trim() : bill.merchant_key;
-      const amt = bill.expected_amount != null ? moneyAUD(Number(bill.expected_amount)) : null;
-      return `• ${name} — ${dueLabel}${amt ? ` — ${amt}` : ""}`;
+    // Without next_due_at, we can’t truly do “this month” reliably; be honest.
+    const lines = rows.map((b) => {
+      const name = b.nickname?.trim() ? b.nickname.trim() : b.merchant_key;
+      const due = String(b.due_day_or_date || "").trim() || "—";
+      const amt = b.expected_amount != null ? moneyAUD(Number(b.expected_amount)) : null;
+      return `• ${name} — ${due}${amt ? ` — ${amt}` : ""}`;
     });
 
-    const total = (enriched as any[]).reduce((sum, x) => {
-      const n = x.bill.expected_amount;
-      if (typeof n !== "number" || !Number.isFinite(n)) return sum;
-      return sum + n;
-    }, 0);
-
-    return {
-      ok: true as const,
-      answer: `${lines.join("\n")}\n\nEstimated total: ${moneyAUD(total) ?? "—"}`,
-    };
+    return { ok: true as const, answer: `${lines.join("\n")}\n\n(These are active bills — I can’t confidently compute “due this month” yet.)` };
   };
 
-  // --------- Real AI call (server route) ----------
+  // Real AI call (server route)
   const askHome = async (uid: string, question: string) => {
     setAsk({ status: "loading", question });
 
@@ -264,18 +231,6 @@ export default function HomePage() {
       const json = await res.json();
 
       if (!res.ok) {
-        // fallback for the one thing people ask first
-        if (looksLikeBillsQuestion(question)) {
-          const fb = await localBillsAnswer(uid);
-          setAsk({
-            status: "done",
-            question,
-            answer: fb.answer,
-            actionHref: "/bills",
-          });
-          return;
-        }
-
         setAsk({ status: "error", question, message: "I couldn’t answer that just now." });
         return;
       }
@@ -291,18 +246,6 @@ export default function HomePage() {
 
       setAsk({ status: "done", question, answer, actionHref });
     } catch {
-      // fallback for bills
-      if (looksLikeBillsQuestion(question)) {
-        const fb = await localBillsAnswer(uid);
-        setAsk({
-          status: "done",
-          question,
-          answer: fb.answer,
-          actionHref: "/bills",
-        });
-        return;
-      }
-
       setAsk({ status: "error", question, message: "I couldn’t answer that just now." });
     }
   };
@@ -313,7 +256,6 @@ export default function HomePage() {
 
     const msg = raw;
 
-    // Clear input immediately (feels fast)
     setText("");
     window.setTimeout(() => inputRef.current?.focus(), 0);
 
@@ -322,7 +264,7 @@ export default function HomePage() {
       return;
     }
 
-    // If user replies “yes” while an ASK is on screen, treat it as a follow-up to the last question.
+    // Follow-up “yes” on existing Ask
     if (isYesish(msg) && (ask.status === "done" || ask.status === "error")) {
       const q = ask.question;
       const followUp = `${q}\n\nUser follow-up: yes.`;
@@ -333,7 +275,15 @@ export default function HomePage() {
 
     const intent = inferIntent(msg);
 
-    // ASK: answer in-place (no “Saved.”; no weird “want help…” prompt)
+    // ✅ Bills questions: deterministic, not AI
+    if (intent === "ask" && looksLikeBillsQuestion(msg)) {
+      flashAffirmation("Held.");
+      const fb = await localBillsAnswer(userId);
+      setAsk({ status: "done", question: msg, answer: fb.answer, actionHref: "/bills" });
+      return;
+    }
+
+    // ASK: AI (ephemeral)
     if (intent === "ask") {
       flashAffirmation("Held.");
       await askHome(userId, msg);
@@ -342,7 +292,6 @@ export default function HomePage() {
 
     // HOLD: save capture quietly
     flashAffirmation("Saved.");
-    // also clear the ask panel if they’re switching focus
     setAsk({ status: "idle" });
     await unload.submit(msg);
   };
@@ -351,16 +300,11 @@ export default function HomePage() {
   const canSend = authStatus === "signed_in" && text.trim().length > 0;
 
   const subtitle = preferredName ? `Good to see you, ${preferredName}.` : undefined;
-
-  const greeting = useMemo(() => {
-    if (!preferredName) return "A quiet place to unload or ask.";
-    return "A quiet place to unload or ask.";
-  }, [preferredName]);
+  const greeting = "A quiet place to unload or ask.";
 
   return (
     <Page title="Home" subtitle={subtitle} right={<div className="flex items-center gap-2"></div>}>
       <div className="mx-auto w-full max-w-[760px] space-y-6">
-        {/* Primary input */}
         <Card className="border-zinc-200 bg-white">
           <CardContent>
             <div className="space-y-3">
@@ -377,14 +321,12 @@ export default function HomePage() {
                     const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
                     const cmdOrCtrl = isMac ? e.metaKey : e.ctrlKey;
 
-                    // Cmd/Ctrl + Enter sends
                     if (cmdOrCtrl && e.key === "Enter") {
                       e.preventDefault();
                       void submit();
                       return;
                     }
 
-                    // Enter sends (Shift+Enter newline)
                     if (e.key === "Enter" && !e.shiftKey) {
                       e.preventDefault();
                       void submit();
@@ -450,7 +392,6 @@ export default function HomePage() {
           </CardContent>
         </Card>
 
-        {/* Answer (Ask) */}
         {ask.status !== "idle" ? (
           <Card className="border-zinc-200 bg-white">
             <CardContent>
@@ -478,12 +419,7 @@ export default function HomePage() {
                         </Chip>
                       ) : null}
 
-                      <Chip
-                        onClick={() => {
-                          setAsk({ status: "idle" });
-                        }}
-                        title="Dismiss"
-                      >
+                      <Chip onClick={() => setAsk({ status: "idle" })} title="Dismiss">
                         Done
                       </Chip>
                     </div>
@@ -496,7 +432,6 @@ export default function HomePage() {
           </Card>
         ) : null}
 
-        {/* Notes from Keystone */}
         {orientation.items.length > 0 ? (
           <Card className="border-zinc-200 bg-white">
             <CardContent>
@@ -526,7 +461,6 @@ export default function HomePage() {
           </Card>
         ) : null}
 
-        {/* Existing unload response (if your hook provides one) */}
         {unload.response ? <div className="text-[15px] leading-relaxed text-zinc-800">{unload.response}</div> : null}
       </div>
     </Page>
