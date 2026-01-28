@@ -31,7 +31,7 @@ export function Page({ title, subtitle, right, children, className, disableFeedb
         {children}
 
         {!disableFeedback ? (
-          <div className="pt-2">
+          <div className="pt-6 border-t border-zinc-100">
             <FeedbackPrompt pageTitle={typeof title === "string" ? title : undefined} />
           </div>
         ) : null}
