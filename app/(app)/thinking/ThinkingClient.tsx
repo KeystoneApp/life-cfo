@@ -84,11 +84,6 @@ function isoFromDateInput(dateStr: string) {
   return new Date(ms).toISOString();
 }
 
-function softKB(bytes?: number | null) {
-  if (!bytes || bytes <= 0) return "";
-  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
-}
-
 function normalizeAttachments(raw: unknown): AttachmentMeta[] {
   if (!raw) return [];
   if (!Array.isArray(raw)) return [];
@@ -129,8 +124,7 @@ export default function ThinkingClient() {
   const DEFAULT_LIMIT = 5;
   const [showAll, setShowAll] = useState(false);
 
-  // Summaries for the currently open draft (small, capped)
-  const [summaryStatus, setSummaryStatus] = useState<string>("");
+  // Summaries for the currently open draft (small, capped) — but hidden unless present
   const [summaries, setSummaries] = useState<DecisionSummary[]>([]);
 
   // ✅ Labels (tiles + assignment) — internal tables remain domains/constellations
@@ -143,10 +137,6 @@ export default function ThinkingClient() {
   const [domainByDecision, setDomainByDecision] = useState<Record<string, string | null>>({});
   // decision_id -> constellation_ids[]
   const [constellationsByDecision, setConstellationsByDecision] = useState<Record<string, string[]>>({});
-
-  // Signed URL cache (path -> signedUrl)
-  const [signed, setSigned] = useState<Record<string, string>>({});
-  const signingRef = useRef<Record<string, boolean>>({});
 
   const loadRef = useRef<(opts?: { silent?: boolean }) => void>(() => {});
   const reloadTimerRef = useRef<number | null>(null);
@@ -167,32 +157,6 @@ export default function ThinkingClient() {
   };
 
   const openDraft = useMemo(() => drafts.find((d) => d.id === openId) ?? null, [drafts, openId]);
-
-  const ensureSignedUrl = async (path: string) => {
-    if (!path) return null;
-    if (signed[path]) return signed[path];
-    if (signingRef.current[path]) return null;
-
-    signingRef.current[path] = true;
-    try {
-      const { data, error } = await supabase.storage.from("captures").createSignedUrl(path, 60 * 10);
-      if (error || !data?.signedUrl) return null;
-
-      setSigned((prev) => ({ ...prev, [path]: data.signedUrl }));
-      return data.signedUrl;
-    } finally {
-      signingRef.current[path] = false;
-    }
-  };
-
-  const openAttachment = async (att: AttachmentMeta) => {
-    const url = await ensureSignedUrl(att.path);
-    if (!url) {
-      showToast({ message: "Couldn’t open attachment." }, 2500);
-      return;
-    }
-    window.open(url, "_blank", "noopener,noreferrer");
-  };
 
   const load = async (opts?: { silent?: boolean }) => {
     const silent = !!opts?.silent;
@@ -366,17 +330,13 @@ export default function ThinkingClient() {
     setLabelsEditForId((cur) => (cur && openId && cur === openId ? cur : null));
   }, [openId]);
 
-  // Load summaries for the open draft (capped; no lists)
+  // Load summaries for the open draft (capped) — stays hidden unless any exist
   useEffect(() => {
     let mounted = true;
 
     (async () => {
       setSummaries([]);
-      setSummaryStatus("");
-
       if (!userId || !openDraft) return;
-
-      setSummaryStatus("Loading saved summaries…");
 
       const { data, error } = await supabase
         .from("decision_summaries")
@@ -389,13 +349,11 @@ export default function ThinkingClient() {
       if (!mounted) return;
 
       if (error) {
-        setSummaryStatus("");
         setSummaries([]);
         return;
       }
 
       setSummaries((data ?? []) as DecisionSummary[]);
-      setSummaryStatus("");
     })();
 
     return () => {
@@ -734,6 +692,7 @@ export default function ThinkingClient() {
 
               const filedUnder = [domainName, ...memberNames].filter(Boolean) as string[];
               const isEditingLabels = labelsEditForId === d.id;
+              const showFiledUnder = isEditingLabels || filedUnder.length > 0;
 
               const revisitMode = revisitModeById[d.id] ?? "";
               const customDate = customDateById[d.id] ?? "";
@@ -799,88 +758,95 @@ export default function ThinkingClient() {
 
                           <DecisionNotes decisionId={d.id} kind="thinking" />
 
-                          <div className="rounded-xl border border-zinc-200 bg-white p-3 space-y-2">
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                              <div className="text-xs font-semibold text-zinc-700">Filed under</div>
-                              <Chip onClick={() => setLabelsEditForId((cur) => (cur === d.id ? null : d.id))}>
-                                {isEditingLabels ? "Done" : "Edit"}
-                              </Chip>
-                            </div>
-
-                            {!isEditingLabels ? (
-                              <div className="text-sm text-zinc-700">
-                                {filedUnder.length > 0 ? <span>{filedUnder.join(", ")}</span> : <span className="text-zinc-600">Not set.</span>}
+                          {/* ✅ Hide Filed under until it’s useful; keep a quiet access chip */}
+                          {showFiledUnder ? (
+                            <div className="rounded-xl border border-zinc-200 bg-white p-3 space-y-2">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <div className="text-xs font-semibold text-zinc-700">Filed under</div>
+                                <Chip onClick={() => setLabelsEditForId((cur) => (cur === d.id ? null : d.id))}>
+                                  {isEditingLabels ? "Done" : "Edit"}
+                                </Chip>
                               </div>
-                            ) : (
-                              <div className="space-y-3">
-                                <div className="text-xs text-zinc-500">Optional. Helps you group and filter later.</div>
 
-                                <div className="space-y-2">
-                                  <div className="text-xs text-zinc-500">Area</div>
-                                  <div className="flex flex-wrap items-center gap-2">
-                                    <Chip active={!domainId} onClick={() => void setDecisionDomain(d.id, null)}>
-                                      None
-                                    </Chip>
-                                    {domains.map((dom) => (
-                                      <Chip key={dom.id} active={domainId === dom.id} onClick={() => void setDecisionDomain(d.id, dom.id)}>
-                                        {dom.name}
+                              {!isEditingLabels ? (
+                                <div className="text-sm text-zinc-700">
+                                  {filedUnder.length > 0 ? <span>{filedUnder.join(", ")}</span> : <span className="text-zinc-600">Not set.</span>}
+                                </div>
+                              ) : (
+                                <div className="space-y-3">
+                                  <div className="text-xs text-zinc-500">Optional. Helps you group and filter later.</div>
+
+                                  <div className="space-y-2">
+                                    <div className="text-xs text-zinc-500">Area</div>
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <Chip active={!domainId} onClick={() => void setDecisionDomain(d.id, null)}>
+                                        None
                                       </Chip>
-                                    ))}
+                                      {domains.map((dom) => (
+                                        <Chip key={dom.id} active={domainId === dom.id} onClick={() => void setDecisionDomain(d.id, dom.id)}>
+                                          {dom.name}
+                                        </Chip>
+                                      ))}
+                                    </div>
+                                  </div>
+
+                                  <div className="space-y-2">
+                                    <div className="text-xs text-zinc-500">Groups</div>
+                                    {constellations.length === 0 ? (
+                                      <div className="text-sm text-zinc-600">No groups yet.</div>
+                                    ) : (
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        {constellations.map((c) => {
+                                          const active = memberIds.includes(c.id);
+                                          return (
+                                            <Chip key={c.id} active={active} onClick={() => void toggleConstellation(d.id, c.id)}>
+                                              {c.name}
+                                            </Chip>
+                                          );
+                                        })}
+                                      </div>
+                                    )}
                                   </div>
                                 </div>
+                              )}
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-2">
+                              <Chip onClick={() => setLabelsEditForId(d.id)} title="File this under an area or group">
+                                File under
+                              </Chip>
+                            </div>
+                          )}
 
-                                <div className="space-y-2">
-                                  <div className="text-xs text-zinc-500">Groups</div>
-                                  {constellations.length === 0 ? (
-                                    <div className="text-sm text-zinc-600">No groups yet.</div>
-                                  ) : (
-                                    <div className="flex flex-wrap items-center gap-2">
-                                      {constellations.map((c) => {
-                                        const active = memberIds.includes(c.id);
-                                        return (
-                                          <Chip key={c.id} active={active} onClick={() => void toggleConstellation(d.id, c.id)}>
-                                            {c.name}
-                                          </Chip>
-                                        );
-                                      })}
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
+                          <div className="rounded-xl border border-zinc-200 bg-white p-3 space-y-2">
+                            {userId ? (
+                              <AttachmentsBlock userId={userId} decisionId={d.id} title="Attachments" bucket="captures" />
+                            ) : (
+                              <div className="text-sm text-zinc-600">Attachments unavailable.</div>
                             )}
                           </div>
 
-                          <div className="rounded-xl border border-zinc-200 bg-white p-3 space-y-2">
-                           <AttachmentsBlock
-                              userId={userId}
-                              decisionId={d.id}
-                              title="Attachments"
-                              bucket="captures"
-                           />
-                        </div>
-
-                          <div className="rounded-xl border border-zinc-200 bg-white p-3 space-y-2">
-                            <div className="space-y-1">
-                              <div className="text-xs font-semibold text-zinc-700">Saved summaries</div>
-                              <div className="text-xs text-zinc-500">These appear after you choose to save a chat summary.</div>
-                            </div>
-
-                            {summaryStatus ? <div className="text-xs text-zinc-500">{summaryStatus}</div> : null}
-
-                            {!summaryStatus && summaries.length === 0 ? <div className="text-sm text-zinc-600">Nothing saved yet.</div> : null}
-
-                            {summaries.map((s) => (
-                              <div key={s.id} className="space-y-2">
-                                <div className="text-xs text-zinc-500">Saved {softWhen(s.created_at)}</div>
-                                <div className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-800">{s.summary_text}</div>
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <Chip onClick={() => useSummaryAsContext(d, s)} title="Append this into the draft context">
-                                    Use as context
-                                  </Chip>
-                                </div>
+                          {/* ✅ Hide Saved summaries until there actually are some */}
+                          {summaries.length > 0 ? (
+                            <div className="rounded-xl border border-zinc-200 bg-white p-3 space-y-2">
+                              <div className="space-y-1">
+                                <div className="text-xs font-semibold text-zinc-700">Saved summaries</div>
+                                <div className="text-xs text-zinc-500">These appear after you choose to save a chat summary.</div>
                               </div>
-                            ))}
-                          </div>
+
+                              {summaries.map((s) => (
+                                <div key={s.id} className="space-y-2">
+                                  <div className="text-xs text-zinc-500">Saved {softWhen(s.created_at)}</div>
+                                  <div className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-800">{s.summary_text}</div>
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <Chip onClick={() => useSummaryAsContext(d, s)} title="Append this into the draft context">
+                                      Use as context
+                                    </Chip>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : null}
 
                           <div className="space-y-2">
                             <div className="text-xs text-zinc-500">
