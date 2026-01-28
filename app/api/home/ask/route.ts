@@ -3,15 +3,20 @@ import { NextResponse } from "next/server";
 import OpenAI from "openai";
 import { createClient } from "@supabase/supabase-js";
 
+export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
-function monthBoundsLocal() {
-  const now = new Date();
-  const start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0);
-  const end = new Date(now.getFullYear(), now.getMonth() + 1, 1, 0, 0, 0);
-  return { start, end };
+type Action = "open_bills" | "open_money" | "open_decisions" | "open_review" | "none";
+
+type AskRequest = {
+  userId: string;
+  question: string;
+};
+
+function isAction(x: any): x is Action {
+  return ["open_bills", "open_money", "open_decisions", "open_review", "none"].includes(x);
 }
 
 // Very small “facts pack” — expand later
@@ -22,8 +27,6 @@ async function buildFactsPack(userId: string) {
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
 
-  // Bills: you likely have bills + next_due_at elsewhere.
-  // If you only have due_day_or_date, we can still return “active bills list” for now.
   const { data: bills } = await supabase
     .from("bills")
     .select("id,nickname,merchant_key,due_day_or_date,expected_amount,status,updated_at")
@@ -31,9 +34,6 @@ async function buildFactsPack(userId: string) {
     .eq("status", "active")
     .order("updated_at", { ascending: false })
     .limit(50);
-
-  // If you have bill_payments/receipts table, we can compute “due this month” properly.
-  // For now: return active bills + due_day_or_date and let the AI say what it can/can’t compute.
 
   return {
     now_iso: new Date().toISOString(),
@@ -54,44 +54,70 @@ Rules:
 - If the question requires data not present, say clearly what you can and can’t see.
 - Do not guess. Do not invent bills, dates, or amounts.
 - Be calm, concise, and helpful.
-- Always return:
-  1) a short direct answer
-  2) (optional) a tiny bullet list if it helps
-  3) one suggested next action from: open_bills | open_money | open_decisions | open_review | none
-`;
+- No urgency, no "you should", no auto-commit, no pretending anything was saved.
+Return JSON only that matches the provided schema.
+`.trim();
 
 export async function POST(req: Request) {
   try {
-    const body = await req.json();
-    const { userId, question } = body ?? {};
+    const body = (await req.json()) as Partial<AskRequest>;
+    const userId = (body.userId || "").trim();
+    const question = typeof body.question === "string" ? body.question.trim() : "";
 
-    if (!userId || !question || typeof question !== "string") {
+    if (!userId || !question) {
       return NextResponse.json({ error: "Missing userId/question" }, { status: 400 });
     }
 
     const facts = await buildFactsPack(userId);
 
-    const resp = await openai.chat.completions.create({
-      model: "gpt-4o-mini", // swap later if you want
-      temperature: 0.2,
-      messages: [
-        { role: "system", content: SYSTEM.trim() },
-        { role: "user", content: `QUESTION:\n${question}\n\nFACTS PACK:\n${JSON.stringify(facts, null, 2)}` },
+    // ✅ Responses API + Structured Outputs (reliable {answer, action})
+    const resp = await openai.responses.create({
+      model: "gpt-4o-mini",
+      input: [
+        { role: "system", content: SYSTEM },
+        {
+          role: "user",
+          content: `QUESTION:\n${question}\n\nFACTS PACK:\n${JSON.stringify(facts, null, 2)}`,
+        },
       ],
+      text: {
+        format: {
+          type: "json_schema",
+          name: "keystone_home_ask",
+          strict: true,
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              answer: { type: "string" },
+              action: {
+                type: "string",
+                enum: ["open_bills", "open_money", "open_decisions", "open_review", "none"],
+              },
+            },
+            required: ["answer", "action"],
+          },
+        },
+      },
     });
 
-    const text = resp.choices?.[0]?.message?.content?.trim() || "";
+    const raw = resp.output_text?.trim() || "";
 
-    // Simple action extraction (keep it dumb & reliable for V1)
-    // Expect the model to mention one of the allowed actions.
-    let action: "open_bills" | "open_money" | "open_decisions" | "open_review" | "none" = "none";
-    const lowered = text.toLowerCase();
-    if (lowered.includes("open_bills")) action = "open_bills";
-    else if (lowered.includes("open_money")) action = "open_money";
-    else if (lowered.includes("open_decisions")) action = "open_decisions";
-    else if (lowered.includes("open_review")) action = "open_review";
+    let parsed: { answer: string; action: Action };
+    try {
+      parsed = JSON.parse(raw) as { answer: string; action: Action };
+    } catch {
+      // Fail safe: never leak weird formatting into client UI
+      return NextResponse.json(
+        { answer: "I couldn’t format that safely. Try again.", action: "none" as Action },
+        { status: 502 }
+      );
+    }
 
-    return NextResponse.json({ answer: text, action });
+    const answer = (parsed.answer || "").trim().slice(0, 4000);
+    const action: Action = isAction(parsed.action) ? parsed.action : "none";
+
+    return NextResponse.json({ answer, action });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "Unknown error" }, { status: 500 });
   }
