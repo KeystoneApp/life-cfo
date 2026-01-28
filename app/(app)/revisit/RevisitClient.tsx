@@ -105,15 +105,6 @@ function isoFromDateInput(dateStr: string) {
   return new Date(ms).toISOString();
 }
 
-function toDateInputValue(iso: string | null) {
-  if (!iso) return "";
-  const d = new Date(iso);
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}`;
-}
-
 function sortByName<T extends { name: string; sort_order?: number | null }>(items: T[]): T[] {
   return [...items].sort((a, b) => {
     const ao = typeof a.sort_order === "number" ? a.sort_order : 9999;
@@ -477,6 +468,7 @@ export default function RevisitClient() {
       return;
     }
 
+    // close card after review (keeps Review page calm)
     setOpenId((cur) => (cur === d.id ? null : cur));
     setStatusLine("Reviewed.");
   };
@@ -832,21 +824,29 @@ export default function RevisitClient() {
   };
 
   return (
-    <Page
-      title="Revisit"
-      subtitle="Only what’s due, or due soon. Nothing else."
-      right={
-        <div className="flex items-center gap-2">
-          {lastUndo ? (
-            <Chip onClick={() => void undoLast()} title="Undo the last change">
-              {lastUndo.label}
-            </Chip>
-          ) : null}
-          <Chip onClick={() => router.push("/home")}>Back to Home</Chip>
-        </div>
-      }
-    >
+    <Page title="Revisit" subtitle="Only what’s due, or due soon. Nothing else." right={null}>
       <div className="mx-auto w-full max-w-[760px] space-y-6">
+        {/* Flow controls (consistent, top-of-page) */}
+        <div className="flex items-center justify-between gap-3">
+          <div className="text-xs text-zinc-500">Step 4 of 6</div>
+
+          <div className="flex items-center gap-2">
+            {lastUndo ? (
+              <Chip onClick={() => void undoLast()} title="Undo the last change">
+                {lastUndo.label}
+              </Chip>
+            ) : null}
+
+            <Chip onClick={() => router.push("/decisions")} title="Back: Decisions">
+              <span className="mr-1 opacity-70">‹</span> Back: Decisions
+            </Chip>
+
+            <Chip onClick={() => router.push("/chapters")} title="Next: Chapters">
+              Next: Chapters <span className="ml-1 opacity-70">›</span>
+            </Chip>
+          </div>
+        </div>
+
         <AssistedSearch scope="revisit" placeholder="Search decisions…" />
 
         <div className="space-y-4">
