@@ -130,7 +130,7 @@ export default function HomePage() {
   const unload = useHomeUnload({ userId });
   const orientation = useHomeOrientation({ userId });
 
-  // --- Bills -> Home Orientation (one calm sentence) ---
+  // --- Bills -> Home Notes (one calm sentence) ---
   useEffect(() => {
     if (!userId) {
       setBillsLine("");
@@ -206,20 +206,20 @@ export default function HomePage() {
     await unload.submit(raw);
   };
 
-  const onOrientationClick = () => {
+  const onNotesClick = () => {
     const href = orientation.item?.href;
     if (!href) return;
     router.push(href);
   };
 
-  const hasOrientation = Boolean(orientation.item?.text || billsLine);
-  const canOpenOrientation = Boolean(orientation.item?.href);
+  const hasNotes = Boolean(orientation.item?.text || billsLine);
+  const canOpenNotes = Boolean(orientation.item?.href);
 
   const showExamples = text.trim().length === 0;
 
   const subtitle = preferredName
-    ? `Good to see you, ${preferredName}. A quiet place to unload what’s on your mind — then Keystone helps you orient.`
-    : "A quiet place to unload what’s on your mind — then Keystone helps you orient.";
+    ? `Good to see you, ${preferredName}.`
+    : undefined;
 
   return (
     <Page title="Home" subtitle={subtitle} right={<div className="flex items-center gap-2"></div>}>
@@ -242,10 +242,13 @@ export default function HomePage() {
             disabled={authStatus !== "signed_in"}
           />
 
+          {/* helper line (locked) */}
+          <div className="text-xs text-zinc-600">Unload it here. Ask if you want help.</div>
+
           {showExamples ? (
             <div className="text-xs text-zinc-500 space-y-1">
               <div>• “Can we afford this right now?”</div>
-              <div>• “What should we pay first this week?”</div>
+              <div>• “What are my total bills due this month?”</div>
               <div>• “I feel unsure about a money decision.”</div>
             </div>
           ) : null}
@@ -263,13 +266,13 @@ export default function HomePage() {
           {authStatus === "signed_out" ? <div className="text-sm text-zinc-600">Sign in to use Home.</div> : null}
         </div>
 
-        {/* Orientation (separate; never competes with input) */}
-        {hasOrientation ? (
+        {/* Notes from Keystone (separate; never competes with input) */}
+        {hasNotes ? (
           <Card className="border-zinc-200 bg-white">
             <CardContent>
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">
-                  <div className="text-xs font-semibold text-zinc-600">Orientation</div>
+                  <div className="text-xs font-medium text-zinc-600">Notes from Keystone</div>
 
                   {orientation.item?.text ? (
                     <div className="mt-2 text-[15px] leading-relaxed text-zinc-800">{orientation.item?.text}</div>
@@ -278,16 +281,16 @@ export default function HomePage() {
                   {billsLine ? <div className="mt-2 text-[15px] leading-relaxed text-zinc-800">{billsLine}</div> : null}
                 </div>
 
-                {canOpenOrientation ? (
+                {canOpenNotes ? (
                   <div className="shrink-0">
-                    <Chip onClick={onOrientationClick} title="Open">
+                    <Chip onClick={onNotesClick} title="Open">
                       Open
                     </Chip>
                   </div>
                 ) : null}
               </div>
 
-              {!canOpenOrientation ? <div className="mt-2 text-xs text-zinc-500">No action needed.</div> : null}
+              {!canOpenNotes ? <div className="mt-2 text-xs text-zinc-500">No action needed.</div> : null}
             </CardContent>
           </Card>
         ) : null}
