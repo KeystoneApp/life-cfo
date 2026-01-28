@@ -67,7 +67,8 @@ function Menu({
         <div
           role="menu"
           className={[
-            "absolute z-50 mt-2 min-w-[160px] overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm",
+            // ✅ hug contents, no forced width
+            "absolute z-50 mt-2 w-max max-w-[240px] overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm",
             align === "right" ? "right-0" : "left-0",
           ].join(" ")}
         >
@@ -83,7 +84,10 @@ function Menu({
                     onNavigate?.();
                   }}
                 >
-                  <div className="rounded-lg px-2 py-1 text-sm leading-tight text-zinc-800 hover:bg-zinc-50">{it.label}</div>
+                  {/* ✅ prevent wrapping-induced wide boxes + keep tight */}
+                  <div className="whitespace-nowrap rounded-lg px-2 py-1 text-sm leading-tight text-zinc-800 hover:bg-zinc-50">
+                    {it.label}
+                  </div>
                 </Link>
               ))}
             </div>
@@ -188,30 +192,27 @@ function AccountMenu({ onSignOut }: { onSignOut: () => void }) {
       </Chip>
 
       {open ? (
-        <div
-          role="menu"
-          className="absolute right-0 z-50 mt-2 min-w-[160px] overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm"
-        >
+        <div role="menu" className="absolute right-0 z-50 mt-2 w-max max-w-[260px] overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm">
           <div className="p-1">
             <div className="space-y-0.5">
               <Link href="/settings" className="block no-underline" onClick={() => setOpen(false)}>
-                <div className="rounded-lg px-2 py-1 text-sm leading-tight text-zinc-800 hover:bg-zinc-50">Settings</div>
+                <div className="whitespace-nowrap rounded-lg px-2 py-1 text-sm leading-tight text-zinc-800 hover:bg-zinc-50">Settings</div>
               </Link>
 
               <Link href="/how-keystone-works" className="block no-underline" onClick={() => setOpen(false)}>
-                <div className="rounded-lg px-2 py-1 text-sm leading-tight text-zinc-800 hover:bg-zinc-50">How it works</div>
+                <div className="whitespace-nowrap rounded-lg px-2 py-1 text-sm leading-tight text-zinc-800 hover:bg-zinc-50">How it works</div>
               </Link>
 
               <Link href="/feedback" className="block no-underline" onClick={() => setOpen(false)}>
-                <div className="rounded-lg px-2 py-1 text-sm leading-tight text-zinc-800 hover:bg-zinc-50">Feedback</div>
+                <div className="whitespace-nowrap rounded-lg px-2 py-1 text-sm leading-tight text-zinc-800 hover:bg-zinc-50">Feedback</div>
               </Link>
 
               <Link href="/demo" className="block no-underline" onClick={() => setOpen(false)}>
-                <div className="rounded-lg px-2 py-1 text-sm leading-tight text-zinc-800 hover:bg-zinc-50">Demo</div>
+                <div className="whitespace-nowrap rounded-lg px-2 py-1 text-sm leading-tight text-zinc-800 hover:bg-zinc-50">Demo</div>
               </Link>
 
               <Link href="/fine-print" className="block no-underline" onClick={() => setOpen(false)}>
-                <div className="rounded-lg px-2 py-1 text-sm leading-tight text-zinc-800 hover:bg-zinc-50">Fine print</div>
+                <div className="whitespace-nowrap rounded-lg px-2 py-1 text-sm leading-tight text-zinc-800 hover:bg-zinc-50">Fine print</div>
               </Link>
 
               <div className="my-1 h-px bg-zinc-100" />
@@ -222,7 +223,7 @@ function AccountMenu({ onSignOut }: { onSignOut: () => void }) {
                   setOpen(false);
                   onSignOut();
                 }}
-                className="w-full rounded-lg px-2 py-1 text-left text-sm leading-tight text-zinc-800 hover:bg-zinc-50"
+                className="w-full whitespace-nowrap rounded-lg px-2 py-1 text-left text-sm leading-tight text-zinc-800 hover:bg-zinc-50"
               >
                 Sign out
               </button>
