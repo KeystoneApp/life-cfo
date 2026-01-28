@@ -17,23 +17,79 @@ function firstNameOf(full: string) {
   return s.split(/\s+/)[0] || "";
 }
 
-function monthBoundsISO() {
-  const now = new Date();
-  const start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
-  const end = new Date(now.getFullYear(), now.getMonth() + 1, 1, 0, 0, 0, 0);
-  return { startIso: start.toISOString(), endIso: end.toISOString() };
-}
-
-function softDate(iso: string | null | undefined) {
-  if (!iso) return "";
+function safeMs(iso: string | null | undefined) {
+  if (!iso) return null;
   const ms = Date.parse(iso);
-  if (Number.isNaN(ms)) return "";
-  return new Date(ms).toLocaleDateString();
+  return Number.isNaN(ms) ? null : ms;
 }
 
-function dollarsFromCents(cents: any) {
-  if (typeof cents !== "number" || !Number.isFinite(cents)) return "";
-  return (cents / 100).toFixed(2);
+function monthKey(d: Date) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function money(n: number | null | undefined) {
+  if (typeof n !== "number" || !Number.isFinite(n)) return null;
+  // expected_amount is numeric (likely dollars)
+  return new Intl.NumberFormat(undefined, { style: "currency", currency: "AUD" }).format(n);
+}
+
+type BillRow = {
+  id: string;
+  user_id: string;
+  merchant_key: string;
+  nickname: string | null;
+  due_day_or_date: string; // text
+  expected_amount: number | null; // numeric
+  status: string | null; // 'active' default
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+type ParsedDue =
+  | { kind: "date"; date: Date; label: string }
+  | { kind: "day"; day: number; label: string }
+  | { kind: "unknown"; label: string };
+
+function parseDue(due_day_or_date: string): ParsedDue {
+  const raw = (due_day_or_date || "").trim();
+  if (!raw) return { kind: "unknown", label: "Due date not set" };
+
+  // ISO date e.g. 2026-01-15
+  const isoMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (isoMatch) {
+    const ms = Date.parse(`${raw}T12:00:00`);
+    if (!Number.isNaN(ms)) {
+      const dt = new Date(ms);
+      return { kind: "date", date: dt, label: dt.toLocaleDateString() };
+    }
+  }
+
+  // Day-of-month: allow "15", "15th", "15th of month", etc.
+  const dayMatch = raw.match(/(\d{1,2})/);
+  if (dayMatch) {
+    const day = Number(dayMatch[1]);
+    if (day >= 1 && day <= 31) {
+      return { kind: "day", day, label: `Day ${day}` };
+    }
+  }
+
+  // Fallback: show raw
+  return { kind: "unknown", label: raw };
+}
+
+function isBillsQuestion(q: string) {
+  const s = q.trim().toLowerCase();
+  if (!s) return false;
+
+  const hasBillsWord = s.includes("bill") || s.includes("bills");
+  const hasMonthCue =
+    s.includes("this month") ||
+    s.includes("month") ||
+    s.includes("due") ||
+    s.includes("upcoming") ||
+    s.includes("coming up");
+
+  return hasBillsWord && hasMonthCue;
 }
 
 export default function HomePage() {
@@ -46,7 +102,7 @@ export default function HomePage() {
   const [text, setText] = useState("");
   const [affirmation, setAffirmation] = useState<"Saved." | "Held." | null>(null);
 
-  // Inline “answer” (deterministic) for Home questions
+  // Inline “answer” for Home questions
   const [answerStatus, setAnswerStatus] = useState<string>("");
   const [answerText, setAnswerText] = useState<string>("");
   const [lastQuestion, setLastQuestion] = useState<string>("");
@@ -132,13 +188,79 @@ export default function HomePage() {
     router.push(href);
   };
 
-  const isBillsQuestion = (q: string) => {
-    const s = q.trim().toLowerCase();
-    if (!s) return false;
-    // intent: bills + month/due
-    const hasBillsWord = s.includes("bill") || s.includes("bills");
-    const hasMonthCue = s.includes("this month") || s.includes("month") || s.includes("due");
-    return hasBillsWord && hasMonthCue;
+  const answerBillsThisMonth = async (uid: string) => {
+    setAnswerText("");
+    setAnswerStatus("Checking bills…");
+
+    const { data, error } = await supabase
+      .from("bills")
+      .select("id,user_id,merchant_key,nickname,due_day_or_date,expected_amount,status,created_at,updated_at")
+      .eq("user_id", uid)
+      .eq("status", "active");
+
+    if (error) {
+      setAnswerStatus("");
+      setAnswerText("I couldn’t load bills right now.");
+      return;
+    }
+
+    const rows = (data ?? []) as BillRow[];
+    if (rows.length === 0) {
+      setAnswerStatus("");
+      setAnswerText("I can’t see any active bills yet.");
+      return;
+    }
+
+    const now = new Date();
+    const thisMonth = monthKey(now);
+    const year = now.getFullYear();
+    const month = now.getMonth(); // 0-based
+
+    const enriched = rows
+      .map((b) => {
+        const parsed = parseDue(b.due_day_or_date);
+        let sortKey = 9999;
+        let dueLabel = parsed.label;
+
+        if (parsed.kind === "date") {
+          const mk = monthKey(parsed.date);
+          // If it's a specific date NOT in this month, we still list it but push it down.
+          sortKey = mk === thisMonth ? parsed.date.getDate() : 200 + parsed.date.getDate();
+          dueLabel = parsed.date.toLocaleDateString();
+        } else if (parsed.kind === "day") {
+          sortKey = parsed.day;
+          // show as a real date within this month
+          const dt = new Date(year, month, parsed.day, 12, 0, 0, 0);
+          dueLabel = dt.toLocaleDateString();
+        }
+
+        return {
+          bill: b,
+          parsed,
+          sortKey,
+          dueLabel,
+        };
+      })
+      .sort((a, b) => a.sortKey - b.sortKey);
+
+    // Build output lines
+    const lines = enriched.map(({ bill, dueLabel }) => {
+      const name = bill.nickname?.trim() ? bill.nickname.trim() : bill.merchant_key;
+      const amt = bill.expected_amount != null ? money(Number(bill.expected_amount)) : null;
+      return `• ${name} — ${dueLabel}${amt ? ` — ${amt}` : ""}`;
+    });
+
+    // Totals (optional)
+    const total = enriched.reduce((sum, x) => {
+      const n = x.bill.expected_amount;
+      if (typeof n !== "number" || !Number.isFinite(n)) return sum;
+      return sum + n;
+    }, 0);
+
+    setAnswerStatus("");
+    setAnswerText(
+      `${lines.join("\n")}\n\nEstimated total: ${money(total) ?? "—"}`
+    );
   };
 
   const answerHomeQuestion = async (uid: string, qRaw: string) => {
@@ -147,92 +269,11 @@ export default function HomePage() {
     setAnswerText("");
     setAnswerStatus("Checking…");
 
-    // Bills due this month (deterministic)
     if (isBillsQuestion(q)) {
-      const { startIso, endIso } = monthBoundsISO();
-
-      // We don’t know the exact bills schema, so we try a couple of likely shapes safely.
-      // Attempt A: next_due_at exists
-      try {
-        const resA = await supabase
-          .from("bills")
-          .select("id,name,amount_cents,currency,next_due_at")
-          .eq("user_id", uid)
-          .gte("next_due_at", startIso)
-          .lt("next_due_at", endIso)
-          .order("next_due_at", { ascending: true });
-
-        if (!resA.error) {
-          const rows = (resA.data ?? []) as any[];
-
-          if (rows.length === 0) {
-            setAnswerStatus("");
-            setAnswerText("I can’t see any bills due this month.");
-            return;
-          }
-
-          const lines = rows.map((b) => {
-            const when = softDate(b.next_due_at);
-            const amt = dollarsFromCents(b.amount_cents);
-            const cur = typeof b.currency === "string" ? b.currency : "";
-            const amtPart = amt ? ` — ${amt}${cur ? ` ${cur}` : ""}` : "";
-            return `• ${b.name ?? "Bill"}${when ? ` — ${when}` : ""}${amtPart}`;
-          });
-
-          setAnswerStatus("");
-          setAnswerText(lines.join("\n"));
-          return;
-        }
-      } catch {
-        // fall through
-      }
-
-      // Attempt B: due_date exists (date)
-      try {
-        // Convert month bounds to YYYY-MM-DD for date comparisons if needed
-        const startDate = new Date(startIso).toISOString().slice(0, 10);
-        const endDate = new Date(endIso).toISOString().slice(0, 10);
-
-        const resB = await supabase
-          .from("bills")
-          .select("id,name,amount_cents,currency,due_date")
-          .eq("user_id", uid)
-          .gte("due_date", startDate)
-          .lt("due_date", endDate)
-          .order("due_date", { ascending: true });
-
-        if (!resB.error) {
-          const rows = (resB.data ?? []) as any[];
-
-          if (rows.length === 0) {
-            setAnswerStatus("");
-            setAnswerText("I can’t see any bills due this month.");
-            return;
-          }
-
-          const lines = rows.map((b) => {
-            const when = b.due_date ? String(b.due_date) : "";
-            const amt = dollarsFromCents(b.amount_cents);
-            const cur = typeof b.currency === "string" ? b.currency : "";
-            const amtPart = amt ? ` — ${amt}${cur ? ` ${cur}` : ""}` : "";
-            return `• ${b.name ?? "Bill"}${when ? ` — ${when}` : ""}${amtPart}`;
-          });
-
-          setAnswerStatus("");
-          setAnswerText(lines.join("\n"));
-          return;
-        }
-      } catch {
-        // fall through
-      }
-
-      // Fallback: we can’t reliably compute “this month” from schema
-      setAnswerStatus("");
-      setAnswerText("I can’t answer bills-by-month yet from Home. For now, open Bills to see what’s due.");
+      await answerBillsThisMonth(uid);
       return;
     }
 
-    // Unknown question type (for now): hold it, don’t pretend.
     setAnswerStatus("");
     setAnswerText("I can’t answer that yet here — but it’s been held.");
   };
@@ -246,7 +287,6 @@ export default function HomePage() {
     setAnswerText("");
     setLastQuestion("");
 
-    // Snapshot before we clear
     const msg = raw;
 
     setText("");
@@ -257,7 +297,6 @@ export default function HomePage() {
       return;
     }
 
-    // If it looks like a question, answer inline (deterministic, V1)
     const looksLikeQuestion = msg.endsWith("?") || isBillsQuestion(msg);
 
     if (looksLikeQuestion) {
@@ -266,7 +305,6 @@ export default function HomePage() {
       return;
     }
 
-    // Otherwise: unload/capture
     flashAffirmation("Saved.");
     await unload.submit(msg);
   };
@@ -326,7 +364,7 @@ export default function HomePage() {
           {showExamples ? (
             <div className="text-xs text-zinc-500 space-y-1">
               <div>• “Can we afford this right now?”</div>
-              <div>• “What are my total bills due this month?”</div>
+              <div>• “What bills do I have this month?”</div>
               <div>• “I feel unsure about a money decision.”</div>
             </div>
           ) : null}
@@ -339,15 +377,16 @@ export default function HomePage() {
             <div className="h-5" aria-hidden="true" />
           )}
 
-          {/* Inline answer card (deterministic V1 questions) */}
+          {/* Inline answer card (bills questions) */}
           {answerStatus || answerText ? (
             <Card className="border-zinc-200 bg-white">
               <CardContent>
                 <div className="space-y-2">
-                  {lastQuestion ? <div className="text-xs text-zinc-500">Answer</div> : null}
+                  <div className="text-xs font-medium text-zinc-600">Answer</div>
                   {answerStatus ? <div className="text-xs text-zinc-500">{answerStatus}</div> : null}
                   {answerText ? <div className="whitespace-pre-wrap text-[15px] leading-relaxed text-zinc-800">{answerText}</div> : null}
-                  {answerText && isBillsQuestion(lastQuestion) ? (
+
+                  {lastQuestion && isBillsQuestion(lastQuestion) ? (
                     <div className="flex items-center gap-2 pt-1">
                       <Chip onClick={() => router.push("/bills")} title="Open Bills">
                         Open Bills
