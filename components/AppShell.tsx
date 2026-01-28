@@ -123,6 +123,7 @@ export function AppShell({ children }: AppShellProps) {
   const moneyItems: NavItem[] = [
     { href: "/accounts", label: "Accounts" },
     { href: "/net-worth", label: "Net Worth" },
+    { href: "/liabilities", label: "Liabilities" },
     { href: "/bills", label: "Bills" },
     { href: "/income", label: "Income" },
     { href: "/investments", label: "Investments" },
