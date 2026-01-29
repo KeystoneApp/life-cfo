@@ -85,6 +85,10 @@ function tryParseCaptureBody(raw: string | null): { text: string; attachments: A
   return { text: trimmed, attachments: [] };
 }
 
+function normalizeForCompare(s: string) {
+  return (s || "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
 export default function CapturePage() {
   const router = useRouter();
 
@@ -294,11 +298,7 @@ export default function CapturePage() {
         // 3) Persist JSON body with text + attachments (even if some failed)
         const bodyJson = JSON.stringify({ text: textSnapshot, attachments: uploaded });
 
-        const { error: updErr } = await supabase
-          .from("decision_inbox")
-          .update({ body: bodyJson })
-          .eq("id", inboxId)
-          .eq("user_id", userId);
+        const { error: updErr } = await supabase.from("decision_inbox").update({ body: bodyJson }).eq("id", inboxId).eq("user_id", userId);
 
         if (updErr) {
           flashAffirmation("Saved (details couldn’t update).", 2200);
@@ -342,10 +342,7 @@ export default function CapturePage() {
 
           <div className="flex items-center gap-2">
             {/* No back button on first step */}
-            <Chip
-              onClick={() => router.push("/framing")}
-              title="Next: Framing"
-            >
+            <Chip onClick={() => router.push("/framing")} title="Next: Framing">
               Next: Framing <span className="ml-1 opacity-70">›</span>
             </Chip>
           </div>
@@ -425,20 +422,13 @@ export default function CapturePage() {
               }}
             />
 
-            {files.length > 0 ? (
-              <div className="text-sm text-zinc-600">{files.length} attached</div>
-            ) : (
-              <div className="text-sm text-zinc-500">Optional. You can also drag & drop here.</div>
-            )}
+            {files.length > 0 ? <div className="text-sm text-zinc-600">{files.length} attached</div> : <div className="text-sm text-zinc-500">Optional. You can also drag & drop here.</div>}
           </div>
 
           {files.length > 0 ? (
             <div className="space-y-2">
               {files.map((f, idx) => (
-                <div
-                  key={`${f.name}-${f.size}-${f.lastModified}-${idx}`}
-                  className="flex items-center justify-between gap-3 rounded-2xl border border-zinc-200 bg-white px-4 py-2"
-                >
+                <div key={`${f.name}-${f.size}-${f.lastModified}-${idx}`} className="flex items-center justify-between gap-3 rounded-2xl border border-zinc-200 bg-white px-4 py-2">
                   <div className="min-w-0">
                     <div className="truncate text-sm text-zinc-900">{f.name}</div>
                     <div className="text-xs text-zinc-500">{softKB(f.size)}</div>
@@ -463,10 +453,7 @@ export default function CapturePage() {
           <div className="text-xs text-zinc-500">Enter saves • Shift+Enter adds a new line</div>
 
           <div className="flex items-center gap-2">
-            <Chip
-              onClick={() => void submit()}
-              title={!canSubmit ? "Add text or a file" : isSubmitting ? "Working…" : "Save capture"}
-            >
+            <Chip onClick={() => void submit()} title={!canSubmit ? "Add text or a file" : isSubmitting ? "Working…" : "Save capture"}>
               {isSubmitting ? "Saving…" : "Save"}
             </Chip>
           </div>
@@ -505,11 +492,24 @@ export default function CapturePage() {
               <div className="mt-3 grid gap-2">
                 {recent.map((r) => {
                   const isOpen = openId === r.id;
+
                   const p = tryParseCaptureBody(r.body);
                   const displayText = (p.text || "").trim();
+
+                  // Title is the primary line. Snippet only shows if it adds NEW info.
                   const title = (r.title || safeTitleFromText(displayText)).trim();
                   const meta = r.created_at ? softDate(r.created_at) : "";
                   const hasAtts = (p.attachments?.length ?? 0) > 0;
+
+                  const titleKey = normalizeForCompare(title);
+                  const snippet = snippetFromText(displayText, 140);
+
+                  // Avoid "duplicate line" look (snippet repeating title)
+                  const snippetKey = normalizeForCompare(snippet);
+                  const showSnippet = !!snippet && snippetKey !== titleKey;
+
+                  // If no text, but attachments exist, show a tiny hint instead of repeated title
+                  const attachmentHint = hasAtts && !displayText ? `${p.attachments.length} attachment${p.attachments.length === 1 ? "" : "s"}` : "";
 
                   return (
                     <div key={r.id} className="rounded-2xl border border-zinc-200 bg-white">
@@ -522,14 +522,17 @@ export default function CapturePage() {
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0 flex-1">
                             <div className="truncate text-sm font-semibold text-zinc-900">{title}</div>
+
                             <div className="mt-1 text-xs text-zinc-500">
                               {meta ? meta : "Open capture"}
                               {hasAtts ? " • Attachments" : ""}
                             </div>
-                            {displayText ? (
-                              <div className="mt-2 text-sm text-zinc-700">{snippetFromText(displayText, 140)}</div>
-                            ) : null}
+
+                            {showSnippet ? <div className="mt-2 text-sm text-zinc-700">{snippet}</div> : null}
+
+                            {!showSnippet && attachmentHint ? <div className="mt-2 text-sm text-zinc-700">{attachmentHint}</div> : null}
                           </div>
+
                           <div className="flex items-center gap-2">
                             <Chip>{isOpen ? "Hide" : "Open"}</Chip>
                           </div>
