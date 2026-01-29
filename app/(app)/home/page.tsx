@@ -439,11 +439,7 @@ export default function HomePage() {
     onClick?: () => void;
     title?: string;
   }) => (
-    <Chip
-      onClick={onClick}
-      title={title}
-      className="text-xs px-2 py-1 border-zinc-200 bg-transparent text-zinc-700 hover:bg-zinc-50"
-    >
+    <Chip onClick={onClick} title={title} className="text-xs px-2 py-1 border-zinc-200 bg-transparent text-zinc-700 hover:bg-zinc-50">
       {children}
     </Chip>
   );
@@ -454,8 +450,8 @@ export default function HomePage() {
         <Card className="border-zinc-200 bg-white">
           <CardContent>
             <div className="space-y-3">
-              {/* ✅ Title (matches “Notes from Keystone” weight) */}
-              <div className="text-sm font-medium text-zinc-700">Thinking something through? Start here.</div>
+              {/* ✅ Section title */}
+              <div className="text-sm font-semibold text-zinc-900">Thinking something through? Start here.</div>
 
               <div className="relative">
                 <textarea
@@ -500,11 +496,11 @@ export default function HomePage() {
                 <div className="text-xs text-zinc-600">Unload it here. Ask if you want help.</div>
 
                 {affirmation ? (
-                  <div className="text-sm text-zinc-600" aria-live="polite">
+                  <div className="text-xs text-zinc-500" aria-live="polite">
                     {affirmation}
                   </div>
                 ) : (
-                  <div className="h-5" aria-hidden="true" />
+                  <div className="h-4" aria-hidden="true" />
                 )}
               </div>
 
@@ -515,7 +511,7 @@ export default function HomePage() {
                     <Chip
                       onClick={() => setShowExamplesPanel((v) => !v)}
                       title="Examples"
-                      className="border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50"
+                      className="border-zinc-200 bg-white text-xs text-zinc-700 hover:bg-zinc-50"
                     >
                       {showExamplesPanel ? "Hide examples" : "Examples"}
                     </Chip>
@@ -524,7 +520,7 @@ export default function HomePage() {
                   {showExamplesPanel ? (
                     <div className="grid gap-4 rounded-2xl border border-zinc-200 bg-white p-3">
                       <div className="grid gap-2">
-                        <div className="text-xs font-semibold text-zinc-700">Money</div>
+                        <div className="text-xs font-semibold text-zinc-900">Money</div>
                         <div className="grid gap-2 sm:grid-cols-2">
                           <ExampleButton text="What bills are due this month?" />
                           <ExampleButton text="What bills do we have in the next 30 days?" />
@@ -533,7 +529,7 @@ export default function HomePage() {
                       </div>
 
                       <div className="grid gap-2">
-                        <div className="text-xs font-semibold text-zinc-700">Decisions</div>
+                        <div className="text-xs font-semibold text-zinc-900">Decisions</div>
                         <div className="grid gap-2 sm:grid-cols-2">
                           <ExampleButton text="Do I have any open decisions?" />
                           <ExampleButton text="What am I still deciding on?" />
@@ -541,7 +537,7 @@ export default function HomePage() {
                       </div>
 
                       <div className="grid gap-2">
-                        <div className="text-xs font-semibold text-zinc-700">Review & check-ins</div>
+                        <div className="text-xs font-semibold text-zinc-900">Review & check-ins</div>
                         <div className="grid gap-2 sm:grid-cols-2">
                           <ExampleButton text="What do I need to review?" />
                           <ExampleButton text="What’s coming up for review?" />
@@ -550,7 +546,7 @@ export default function HomePage() {
                       </div>
 
                       <div className="grid gap-2">
-                        <div className="text-xs font-semibold text-zinc-700">Family</div>
+                        <div className="text-xs font-semibold text-zinc-900">Family</div>
                         <div className="grid gap-2 sm:grid-cols-2">
                           <ExampleButton text="Who is in our family?" />
                           <ExampleButton text="Do we have any pets?" />
@@ -561,7 +557,7 @@ export default function HomePage() {
                 </div>
               ) : null}
 
-              {authStatus === "signed_out" ? <div className="text-sm text-zinc-600">Sign in to use Home.</div> : null}
+              {authStatus === "signed_out" ? <div className="text-[15px] leading-relaxed text-zinc-800">Sign in to use Home.</div> : null}
             </div>
           </CardContent>
         </Card>
@@ -571,7 +567,7 @@ export default function HomePage() {
             <CardContent>
               <div className="space-y-2">
                 <div className="space-y-1">
-                  <div className="text-xs font-medium text-zinc-600">Answer</div>
+                  <div className="text-sm font-semibold text-zinc-900">Answer</div>
 
                   {ask.status === "done" || ask.status === "error" ? (
                     <div className="text-xs text-zinc-500">
@@ -582,27 +578,27 @@ export default function HomePage() {
                 </div>
 
                 {ask.status === "loading" ? (
-                  <div className="text-sm text-zinc-700">Thinking…</div>
+                  <div className="text-[15px] leading-relaxed text-zinc-800">Thinking…</div>
                 ) : ask.status === "error" ? (
-                  <div className="text-sm text-zinc-700">{ask.message}</div>
+                  <div className="text-[15px] leading-relaxed text-zinc-800">{ask.message}</div>
                 ) : (
                   <>
                     <div className="whitespace-pre-wrap text-[15px] leading-relaxed text-zinc-800">{ask.answer}</div>
 
                     <div className="flex flex-wrap items-center gap-2 pt-1">
                       {ask.actionHref && ask.suggestedNext !== "create_framing" ? (
-                        <Chip onClick={() => router.push(ask.actionHref!)} title="Open">
+                        <Chip onClick={() => router.push(ask.actionHref!)} title="Open" className="text-xs">
                           Open
                         </Chip>
                       ) : null}
 
                       {canCreateFraming ? (
-                        <Chip onClick={() => void onCreateFraming()} title="Create a Framing item">
+                        <Chip onClick={() => void onCreateFraming()} title="Create a Framing item" className="text-xs">
                           {creatingFraming ? "Creating…" : "Create Framing"}
                         </Chip>
                       ) : null}
 
-                      <Chip onClick={() => setAsk({ status: "idle" })} title="Dismiss">
+                      <Chip onClick={() => setAsk({ status: "idle" })} title="Dismiss" className="text-xs">
                         Done
                       </Chip>
                     </div>
@@ -619,7 +615,7 @@ export default function HomePage() {
           <Card className="border-zinc-200 bg-white">
             <CardContent>
               <div className="flex items-center justify-between gap-3">
-                <div className="text-sm font-medium text-zinc-700">Notes from Keystone</div>
+                <div className="text-sm font-semibold text-zinc-900">Notes from Keystone</div>
                 {orientation.loading ? (
                   <div className="text-xs text-zinc-500">Updating…</div>
                 ) : (
