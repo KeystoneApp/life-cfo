@@ -104,6 +104,8 @@ export default function CapturePage() {
   const [recent, setRecent] = useState<InboxItem[]>([]);
   const [openId, setOpenId] = useState<string | null>(null);
 
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
   const affirmationTimerRef = useRef<number | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -202,6 +204,41 @@ export default function CapturePage() {
   };
 
   const canSubmit = !!userId && (!!text.trim() || files.length > 0);
+
+  const goToFraming = (inboxId: string) => {
+    router.push(`/framing?open=${encodeURIComponent(inboxId)}`);
+  };
+
+  const deleteCapture = async (item: InboxItem) => {
+    if (!userId) return;
+    if (deletingId) return;
+
+    setDeletingId(item.id);
+    try {
+      // Remove attachments from Storage if we can see them
+      const parsed = tryParseCaptureBody(item.body);
+      const paths = (parsed.attachments || []).map((a) => a.path).filter(Boolean);
+
+      if (paths.length > 0) {
+        // best-effort cleanup
+        await supabase.storage.from("captures").remove(paths);
+      }
+
+      const { error } = await supabase.from("decision_inbox").delete().eq("id", item.id).eq("user_id", userId);
+      if (error) {
+        flashAffirmation("Couldn’t delete that.", 1800);
+        return;
+      }
+
+      // close details if it was open
+      if (openId === item.id) setOpenId(null);
+
+      await loadRecent(userId);
+      flashAffirmation("Deleted.", 1200);
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   /**
    * Capture submit contract:
@@ -302,24 +339,31 @@ export default function CapturePage() {
 
         if (updErr) {
           flashAffirmation("Saved (details couldn’t update).", 2200);
+          // still send to framing (row exists)
+          goToFraming(inboxId);
           return;
         }
 
         if (uploaded.length === 0 && filesSnapshot.length > 0) {
           flashAffirmation("Saved (attachments didn’t upload).", 2400);
+          goToFraming(inboxId);
           return;
         }
 
         if (uploadFailures > 0) {
           flashAffirmation("Saved (some attachments didn’t upload).", 2400);
+          goToFraming(inboxId);
           return;
         }
       }
 
-      flashAffirmation("Saved.", 1300);
+      flashAffirmation("Sent to Framing.", 1000);
 
-      // refresh the visible “top 5”
+      // refresh the visible “top 5” (so it stays accurate when you come back)
       await loadRecent(userId);
+
+      // ✅ Always send to Framing
+      goToFraming(inboxId);
     } catch {
       flashAffirmation("Held.", 1800);
     } finally {
@@ -491,74 +535,73 @@ export default function CapturePage() {
             ) : (
               <div className="mt-3 grid gap-2">
                 {recent.map((r) => {
-                  const isOpen = openId === r.id;
-
                   const p = tryParseCaptureBody(r.body);
                   const displayText = (p.text || "").trim();
-
-                  // Title is the primary line. Snippet only shows if it adds NEW info.
                   const title = (r.title || safeTitleFromText(displayText)).trim();
                   const meta = r.created_at ? softDate(r.created_at) : "";
-                  const hasAtts = (p.attachments?.length ?? 0) > 0;
+                  const attCount = p.attachments?.length ?? 0;
+                  const hasAtts = attCount > 0;
 
                   const titleKey = normalizeForCompare(title);
                   const snippet = snippetFromText(displayText, 140);
-
-                  // Avoid "duplicate line" look (snippet repeating title)
                   const snippetKey = normalizeForCompare(snippet);
-                  const showSnippet = !!snippet && snippetKey !== titleKey;
+                  const snippetAddsInfo = !!snippet && snippetKey !== titleKey;
 
-                  // If no text, but attachments exist, show a tiny hint instead of repeated title
-                  const attachmentHint =
-                    hasAtts && !displayText ? `${p.attachments.length} attachment${p.attachments.length === 1 ? "" : "s"}` : "";
+                  // "Details" only if there is extra info worth expanding
+                  const hasDetails = snippetAddsInfo || hasAtts || (displayText && displayText.length > 160);
+
+                  const isOpen = openId === r.id;
 
                   return (
                     <div key={r.id} className="rounded-2xl border border-zinc-200 bg-white">
-                      <button
-                        type="button"
-                        onClick={() => setOpenId(isOpen ? null : r.id)}
-                        className="w-full px-4 py-3 text-left"
-                        aria-expanded={isOpen}
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0 flex-1">
-                            <div className="truncate text-sm font-semibold text-zinc-900">{title}</div>
-
-                            <div className="mt-1 text-xs text-zinc-500">
-                              {meta ? meta : "Open capture"}
-                              {hasAtts ? ` • ${p.attachments.length} attachment${p.attachments.length === 1 ? "" : "s"}` : ""}
-                            </div>
-
-                            {showSnippet ? <div className="mt-2 text-sm text-zinc-700">{snippet}</div> : null}
-
-                            {!showSnippet && attachmentHint ? <div className="mt-2 text-sm text-zinc-700">{attachmentHint}</div> : null}
-                          </div>
-
-                          {/* No Open button here — Open lives in the expanded view */}
-                          <div className="flex items-center gap-2">
-                            <Chip>{isOpen ? "Hide" : "Details"}</Chip>
+                      {/* Single-line row */}
+                      <div className="flex items-center justify-between gap-3 px-4 py-3">
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-sm font-semibold text-zinc-900">{title}</div>
+                          <div className="mt-1 text-xs text-zinc-500">
+                            {meta ? meta : "Open capture"}
+                            {hasAtts ? ` • ${attCount} attachment${attCount === 1 ? "" : "s"}` : ""}
                           </div>
                         </div>
-                      </button>
 
-                      {isOpen && openItem?.id === r.id ? (
+                        <div className="flex shrink-0 flex-wrap items-center gap-2">
+                          {/* Always visible */}
+                          <Chip onClick={() => goToFraming(r.id)} title="Send to Framing">
+                            Next: Framing <span className="ml-1 opacity-70">›</span>
+                          </Chip>
+
+                          {/* Only if meaningful */}
+                          {hasDetails ? (
+                            <Chip onClick={() => setOpenId(isOpen ? null : r.id)} title="Details">
+                              {isOpen ? "Hide" : "Details"}
+                            </Chip>
+                          ) : null}
+
+                          {/* Always available */}
+                          <Chip
+                            onClick={() => void deleteCapture(r)}
+                            title="Delete"
+                            className="border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50"
+                          >
+                            {deletingId === r.id ? "Deleting…" : "Delete"}
+                          </Chip>
+                        </div>
+                      </div>
+
+                      {/* Details panel (only when opened via Details chip) */}
+                      {isOpen && hasDetails ? (
                         <div className="px-4 pb-4 space-y-3">
-                          {parsedOpen.text ? (
-                            <div className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-700">{parsedOpen.text}</div>
-                          ) : hasAtts ? (
-                            <div className="text-sm text-zinc-600">
-                              {p.attachments.length} attachment{p.attachments.length === 1 ? "" : "s"} saved.
-                            </div>
+                          {displayText ? (
+                            <div className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-700">{displayText}</div>
                           ) : (
                             <div className="text-sm text-zinc-600">No extra text.</div>
                           )}
 
-                          <div className="flex flex-wrap items-center gap-2">
-                            <Chip onClick={() => router.push("/framing")} title="Next: Framing">
-                              Next: Framing <span className="ml-1 opacity-70">›</span>
-                            </Chip>
-                            <Chip onClick={() => setOpenId(null)}>Done</Chip>
-                          </div>
+                          {hasAtts ? (
+                            <div className="text-sm text-zinc-700">
+                              Attachments: <span className="text-zinc-600">{attCount}</span>
+                            </div>
+                          ) : null}
                         </div>
                       ) : null}
                     </div>
