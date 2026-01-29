@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
-type Action = "open_bills" | "open_money" | "open_decisions" | "open_review" | "none";
+type Action = "open_bills" | "open_money" | "open_decisions" | "open_review" | "open_chapters" | "none";
 type SuggestedNext = "none" | "create_framing";
 
 type AskRequest = { userId: string; question: string };
@@ -16,7 +16,7 @@ type AskRequest = { userId: string; question: string };
 function isAction(x: unknown): x is Action {
   return (
     typeof x === "string" &&
-    (["open_bills", "open_money", "open_decisions", "open_review", "none"] as const).includes(x as Action)
+    (["open_bills", "open_money", "open_decisions", "open_review", "open_chapters", "none"] as const).includes(x as Action)
   );
 }
 function isSuggestedNext(x: unknown): x is SuggestedNext {
@@ -197,14 +197,17 @@ async function buildFactsPack(userId: string) {
 
     fmErrFlag = !!error;
     if (!error && Array.isArray(data)) {
-      familyMembers = (data as FamilyMemberRow[]).map((m) => ({
-        id: String(m.id),
-        name: String(m.name ?? "Family member").trim() || "Family member",
-        relationship: m.relationship ? String(m.relationship).trim() : null,
-        birth_year: typeof m.birth_year === "number" ? m.birth_year : m.birth_year == null ? null : Number(m.birth_year),
-        approx_age: ageFromBirthYear(typeof m.birth_year === "number" ? m.birth_year : m.birth_year == null ? null : Number(m.birth_year)),
-        about: m.about ? String(m.about) : null,
-      }));
+      familyMembers = (data as FamilyMemberRow[]).map((m) => {
+        const by = typeof m.birth_year === "number" ? m.birth_year : m.birth_year == null ? null : Number(m.birth_year);
+        return {
+          id: String(m.id),
+          name: String(m.name ?? "Family member").trim() || "Family member",
+          relationship: m.relationship ? String(m.relationship).trim() : null,
+          birth_year: by,
+          approx_age: ageFromBirthYear(by),
+          about: m.about ? String(m.about) : null,
+        };
+      });
     }
   } catch {
     fmErrFlag = true;
@@ -265,6 +268,37 @@ async function buildFactsPack(userId: string) {
     reviewItems = [];
   }
 
+  // ✅ Step 10: CHAPTERS (matches Chapters page; fallback supports chaptered_at)
+  type ChapterRow = { id: string; title: string | null; chaptered_at: string | null; status: string | null };
+
+  let chapterItems: Array<{ id: string; title: string; chaptered_at: string | null }> = [];
+  let chaptersErrFlag = false;
+
+  try {
+    const { data, error } = await supabase
+      .from("decisions")
+      .select("id,title,chaptered_at,status,created_at")
+      .eq("user_id", userId)
+      // prefer exact UI contract (status='chapter') but allow fallback when only chaptered_at is used
+      .or("status.eq.chapter,chaptered_at.not.is.null")
+      .order("chaptered_at", { ascending: false, nullsFirst: false })
+      .order("created_at", { ascending: false })
+      .limit(10);
+
+    chaptersErrFlag = !!error;
+
+    if (!error && Array.isArray(data)) {
+      chapterItems = (data as ChapterRow[]).map((c) => ({
+        id: String(c.id),
+        title: String(c.title ?? "Decision").trim() || "Decision",
+        chaptered_at: typeof c.chaptered_at === "string" ? c.chaptered_at : null,
+      }));
+    }
+  } catch {
+    chaptersErrFlag = true;
+    chapterItems = [];
+  }
+
   // ---- Derived money summaries (read-only) ----
   const accountBalances = acct
     .map((a) => {
@@ -317,7 +351,10 @@ async function buildFactsPack(userId: string) {
       pets_count: pets.length,
       review_ok: !reviewErrFlag,
       review_count: reviewItems.length,
-      note: "Bills come from recurring_bills. Accounts come from accounts. Decisions come from decisions. Family comes from family_members + pets. Review comes from decisions.review_at (pending only).",
+      chapters_ok: !chaptersErrFlag,
+      chapters_count: chapterItems.length,
+      note:
+        "Bills come from recurring_bills. Accounts come from accounts. Decisions come from decisions. Family comes from family_members + pets. Review comes from decisions.review_at (pending only). Chapters come from decisions where status='chapter' (or chaptered_at is set).",
     },
     accounts_active: acct.map((a) => ({
       id: a.id,
@@ -366,11 +403,18 @@ async function buildFactsPack(userId: string) {
         "Family is read-only. Ages are approximate (derived from birth_year). Relationships are free-text if provided. Pets are included as part of the household.",
     },
 
-    // ✅ Step 9b (new): Review (pending only)
+    // ✅ Step 9b (kept): Review (pending only)
     review: {
       count: reviewItems.length,
       upcoming: reviewItems.slice(0, 3),
       notes: "Review items are decisions with a review_at date that have not been reviewed yet (reviewed_at is null). Read-only.",
+    },
+
+    // ✅ Step 10 (new): Chapters
+    chapters: {
+      count: chapterItems.length,
+      recent: chapterItems.slice(0, 3),
+      notes: "Chapters are completed decisions kept for reference (status='chapter' or chaptered_at set). Read-only.",
     },
 
     money_summary: {
@@ -422,15 +466,25 @@ FAMILY:
 
 REVIEW:
 - Use facts.review ONLY.
-- Review refers strictly to decisions with a review_at date (pending only).
+- Review items are decisions with a review_at date that have not been reviewed yet (reviewed_at is null).
 - NEVER use bills, money, or time-window heuristics for review questions.
 - When the user asks about review / revisit / check-in:
   - Always answer from facts.review.
-  - Prefer phrasing like: "There are X items scheduled for review."
-  - If upcoming items exist, you may mention up to 3 titles with their review dates.
+  - Prefer: "There are X items scheduled for review."
+  - If items exist, include up to 3 titles WITH their review dates when present.
+  - Keep tone calm and non-urgent.
 - Set action="open_review" for review questions.
-- Do not create urgency. Do not suggest action.
+- Do not suggest action. Do not escalate to framing.
 - If no review items exist, say so plainly and STOP.
+
+CHAPTERS:
+- Use facts.chapters ONLY.
+- Chapters are completed decisions kept for reference (status='chapter' or chaptered_at set).
+- Always give the count first.
+- If count > 0 and facts.chapters.recent has items, include up to 3 titles (and dates if present).
+- Do not interpret or summarise meaning. Do not suggest next steps.
+- Set action="open_chapters" when the user asks about chapters / completed decisions / what we’ve closed / wrapped up.
+- If no chapters exist, say so plainly and STOP.
 
 AFFORD / SHOULD-WE:
 - Never grant permission.
@@ -469,7 +523,10 @@ export async function POST(req: Request) {
             additionalProperties: false,
             properties: {
               answer: { type: "string" },
-              action: { type: "string", enum: ["open_bills", "open_money", "open_decisions", "open_review", "none"] },
+              action: {
+                type: "string",
+                enum: ["open_bills", "open_money", "open_decisions", "open_review", "open_chapters", "none"],
+              },
               suggested_next: { type: "string", enum: ["none", "create_framing"] },
               framing_seed: {
                 anyOf: [

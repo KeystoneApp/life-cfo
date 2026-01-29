@@ -333,6 +333,7 @@ export default function HomePage() {
       if (action === "open_money") actionHref = "/money";
       if (action === "open_review") actionHref = "/revisit";
       if (action === "open_decisions") actionHref = "/decisions";
+      if (action === "open_chapters") actionHref = "/chapters";
 
       setAsk({
         status: "done",
