@@ -2,7 +2,7 @@
 "use client";
 
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { Page } from "@/components/Page";
 import { Card, CardContent, Chip, useToast } from "@/components/ui";
@@ -150,7 +150,10 @@ export default function FramingPage() {
 
 function FramingClient() {
   const router = useRouter();
+  const params = useSearchParams();
   const { showToast } = useToast();
+
+  const openId = (params.get("open") || "").trim();
 
   const [userId, setUserId] = useState<string | null>(null);
   const [statusLine, setStatusLine] = useState<string>("Loading…");
@@ -319,12 +322,21 @@ function FramingClient() {
       const uid = auth.user.id;
       setUserId(uid);
 
-      await Promise.all([loadOpenList(uid), loadNextSuggested(uid)]);
+      await loadOpenList(uid);
+
+      // ✅ If Home sent an open=<inboxId>, load it directly; else load next suggested
+      if (openId) {
+        await loadById(uid, openId);
+      } else {
+        await loadNextSuggested(uid);
+      }
     })();
 
     return () => {
       mounted = false;
     };
+    // IMPORTANT: we only want to boot once per page load
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const visibleOpen = useMemo(() => {
@@ -550,12 +562,7 @@ function FramingClient() {
                     <div className="text-xs font-semibold text-zinc-700">Captured</div>
                     <div className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-900">{parsed.text || item.title}</div>
 
-                  <AttachmentsBlock
-                    userId={userId}
-                    decisionId={item.id}
-                    title="Attachments"
-                    bucket="captures"
-                    />
+                    <AttachmentsBlock userId={userId} decisionId={item.id} title="Attachments" bucket="captures" />
                   </div>
 
                   <div className="space-y-2">

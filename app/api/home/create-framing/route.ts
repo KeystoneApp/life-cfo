@@ -5,40 +5,69 @@ import { createClient } from "@supabase/supabase-js";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+type FramingSeed = {
+  title: string;
+  prompt: string;
+  notes: string[];
+};
+
 type CreateFramingRequest = {
   userId: string;
-  seed: { title: string; prompt: string; notes: string[] };
+  seed: FramingSeed;
 };
+
+function coerceSeed(raw: any): FramingSeed | null {
+  if (!raw || typeof raw !== "object") return null;
+
+  const title = typeof raw.title === "string" ? raw.title.trim() : "";
+  const prompt = typeof raw.prompt === "string" ? raw.prompt.trim() : "";
+  const notes =
+    Array.isArray(raw.notes)
+      ? raw.notes.map((x: unknown) => String(x)).map((s) => s.trim()).filter(Boolean).slice(0, 10)
+      : [];
+
+  if (!title && !prompt) return null;
+
+  return {
+    title: (title || "Decision to frame").slice(0, 120),
+    prompt: prompt.slice(0, 2000),
+    notes,
+  };
+}
 
 export async function POST(req: Request) {
   try {
     const body = (await req.json()) as Partial<CreateFramingRequest>;
     const userId = String(body.userId ?? "").trim();
-    const seed = body.seed ?? null;
+    const seed = coerceSeed(body.seed);
 
-    if (!userId || !seed) return NextResponse.json({ error: "Missing userId/seed" }, { status: 400 });
+    if (!userId || !seed) {
+      return NextResponse.json({ error: "Missing userId/seed" }, { status: 400 });
+    }
 
-    const title = String(seed.title ?? "").trim().slice(0, 120) || "Decision to frame";
-    const prompt = String(seed.prompt ?? "").trim();
-    const notes = Array.isArray(seed.notes) ? seed.notes.map((x) => String(x)).slice(0, 10) : [];
+    const supabase = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      // server-only key
+      process.env.SUPABASE_SERVICE_ROLE_KEY!
+    );
 
-    const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+    // ✅ Store as a normal capture in decision_inbox (schema-safe columns only)
+    // ✅ Use the existing capture JSON format Framing already understands: { text, attachments }
+    const notesBlock =
+      seed.notes.length > 0 ? `\n\nNotes:\n${seed.notes.map((n) => `- ${n}`).join("\n")}` : "";
 
-    const payload = {
-      text: prompt || title,
-      kind: "home_ask_framing_seed",
-      notes,
-      created_from: "home_ask",
-      created_at_iso: new Date().toISOString(),
-    };
+    const captureBody = JSON.stringify({
+      text: `${seed.prompt}${notesBlock}`.trim(),
+      attachments: [],
+    });
 
     const { data, error } = await supabase
       .from("decision_inbox")
       .insert({
         user_id: userId,
         type: "note",
-        title,
-        body: JSON.stringify(payload),
+        title: seed.title,
+        body: captureBody,
         severity: null,
         status: "open",
         snoozed_until: null,
@@ -46,7 +75,9 @@ export async function POST(req: Request) {
       .select("id")
       .single();
 
-    if (error || !data?.id) return NextResponse.json({ error: error?.message ?? "Couldn’t create capture" }, { status: 500 });
+    if (error || !data?.id) {
+      return NextResponse.json({ error: "Insert failed" }, { status: 500 });
+    }
 
     return NextResponse.json({ inbox_id: String(data.id) });
   } catch (e: any) {
