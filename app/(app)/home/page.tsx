@@ -459,7 +459,7 @@ export default function HomePage() {
                   value={text}
                   onChange={(e) => setText(e.target.value)}
                   placeholder="What’s on your mind?"
-                  className="w-full min-h-[150px] resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 pr-14 text-[16px] leading-relaxed text-zinc-900 outline-none focus:ring-2 focus:ring-zinc-200"
+                  className="w-full min-h-[150px] resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 pr-14 text-[15px] leading-relaxed text-zinc-800 placeholder:text-zinc-500 outline-none focus:ring-2 focus:ring-zinc-200"
                   onKeyDown={(e) => {
                     const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
                     const cmdOrCtrl = isMac ? e.metaKey : e.ctrlKey;
@@ -565,24 +565,20 @@ export default function HomePage() {
         {ask.status !== "idle" ? (
           <Card className="border-zinc-200 bg-white">
             <CardContent>
-              <div className="space-y-2">
-                <div className="space-y-1">
-                  <div className="text-sm font-semibold text-zinc-900">Answer</div>
-
-                  {ask.status === "done" || ask.status === "error" ? (
-                    <div className="text-xs text-zinc-500">
-                      <span className="text-zinc-400">You asked:</span>{" "}
-                      <span className="text-zinc-600">{ask.question}</span>
-                    </div>
-                  ) : null}
-                </div>
-
+              <div className="space-y-3">
                 {ask.status === "loading" ? (
                   <div className="text-[15px] leading-relaxed text-zinc-800">Thinking…</div>
                 ) : ask.status === "error" ? (
                   <div className="text-[15px] leading-relaxed text-zinc-800">{ask.message}</div>
                 ) : (
                   <>
+                    {/* ✅ Rebalanced layout */}
+                    <div className="text-sm font-semibold text-zinc-900">You asked</div>
+                    <div className="text-[15px] leading-relaxed text-zinc-800">{ask.question}</div>
+
+                    <div className="h-2" aria-hidden="true" />
+
+                    <div className="text-sm font-semibold text-zinc-900">Answer</div>
                     <div className="whitespace-pre-wrap text-[15px] leading-relaxed text-zinc-800">{ask.answer}</div>
 
                     <div className="flex flex-wrap items-center gap-2 pt-1">
