@@ -108,14 +108,14 @@ async function buildFactsPack(userId: string) {
 
   const acct = (accounts ?? []) as AccountFact[];
 
-  // ✅ OPEN DECISIONS (not decided)
-  const { data: decisions, error: decErr } = await supabase
-    .from("decisions")
-    .select("id,title,status,created_at,decided_at,review_at")
-    .eq("user_id", userId)
-    .neq("status", "decided")
-    .order("updated_at", { ascending: false })
-    .limit(20);
+// ✅ OPEN DECISIONS (decided_at is null)
+const { data: decisions, error: decErr } = await supabase
+  .from("decisions")
+  .select("id,title,status,created_at,decided_at,review_at")
+  .eq("user_id", userId)
+  .is("decided_at", null)
+  .order("created_at", { ascending: false })
+  .limit(20);
 
   const decisions_open = (decisions ?? []) as DecisionFact[];
 
