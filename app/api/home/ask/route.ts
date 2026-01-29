@@ -14,7 +14,10 @@ type SuggestedNext = "none" | "create_framing";
 type AskRequest = { userId: string; question: string };
 
 function isAction(x: unknown): x is Action {
-  return typeof x === "string" && (["open_bills", "open_money", "open_decisions", "open_review", "none"] as const).includes(x as Action);
+  return (
+    typeof x === "string" &&
+    (["open_bills", "open_money", "open_decisions", "open_review", "none"] as const).includes(x as Action)
+  );
 }
 function isSuggestedNext(x: unknown): x is SuggestedNext {
   return typeof x === "string" && (["none", "create_framing"] as const).includes(x as SuggestedNext);
@@ -55,14 +58,47 @@ type AccountFact = {
   updated_at: string | null;
 };
 
+type DecisionFact = {
+  id: string;
+  title: string | null;
+  context: string | null;
+  status: string | null;
+  created_at: string | null;
+  decided_at: string | null;
+  review_at: string | null;
+  updated_at: string | null;
+};
+
+type InboxFact = {
+  id: string;
+  type: string | null;
+  title: string | null;
+  body: string | null;
+  status: string | null;
+  snoozed_until: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+function countBy<T extends Record<string, unknown>>(rows: T[], key: keyof T) {
+  const out: Record<string, number> = {};
+  for (const r of rows) {
+    const v = r[key];
+    const k = typeof v === "string" && v.trim() ? v.trim() : "(unknown)";
+    out[k] = (out[k] ?? 0) + 1;
+  }
+  return out;
+}
+
 async function buildFactsPack(userId: string) {
   const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
 
   const { start, end } = monthBoundsLocal();
 
+  // ---- Bills ----
   const { data: recurringBills, error: rbErr } = await supabase
     .from("recurring_bills")
-    .select("id,name,amount_cents,currency,cadence,next_due_at,autopay,active,notes,updated_at")
+    .select("id,name,amount_cents,currency,cadence,next_due_at,autopay,active,updated_at")
     .eq("user_id", userId)
     .eq("active", true)
     .order("next_due_at", { ascending: true })
@@ -86,6 +122,7 @@ async function buildFactsPack(userId: string) {
       cadence: b.cadence ?? null,
     }));
 
+  // ---- Accounts ----
   const { data: accounts, error: acctErr } = await supabase
     .from("accounts")
     .select("id,name,type,status,current_balance_cents,currency,archived,updated_at")
@@ -96,10 +133,35 @@ async function buildFactsPack(userId: string) {
 
   const acct = (accounts ?? []) as AccountFact[];
 
+  // ---- Decisions (ALL statuses) ----
+  const { data: decisions, error: decErr } = await supabase
+    .from("decisions")
+    .select("id,title,context,status,created_at,decided_at,review_at,updated_at")
+    .eq("user_id", userId)
+    .order("updated_at", { ascending: false })
+    .limit(200);
+
+  const dec = (decisions ?? []) as DecisionFact[];
+
+  // ---- Captures (decision_inbox) (ALL statuses) ----
+  const { data: inbox, error: inboxErr } = await supabase
+    .from("decision_inbox")
+    .select("id,type,title,body,status,snoozed_until,created_at,updated_at")
+    .eq("user_id", userId)
+    .order("updated_at", { ascending: false })
+    .limit(200);
+
+  const ib = (inbox ?? []) as InboxFact[];
+
   // ---- Derived money summaries (read-only) ----
   const accountBalances = acct
     .map((a) => {
-      const cents = typeof a.current_balance_cents === "number" ? a.current_balance_cents : a.current_balance_cents == null ? null : Number(a.current_balance_cents);
+      const cents =
+        typeof a.current_balance_cents === "number"
+          ? a.current_balance_cents
+          : a.current_balance_cents == null
+            ? null
+            : Number(a.current_balance_cents);
       if (typeof cents !== "number" || !Number.isFinite(cents)) return null;
       return {
         id: a.id,
@@ -116,14 +178,14 @@ async function buildFactsPack(userId: string) {
   }, {});
 
   const activeBillsCentsByCurrency = rb.reduce<Record<string, number>>((accum, b) => {
-    const cents = typeof b.amount_cents === "number" ? b.amount_cents : b.amount_cents == null ? null : Number(b.amount_cents);
+    const cents =
+      typeof b.amount_cents === "number" ? b.amount_cents : b.amount_cents == null ? null : Number(b.amount_cents);
     if (typeof cents !== "number" || !Number.isFinite(cents)) return accum;
     const cur = String(b.currency ?? "AUD").toUpperCase();
     accum[cur] = (accum[cur] ?? 0) + cents;
     return accum;
   }, {});
 
-  // ✅ IMPORTANT: declare these BEFORE return (so TS + runtime are happy)
   const balancesEntries = Object.entries(balancesByCurrency) as Array<[string, number]>;
   const recurringEntries = Object.entries(activeBillsCentsByCurrency) as Array<[string, number]>;
 
@@ -135,8 +197,15 @@ async function buildFactsPack(userId: string) {
       recurring_bills_count_due_this_month: due_this_month.length,
       accounts_ok: !acctErr,
       accounts_count_active: acct.length,
-      note: "Bills come from recurring_bills. Accounts come from accounts.",
+      decisions_ok: !decErr,
+      decisions_count: dec.length,
+      inbox_ok: !inboxErr,
+      inbox_count: ib.length,
+      note:
+        "Bills come from recurring_bills. Accounts come from accounts. Decisions come from decisions. Captures come from decision_inbox.",
     },
+
+    // Money
     accounts_active: acct.map((a) => ({
       id: a.id,
       name: String(a.name ?? "Account"),
@@ -166,6 +235,40 @@ async function buildFactsPack(userId: string) {
       })),
       notes: "Summaries are derived from active accounts and recurring_bills only.",
     },
+
+    // Decisions + Captures (ALL)
+    decisions_recent: dec.map((d) => ({
+      id: d.id,
+      title: String(d.title ?? "Decision"),
+      status: String(d.status ?? ""),
+      created_at: d.created_at ?? null,
+      updated_at: d.updated_at ?? null,
+      decided_at: d.decided_at ?? null,
+      review_at: d.review_at ?? null,
+      // Keep context small + optional; model should not overuse it.
+      context: typeof d.context === "string" ? d.context.slice(0, 400) : null,
+    })),
+    decisions_summary: {
+      by_status: countBy(dec, "status"),
+      notes: "All decisions included (open + closed/archived).",
+    },
+
+    inbox_recent: ib.map((x) => ({
+      id: x.id,
+      type: String(x.type ?? ""),
+      title: String(x.title ?? "Capture"),
+      status: String(x.status ?? ""),
+      snoozed_until: x.snoozed_until ?? null,
+      created_at: x.created_at ?? null,
+      updated_at: x.updated_at ?? null,
+      // Keep body tiny to reduce noise
+      body: typeof x.body === "string" ? x.body.slice(0, 300) : null,
+    })),
+    inbox_summary: {
+      by_status: countBy(ib, "status"),
+      by_type: countBy(ib, "type"),
+      notes: "All captures included (open + closed/archived).",
+    },
   };
 }
 
@@ -180,9 +283,14 @@ RULES:
 - Prefer: direct answer (1–2 lines), then bullets, then totals/ranges when relevant.
 - If time-based, state the window explicitly.
 
+SCOPE:
+- Money: accounts + recurring bills.
+- Life/Decisions: decisions + captures (decision_inbox).
+- Treat "chapters" as decisions that are no longer active/open (based on status).
+
 AFFORD / SHOULD-WE:
 - Never grant permission.
-- Provide a bounded frame (accounts + upcoming bills).
+- Provide a bounded frame (accounts + bills).
 - If it needs more context/tradeoffs/missing inputs, set suggested_next="create_framing"
   and include framing_seed (title, prompt, notes[]).
 
@@ -262,10 +370,10 @@ export async function POST(req: Request) {
     const framing_seed =
       suggested_next === "create_framing" && obj.framing_seed && typeof obj.framing_seed === "object"
         ? {
-            title: String((obj.framing_seed as any).title ?? "").slice(0, 120) || "Decision to frame",
-            prompt: String((obj.framing_seed as any).prompt ?? "").slice(0, 2000) || "",
-            notes: Array.isArray((obj.framing_seed as any).notes)
-              ? ((obj.framing_seed as any).notes as unknown[]).map((x: unknown) => String(x)).slice(0, 10)
+            title: String((obj.framing_seed as Record<string, unknown>)["title"] ?? "").slice(0, 120) || "Decision to frame",
+            prompt: String((obj.framing_seed as Record<string, unknown>)["prompt"] ?? "").slice(0, 2000) || "",
+            notes: Array.isArray((obj.framing_seed as Record<string, unknown>)["notes"])
+              ? ((obj.framing_seed as Record<string, unknown>)["notes"] as unknown[]).map((x: unknown) => String(x)).slice(0, 10)
               : [],
           }
         : null;
