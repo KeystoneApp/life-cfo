@@ -14,24 +14,10 @@ type SuggestedNext = "none" | "create_framing";
 type AskRequest = { userId: string; question: string };
 
 function isAction(x: unknown): x is Action {
-  return ["open_bills", "open_money", "open_decisions", "open_review", "none"].includes(String(x));
+  return typeof x === "string" && (["open_bills", "open_money", "open_decisions", "open_review", "none"] as const).includes(x as Action);
 }
 function isSuggestedNext(x: unknown): x is SuggestedNext {
-  return ["none", "create_framing"].includes(String(x));
-}
-
-// ✅ Fix #1: deterministic afford/should-we intent detection
-function isAffordQuestion(q: string) {
-  const s = (q || "").trim().toLowerCase();
-  if (!s) return false;
-  return (
-    s.includes("afford") ||
-    s.startsWith("should ") ||
-    s.startsWith("can we ") ||
-    s.startsWith("can i ") ||
-    s.includes("is it okay to") ||
-    s.includes("is it safe to")
-  );
+  return typeof x === "string" && (["none", "create_framing"] as const).includes(x as SuggestedNext);
 }
 
 function monthBoundsLocal() {
@@ -48,6 +34,27 @@ function moneyFromCents(cents: number | null | undefined, currency: string | nul
   return new Intl.NumberFormat(undefined, { style: "currency", currency: cur }).format(n / 100);
 }
 
+type RecurringBillFact = {
+  id: string;
+  name: string | null;
+  amount_cents: number | null;
+  currency: string | null;
+  cadence: string | null;
+  next_due_at: string | null;
+  autopay: boolean | null;
+};
+
+type AccountFact = {
+  id: string;
+  name: string | null;
+  type: string | null;
+  status: string | null;
+  current_balance_cents: number | null;
+  currency: string | null;
+  archived: boolean | null;
+  updated_at: string | null;
+};
+
 async function buildFactsPack(userId: string) {
   const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
 
@@ -61,15 +68,7 @@ async function buildFactsPack(userId: string) {
     .order("next_due_at", { ascending: true })
     .limit(200);
 
-  const rb = (recurringBills ?? []) as Array<{
-    id: string;
-    name: string | null;
-    amount_cents: number | null;
-    currency: string | null;
-    cadence: string | null;
-    next_due_at: string | null;
-    autopay: boolean | null;
-  }>;
+  const rb = (recurringBills ?? []) as RecurringBillFact[];
 
   const due_this_month = rb
     .filter((b) => {
@@ -95,43 +94,38 @@ async function buildFactsPack(userId: string) {
     .order("updated_at", { ascending: false })
     .limit(50);
 
-  const acct = (accounts ?? []) as Array<{
-    id: string;
-    name: string | null;
-    type: string | null;
-    status: string | null;
-    current_balance_cents: number | null;
-    currency: string | null;
-    archived: boolean | null;
-    updated_at: string | null;
-  }>;
+  const acct = (accounts ?? []) as AccountFact[];
 
   // ---- Derived money summaries (read-only) ----
-const accountBalances = acct
-  .map((a) => {
-    const cents = typeof a.current_balance_cents === "number" ? a.current_balance_cents : null;
-    if (typeof cents !== "number" || !Number.isFinite(cents)) return null;
-    return {
-      id: a.id,
-      name: String(a.name ?? "Account"),
-      currency: String((a.currency ?? "AUD")).toUpperCase(),
-      cents,
-    };
-  })
-  .filter(Boolean) as Array<{ id: string; name: string; currency: string; cents: number }>;
+  const accountBalances = acct
+    .map((a) => {
+      const cents = typeof a.current_balance_cents === "number" ? a.current_balance_cents : a.current_balance_cents == null ? null : Number(a.current_balance_cents);
+      if (typeof cents !== "number" || !Number.isFinite(cents)) return null;
+      return {
+        id: a.id,
+        name: String(a.name ?? "Account"),
+        currency: String(a.currency ?? "AUD").toUpperCase(),
+        cents,
+      };
+    })
+    .filter((x): x is { id: string; name: string; currency: string; cents: number } => x !== null);
 
-const balancesByCurrency = accountBalances.reduce<Record<string, number>>((acc, a) => {
-  acc[a.currency] = (acc[a.currency] ?? 0) + a.cents;
-  return acc;
-}, {});
+  const balancesByCurrency = accountBalances.reduce<Record<string, number>>((accum, a) => {
+    accum[a.currency] = (accum[a.currency] ?? 0) + a.cents;
+    return accum;
+  }, {});
 
-const activeBillsCentsByCurrency = rb.reduce<Record<string, number>>((acc, b) => {
-  const cents = typeof b.amount_cents === "number" ? b.amount_cents : null;
-  if (typeof cents !== "number") return acc;
-  const cur = String((b.currency ?? "AUD")).toUpperCase();
-  acc[cur] = (acc[cur] ?? 0) + cents;
-  return acc;
-}, {});
+  const activeBillsCentsByCurrency = rb.reduce<Record<string, number>>((accum, b) => {
+    const cents = typeof b.amount_cents === "number" ? b.amount_cents : b.amount_cents == null ? null : Number(b.amount_cents);
+    if (typeof cents !== "number" || !Number.isFinite(cents)) return accum;
+    const cur = String(b.currency ?? "AUD").toUpperCase();
+    accum[cur] = (accum[cur] ?? 0) + cents;
+    return accum;
+  }, {});
+
+  // ✅ IMPORTANT: declare these BEFORE return (so TS + runtime are happy)
+  const balancesEntries = Object.entries(balancesByCurrency) as Array<[string, number]>;
+  const recurringEntries = Object.entries(activeBillsCentsByCurrency) as Array<[string, number]>;
 
   return {
     now_iso: new Date().toISOString(),
@@ -161,78 +155,38 @@ const activeBillsCentsByCurrency = rb.reduce<Record<string, number>>((acc, b) =>
       autopay: !!b.autopay,
       cadence: b.cadence ?? null,
     })),
-
-        money_summary: {
-    balances_by_currency: Object.entries(balancesByCurrency).map(([currency, cents]) => ({
-    currency,
-    balance: moneyFromCents(cents, currency),
-  })),
-  recurring_bills_totals_by_currency: Object.entries(activeBillsCentsByCurrency).map(([currency, cents]) => ({
-    currency,
-    total: moneyFromCents(cents, currency),
-  })),
-  notes: "Summaries are derived from active accounts and recurring_bills only.",
-},
+    money_summary: {
+      balances_by_currency: balancesEntries.map(([currency, cents]) => ({
+        currency,
+        balance: moneyFromCents(cents, currency),
+      })),
+      recurring_bills_totals_by_currency: recurringEntries.map(([currency, cents]) => ({
+        currency,
+        total: moneyFromCents(cents, currency),
+      })),
+      notes: "Summaries are derived from active accounts and recurring_bills only.",
+    },
   };
 }
 
 const SYSTEM = `
 You are Keystone Home Ask.
 
-ROLE
-You are a calm, grounded "Query My Life" layer.
-You answer using the user's real data so decisions stop looping in their head.
+RULES:
+- You may ONLY answer using FACTS PACK (+ now_iso).
+- If required data isn't present, say what you can/can't see and STOP.
+- No guessing. No invention. Calm and non-directive.
+- No urgency. No "you should". No pretending anything was saved.
+- Prefer: direct answer (1–2 lines), then bullets, then totals/ranges when relevant.
+- If time-based, state the window explicitly.
 
-GLOBAL RULES
-- You may ONLY use the provided FACTS PACK (+ now_iso).
-- If required data is missing, say clearly what you can and cannot see, then stop.
-- Never guess. Never invent numbers, bills, or balances.
-- Never grant permission or say yes/no.
-- Never create urgency. Never say "you should".
-- Be calm, human, and steady.
+AFFORD / SHOULD-WE:
+- Never grant permission.
+- Provide a bounded frame (accounts + upcoming bills).
+- If it needs more context/tradeoffs/missing inputs, set suggested_next="create_framing"
+  and include framing_seed (title, prompt, notes[]).
 
-ANSWER SHAPE (DEFAULT)
-1) "Here’s what I can see" → concrete facts
-2) "What that means" → neutral interpretation
-3) Optional next step → only if helpful
-
-AFFORD / SHOULD-WE QUESTIONS (CRITICAL)
-If the question is about affordability, safety, or whether to proceed:
-
-You MUST answer in this structure:
-
-1) Here’s what I can see
-   - Current account balances (if available)
-   - Upcoming bills and commitments (state the time window)
-   - Any known constraints from the data
-
-2) What that means
-   - Plain-English interpretation
-   - No advice, no judgement
-
-3) What would make this safe
-   - Conditions, not instructions
-   - Examples: buffer size, timing clarity, amount bounds
-   - Phrase as “This would feel safer if…”
-
-4) Framing hand-off (ONLY if uncertainty or trade-offs exist)
-   - If the decision involves trade-offs, timing pressure, or missing context:
-     set suggested_next = "create_framing"
-     and provide a framing_seed with:
-       • a neutral title
-       • a short framing prompt
-       • up to 5 factual notes from the data
-
-If the answer is clear and bounded, DO NOT suggest framing.
-
-STYLE
-- Calm
-- Grounded
-- Reassuring but honest
-- Slightly human, never chatty
-
-OUTPUT
-Return JSON only, matching the schema exactly.
+Return JSON only matching schema.
 `.trim();
 
 export async function POST(req: Request) {
@@ -247,21 +201,11 @@ export async function POST(req: Request) {
 
     const facts = await buildFactsPack(userId);
 
-    // ✅ Fix #1: pass deterministic intent to the model
-    const afford_intent = isAffordQuestion(question);
-
     const resp = await openai.responses.create({
       model: "gpt-4o-mini",
       input: [
         { role: "system", content: SYSTEM },
-        {
-          role: "user",
-          content: `QUESTION:\n${question}\n\nINTENT:\n${afford_intent ? "AFFORD_OR_SHOULD_WE" : "GENERAL"}\n\nFACTS PACK:\n${JSON.stringify(
-            facts,
-            null,
-            2
-          )}`,
-        },
+        { role: "user", content: `QUESTION:\n${question}\n\nFACTS PACK:\n${JSON.stringify(facts, null, 2)}` },
       ],
       text: {
         format: {
@@ -298,7 +242,8 @@ export async function POST(req: Request) {
     });
 
     const raw = resp.output_text?.trim() || "";
-    let parsed: any;
+    let parsed: unknown;
+
     try {
       parsed = JSON.parse(raw);
     } catch {
@@ -308,24 +253,26 @@ export async function POST(req: Request) {
       );
     }
 
-    const answer = String(parsed.answer ?? "").trim().slice(0, 4000);
-    const action: Action = isAction(parsed.action) ? parsed.action : "none";
-    const suggested_next: SuggestedNext = isSuggestedNext(parsed.suggested_next) ? parsed.suggested_next : "none";
+    const obj = parsed as Record<string, unknown>;
 
-    // Enforce: framing_seed must be null unless create_framing
+    const answer = String(obj.answer ?? "").trim().slice(0, 4000);
+    const action: Action = isAction(obj.action) ? (obj.action as Action) : "none";
+    const suggested_next: SuggestedNext = isSuggestedNext(obj.suggested_next) ? (obj.suggested_next as SuggestedNext) : "none";
+
     const framing_seed =
-      suggested_next === "create_framing" && parsed.framing_seed && typeof parsed.framing_seed === "object"
+      suggested_next === "create_framing" && obj.framing_seed && typeof obj.framing_seed === "object"
         ? {
-            title: String(parsed.framing_seed.title ?? "").slice(0, 120) || "Decision to frame",
-            prompt: String(parsed.framing_seed.prompt ?? "").slice(0, 2000) || "",
-            notes: Array.isArray(parsed.framing_seed.notes)
-              ? parsed.framing_seed.notes.map((x: any) => String(x)).slice(0, 10)
+            title: String((obj.framing_seed as any).title ?? "").slice(0, 120) || "Decision to frame",
+            prompt: String((obj.framing_seed as any).prompt ?? "").slice(0, 2000) || "",
+            notes: Array.isArray((obj.framing_seed as any).notes)
+              ? ((obj.framing_seed as any).notes as unknown[]).map((x: unknown) => String(x)).slice(0, 10)
               : [],
           }
         : null;
 
     return NextResponse.json({ answer, action, suggested_next, framing_seed });
-  } catch (e: any) {
-    return NextResponse.json({ error: e?.message ?? "Unknown error" }, { status: 500 });
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : "Unknown error";
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
