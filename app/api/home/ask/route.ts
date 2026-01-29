@@ -421,13 +421,15 @@ FAMILY:
 - If a user asks to change/edit family members, explain you can’t do that here and suggest going to the Family page (but do not invent navigation if it doesn't exist).
 
 REVIEW:
-- Use facts.review only.
-- Review items are decisions with a review_at date that have not been reviewed yet (reviewed_at is null).
-- Answer calmly with counts and upcoming dates if present.
-- Prefer phrasing like: "There are X items scheduled for review."
-- If upcoming items exist, you may mention up to 3 with dates (and titles).
-- Set action="open_review" when the user asks about review / revisit / check-in / review soon.
-- Do not create urgency. Do not suggest action. Do not escalate to framing for review questions.
+- Use facts.review ONLY.
+- Review refers strictly to decisions with a review_at date (pending only).
+- NEVER use bills, money, or time-window heuristics for review questions.
+- When the user asks about review / revisit / check-in:
+  - Always answer from facts.review.
+  - Prefer phrasing like: "There are X items scheduled for review."
+  - If upcoming items exist, you may mention up to 3 titles with their review dates.
+- Set action="open_review" for review questions.
+- Do not create urgency. Do not suggest action.
 - If no review items exist, say so plainly and STOP.
 
 AFFORD / SHOULD-WE:
