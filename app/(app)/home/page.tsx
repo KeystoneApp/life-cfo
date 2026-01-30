@@ -8,6 +8,7 @@ import { Card, CardContent, Chip } from "@/components/ui";
 import { useHomeUnload } from "@/lib/home/useHomeUnload";
 import { useHomeOrientation } from "@/lib/home/useHomeOrientation";
 import { useRouter } from "next/navigation";
+import { maybeCrisisIntercept } from "@/lib/safety/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -354,6 +355,22 @@ export default function HomePage() {
 
     if (authStatus !== "signed_in" || !userId) {
       flashAffirmation("Held.");
+      return;
+    }
+
+    // 🔒 CRISIS / EMERGENCY INTERCEPT (prevents capture + prevents answering)
+    const intercept = maybeCrisisIntercept(msg);
+    if (intercept) {
+      // No saving. No routing. Calm output only.
+      flashAffirmation("Held.");
+      setAsk({
+        status: "done",
+        question: msg,
+        answer: intercept.content,
+        actionHref: null,
+        suggestedNext: "none",
+        captureSeed: null,
+      });
       return;
     }
 
