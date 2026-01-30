@@ -299,7 +299,6 @@ export default function RevisitClient() {
       .from("decisions")
       .select("id,user_id,title,context,status,created_at,decided_at,review_at,review_notes,review_history,reviewed_at,attachments")
       .eq("user_id", uid)
-      .neq("status", "draft")
       .not("review_at", "is", null)
       .order("review_at", { ascending: true });
 
