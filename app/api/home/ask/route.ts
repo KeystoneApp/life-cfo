@@ -35,7 +35,11 @@ function moneyFromCents(cents: number | null | undefined, currency: string | nul
   const n = typeof cents === "number" ? cents : cents == null ? null : Number(cents);
   if (typeof n !== "number" || !Number.isFinite(n)) return null;
   const cur = (currency || "AUD").toUpperCase();
-  return new Intl.NumberFormat(undefined, { style: "currency", currency: cur }).format(n / 100);
+  try {
+    return new Intl.NumberFormat(undefined, { style: "currency", currency: cur }).format(n / 100);
+  } catch {
+    return `${cur} ${(n / 100).toFixed(2)}`;
+  }
 }
 
 function ageFromBirthYear(birth_year: number | null | undefined) {
@@ -44,6 +48,12 @@ function ageFromBirthYear(birth_year: number | null | undefined) {
   const nowY = new Date().getFullYear();
   const age = nowY - y;
   return age >= 0 && age <= 130 ? age : null;
+}
+
+function normalizeGoalStatus(s: unknown): "active" | "paused" | "done" | "archived" {
+  const t = String(s ?? "active").trim().toLowerCase();
+  if (t === "paused" || t === "done" || t === "archived") return t;
+  return "active";
 }
 
 function isReviewIntent(q: string) {
@@ -56,6 +66,12 @@ function isChaptersIntent(q: string) {
   const s = (q || "").trim().toLowerCase();
   if (!s) return false;
   return /\b(chapter|chapters|completed decision|completed decisions|closed decision|closed decisions)\b/.test(s);
+}
+
+function isGoalsIntent(q: string) {
+  const s = (q || "").trim().toLowerCase();
+  if (!s) return false;
+  return /\b(goal|goals|savings goal|savings goals|money goal|money goals|target|targets)\b/.test(s);
 }
 
 function formatDateShort(iso: string) {
@@ -115,6 +131,22 @@ type PetRow = {
   type: string | null;
   notes: string | null;
   created_at: string | null;
+};
+
+type MoneyGoalRow = {
+  id: string;
+  user_id: string;
+  title: string | null;
+  currency: string | null;
+  target_cents: number | null;
+  current_cents: number | null;
+  status: string | null;
+  deadline_at: string | null;
+  notes: string | null;
+  is_primary?: boolean | null;
+  sort_order?: number | null;
+  created_at: string | null;
+  updated_at: string | null;
 };
 
 async function buildFactsPack(userId: string) {
@@ -189,6 +221,7 @@ async function buildFactsPack(userId: string) {
     openDecisionTitles = [];
   }
 
+  // --- Family ---
   let familyMembers: Array<{
     id: string;
     name: string;
@@ -257,6 +290,7 @@ async function buildFactsPack(userId: string) {
     pets = [];
   }
 
+  // --- Review ---
   type ReviewRow = { id: string; title: string | null; review_at: string | null; reviewed_at: string | null };
 
   let reviewItems: Array<{ id: string; title: string; review_at: string }> = [];
@@ -288,6 +322,7 @@ async function buildFactsPack(userId: string) {
     reviewItems = [];
   }
 
+  // --- Chapters ---
   type ChapterRow = {
     id: string;
     title: string | null;
@@ -322,6 +357,62 @@ async function buildFactsPack(userId: string) {
     chaptersErrFlag = true;
     chapterItems = [];
   }
+
+  // --- Goals (new) ---
+  let goalsErrFlag = false;
+  let goalsRows: MoneyGoalRow[] = [];
+
+  try {
+    const { data, error } = await supabase
+      .from("money_goals")
+      .select("*")
+      .eq("user_id", userId)
+      .limit(200);
+
+    goalsErrFlag = !!error;
+    if (!error && Array.isArray(data)) goalsRows = data as MoneyGoalRow[];
+  } catch {
+    goalsErrFlag = true;
+    goalsRows = [];
+  }
+
+  const goalsClean = goalsRows.map((g) => {
+    const status = normalizeGoalStatus(g.status);
+    const currency = String(g.currency ?? "AUD").toUpperCase();
+    const targetCents = typeof g.target_cents === "number" ? g.target_cents : g.target_cents == null ? null : Number(g.target_cents);
+    const currentCents =
+      typeof g.current_cents === "number" ? g.current_cents : g.current_cents == null ? null : Number(g.current_cents);
+
+    return {
+      id: String(g.id),
+      title: String(g.title ?? "Goal").trim() || "Goal",
+      currency,
+      status,
+      target_cents: Number.isFinite(targetCents as any) ? (targetCents as any as number) : null,
+      current_cents: Number.isFinite(currentCents as any) ? (currentCents as any as number) : null,
+      deadline_at: typeof g.deadline_at === "string" ? g.deadline_at : null,
+      notes: typeof g.notes === "string" ? g.notes : null,
+      is_primary: typeof (g as any).is_primary === "boolean" ? ((g as any).is_primary as boolean) : null,
+      sort_order: typeof (g as any).sort_order === "number" ? ((g as any).sort_order as number) : null,
+      created_at: typeof g.created_at === "string" ? g.created_at : null,
+      updated_at: typeof g.updated_at === "string" ? g.updated_at : null,
+    };
+  });
+
+  const goalsActive = goalsClean.filter((g) => g.status !== "archived");
+  const goalsPrimary = goalsClean.find((g) => g.is_primary === true) ?? null;
+
+  const goalsPreviewTitles = [...goalsActive]
+    .sort((a, b) => {
+      const ap = a.is_primary ? 1 : 0;
+      const bp = b.is_primary ? 1 : 0;
+      if (ap !== bp) return bp - ap;
+      const au = Date.parse(a.updated_at || a.created_at || "") || 0;
+      const bu = Date.parse(b.updated_at || b.created_at || "") || 0;
+      return bu - au;
+    })
+    .slice(0, 3)
+    .map((g) => g.title);
 
   const accountBalances = acct
     .map((a) => {
@@ -376,8 +467,12 @@ async function buildFactsPack(userId: string) {
       review_count: reviewItems.length,
       chapters_ok: !chaptersErrFlag,
       chapters_count: chapterItems.length,
+      goals_ok: !goalsErrFlag,
+      goals_count_total: goalsClean.length,
+      goals_count_active: goalsActive.length,
+      goals_preview_titles_count: goalsPreviewTitles.length,
       note:
-        "Bills come from recurring_bills. Accounts come from accounts. Decisions come from decisions. Family comes from family_members + pets. Review comes from decisions.review_at (pending only). Chapters come from decisions where status='chapter' (or chaptered_at is set).",
+        "Bills come from recurring_bills. Accounts come from accounts. Decisions come from decisions. Family comes from family_members + pets. Review comes from decisions.review_at (pending only). Chapters come from decisions where status='chapter' (or chaptered_at is set). Goals come from money_goals.",
     },
     accounts_active: acct.map((a) => ({
       id: a.id,
@@ -429,6 +524,33 @@ async function buildFactsPack(userId: string) {
       recent: chapterItems.slice(0, 3),
       notes: "Chapters are completed decisions kept for reference (status='chapter' or chaptered_at set). Read-only.",
     },
+    goals: {
+      count_total: goalsClean.length,
+      count_active: goalsActive.length,
+      preview_titles: goalsPreviewTitles,
+      primary: goalsPrimary
+        ? {
+            id: goalsPrimary.id,
+            title: goalsPrimary.title,
+            status: goalsPrimary.status,
+            currency: goalsPrimary.currency,
+            target: moneyFromCents(goalsPrimary.target_cents ?? null, goalsPrimary.currency),
+            current: moneyFromCents(goalsPrimary.current_cents ?? null, goalsPrimary.currency),
+            deadline_at: goalsPrimary.deadline_at,
+          }
+        : null,
+      active: goalsActive.slice(0, 20).map((g) => ({
+        id: g.id,
+        title: g.title,
+        status: g.status,
+        currency: g.currency,
+        target: moneyFromCents(g.target_cents ?? null, g.currency),
+        current: moneyFromCents(g.current_cents ?? null, g.currency),
+        deadline_at: g.deadline_at,
+        is_primary: g.is_primary === true,
+      })),
+      notes: "Goals come from money_goals. Read-only in Home Ask.",
+    },
     money_summary: {
       balances_by_currency: balancesEntries.map(([currency, cents]) => ({
         currency,
@@ -467,6 +589,14 @@ OPEN DECISIONS:
   - If the user explicitly asks to list them, you may list up to 5 titles using facts.decisions_open (still: do not invent).
 - Set action="open_decisions" when user asks about open decisions.
 
+GOALS:
+- Use facts.goals only.
+- Always give the active count first: facts.goals.count_active.
+- If facts.goals.count_active > 0 and facts.goals.preview_titles has items, include up to 3 titles in the same response.
+- If facts.goals.primary exists, you may mention it as "Primary goal: <title>" and include current/target if present.
+- Do not suggest tactics or advice. Fact-only.
+- Set action="open_money" for goal questions (Goals live under Money).
+
 FAMILY:
 - Use facts.family only.
 - Answer factually: counts, names, relationships (if provided), and ages if available.
@@ -474,7 +604,7 @@ FAMILY:
 - Do not infer roles beyond what is stated (relationship is free-text). Do not guess relationships.
 - Pets are part of the household. If asked, list pets with name + type if present.
 - Do not give parenting advice or commentary. If asked something subjective, say you can’t answer and STOP.
-- If a user asks to change/edit family members, explain you can’t do that here and suggest going to the Family page (but do not invent navigation if it doesn't exist).
+- If a user asks to change/edit family members, explain you can’t do that here and suggest going to the Family page.
 
 REVIEW:
 - Use facts.review ONLY.
@@ -594,6 +724,48 @@ export async function POST(req: Request) {
       return NextResponse.json({
         answer,
         action: "open_chapters",
+        suggested_next: "none",
+        capture_seed: null,
+      });
+    }
+
+    // ✅ Deterministic GOALS handling (skip AI)
+    if (isGoalsIntent(question)) {
+      const goals = (facts as any)?.goals;
+      const countActive = typeof goals?.count_active === "number" ? goals.count_active : 0;
+      const previewTitles = Array.isArray(goals?.preview_titles) ? goals.preview_titles : [];
+      const primary = goals?.primary ?? null;
+
+      if (countActive <= 0) {
+        return NextResponse.json({
+          answer: "There are no active goals (from what I can see).",
+          action: "open_money",
+          suggested_next: "none",
+          capture_seed: null,
+        });
+      }
+
+      const parts: string[] = [];
+      parts.push(`There are ${countActive} active goals.`);
+
+      if (primary && typeof primary?.title === "string" && primary.title.trim()) {
+        const cur = typeof primary?.current === "string" ? primary.current : null;
+        const tgt = typeof primary?.target === "string" ? primary.target : null;
+        const bit = cur && tgt ? ` (${cur} / ${tgt})` : cur ? ` (${cur})` : "";
+        parts.push(`Primary goal: ${primary.title.trim()}${bit}.`);
+      }
+
+      if (previewTitles.length > 0) {
+        const titles = previewTitles
+          .map((t: any) => (typeof t === "string" ? t.trim() : ""))
+          .filter(Boolean)
+          .slice(0, 3);
+        if (titles.length > 0) parts.push(`Including: ${titles.join(", ")}.`);
+      }
+
+      return NextResponse.json({
+        answer: parts.join(" "),
+        action: "open_money",
         suggested_next: "none",
         capture_seed: null,
       });
