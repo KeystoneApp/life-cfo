@@ -2,100 +2,153 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { Page } from "@/components/Page";
-import { Button, Card, CardContent, Chip, Badge, useToast } from "@/components/ui";
+import { Card, CardContent, Button, Chip, Badge, useToast } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
 
-/**
- * GOALS — V1 (Money → Goals)
- *
- * Table expected (Supabase): money_goals
- * Columns:
- * - id (uuid, pk, default gen_random_uuid())
- * - user_id (uuid, not null)
- * - name (text, not null)
- * - target_amount_cents (bigint, not null, default 0)
- * - currency (text, not null, default 'AUD')
- * - target_date (date, null)
- * - priority (int, not null, default 2)   -- 1..3
- * - notes (text, null)
- * - created_at (timestamptz, default now())
- * - updated_at (timestamptz, default now())
- */
+type GoalStatus = "active" | "paused" | "done" | "archived";
 
-type Goal = {
+type MoneyGoal = {
   id: string;
   user_id: string;
-  name: string;
-  target_amount_cents: number;
-  currency: string;
-  target_date: string | null; // YYYY-MM-DD
-  priority: 1 | 2 | 3;
-  notes: string | null;
-  created_at: string | null;
-  updated_at: string | null;
+
+  title: string | null;
+  currency: string | null;
+
+  // target + progress (recommended)
+  target_cents?: number | null;
+  current_cents?: number | null;
+
+  // optional “envelope” fields (if you add them later)
+  status?: GoalStatus | string | null;
+  deadline_at?: string | null;
+  notes?: string | null;
+
+  // optional “V1+”
+  is_primary?: boolean | null;
+  sort_order?: number | null;
+
+  created_at?: string | null;
+  updated_at?: string | null;
 };
 
-function toCents(input: string) {
-  // Accept "1234", "1,234.56", "$1234.56"
-  const cleaned = (input || "").replace(/[^0-9.]/g, "");
-  if (!cleaned) return 0;
-  const n = Number(cleaned);
-  if (!Number.isFinite(n) || n < 0) return 0;
-  return Math.round(n * 100);
+type GoalUpdate = {
+  id: string;
+  goal_id: string;
+  user_id: string;
+
+  delta_cents: number;
+  note: string | null;
+  created_at: string | null;
+};
+
+function safeUUID() {
+  try {
+    if (typeof crypto !== "undefined" && "randomUUID" in crypto) return (crypto as any).randomUUID();
+  } catch {}
+  return `m_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 }
 
-function fromCents(cents: number) {
-  const n = typeof cents === "number" && Number.isFinite(cents) ? cents : 0;
-  return (n / 100).toFixed(2);
+function toInt(n: unknown) {
+  const x = typeof n === "number" ? n : n == null ? NaN : Number(n);
+  return Number.isFinite(x) ? Math.trunc(x) : null;
 }
 
-function fmtMoney(cents: number, currency: string) {
+function clamp(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n));
+}
+
+function moneyFromCents(cents: number | null | undefined, currency: string | null | undefined) {
+  const n = typeof cents === "number" ? cents : cents == null ? null : Number(cents);
+  if (typeof n !== "number" || !Number.isFinite(n)) return "—";
   const cur = (currency || "AUD").toUpperCase();
-  return new Intl.NumberFormat(undefined, { style: "currency", currency: cur }).format((cents || 0) / 100);
+  try {
+    return new Intl.NumberFormat(undefined, { style: "currency", currency: cur }).format(n / 100);
+  } catch {
+    return `${cur} ${(n / 100).toFixed(2)}`;
+  }
 }
 
-function fmtDatePretty(yyyyMMdd: string) {
-  // yyyy-mm-dd -> local pretty
-  const ms = Date.parse(`${yyyyMMdd}T00:00:00`);
-  if (Number.isNaN(ms)) return yyyyMMdd;
+function fmtDateShort(iso: string | null | undefined) {
+  if (!iso) return "";
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return iso;
   return new Date(ms).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short", year: "numeric" });
 }
 
-function clampPriority(n: number): 1 | 2 | 3 {
-  if (n <= 1) return 1;
-  if (n >= 3) return 3;
-  return 2;
+function normalizeStatus(s: unknown): GoalStatus {
+  const t = String(s ?? "active").trim().toLowerCase();
+  if (t === "paused" || t === "done" || t === "archived") return t;
+  return "active";
 }
 
-function priorityLabel(p: 1 | 2 | 3) {
-  if (p === 1) return "Priority 1";
-  if (p === 2) return "Priority 2";
-  return "Priority 3";
+function percent(currentCents: number, targetCents: number) {
+  if (targetCents <= 0) return 0;
+  return clamp(Math.round((currentCents / targetCents) * 100), 0, 999);
 }
 
-function softDueText(target_date: string | null) {
-  if (!target_date) return "No target date";
-  const ms = Date.parse(`${target_date}T00:00:00`);
-  if (Number.isNaN(ms)) return "Target date set";
-  const now = new Date();
+function parseMoneyToCents(input: string) {
+  // Accept "1200", "1,200", "1200.50", "$1,200.50", "-50"
+  const s = String(input || "")
+    .trim()
+    .replace(/[^0-9.\-]/g, "");
+  if (!s) return null;
+  const n = Number(s);
+  if (!Number.isFinite(n)) return null;
+  return Math.round(n * 100);
+}
+
+function hasPrimarySupport(goals: MoneyGoal[]) {
+  // If column doesn't exist, supabase returns objects without it.
+  return goals.some((g) => "is_primary" in g);
+}
+
+function sortGoals(goals: MoneyGoal[]) {
+  // If is_primary / sort_order exist, prefer them. Otherwise fall back to updated_at desc.
+  return [...goals].sort((a, b) => {
+    const ap = a.is_primary ? 1 : 0;
+    const bp = b.is_primary ? 1 : 0;
+    if (ap !== bp) return bp - ap;
+
+    const ao = typeof a.sort_order === "number" ? a.sort_order : 100;
+    const bo = typeof b.sort_order === "number" ? b.sort_order : 100;
+    if (ao !== bo) return ao - bo;
+
+    const au = Date.parse(a.updated_at || a.created_at || "") || 0;
+    const bu = Date.parse(b.updated_at || b.created_at || "") || 0;
+    return bu - au;
+  });
+}
+
+function isSameDay(aIso: string, bIso: string) {
+  const a = new Date(aIso);
+  const b = new Date(bIso);
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
+
+function relativeDayLabel(iso: string) {
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return fmtDateShort(iso);
+
   const d = new Date(ms);
-  const diffDays = Math.round((d.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-  const pretty = fmtDatePretty(target_date);
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+  const yday = new Date(today);
+  yday.setDate(today.getDate() - 1);
 
-  if (diffDays < -1) return `Target was ${pretty}`;
-  if (diffDays === -1) return `Target was yesterday (${pretty})`;
-  if (diffDays === 0) return `Target is today (${pretty})`;
-  if (diffDays === 1) return `Target is tomorrow (${pretty})`;
-  if (diffDays <= 30) return `Target in ${diffDays} days (${pretty})`;
-  return `Target ${pretty}`;
+  if (isSameDay(d.toISOString(), today.toISOString())) return "Today";
+  if (isSameDay(d.toISOString(), yday.toISOString())) return "Yesterday";
+  return fmtDateShort(iso);
 }
 
 export default function GoalsPage() {
+  const router = useRouter();
+
   const toastApi: any = useToast();
-  const toast =
+  const showToast =
     toastApi?.showToast ??
     ((args: any) => {
       if (toastApi?.toast) {
@@ -108,42 +161,53 @@ export default function GoalsPage() {
       }
     });
 
+  const notify = (opts: { title?: string; description?: string; variant?: any }) => {
+    showToast({ title: opts.title, description: opts.description, variant: opts.variant });
+  };
+
   const [userId, setUserId] = useState<string | null>(null);
-  const [auth, setAuth] = useState<"loading" | "signed_out" | "signed_in">("loading");
+  const [authStatus, setAuthStatus] = useState<"loading" | "signed_out" | "signed_in">("loading");
 
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  const [loadingGoals, setLoadingGoals] = useState(false);
+  const [goals, setGoals] = useState<MoneyGoal[]>([]);
+  const [selectedGoalId, setSelectedGoalId] = useState<string | null>(null);
 
-  const [goals, setGoals] = useState<Goal[]>([]);
-  const [filter, setFilter] = useState<"all" | "p1" | "p2" | "p3">("all");
+  const [loadingUpdates, setLoadingUpdates] = useState(false);
+  const [updates, setUpdates] = useState<GoalUpdate[]>([]);
 
-  // “Editor” state (inline sheet-style card)
-  const [editingId, setEditingId] = useState<string | null>(null); // null = new goal
-  const [name, setName] = useState("");
-  const [amount, setAmount] = useState(""); // dollars string
+  const [creating, setCreating] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+
+  // Create/Edit form
+  const [title, setTitle] = useState("");
   const [currency, setCurrency] = useState("AUD");
-  const [targetDate, setTargetDate] = useState<string>(""); // yyyy-mm-dd
-  const [priority, setPriority] = useState<1 | 2 | 3>(2);
+  const [target, setTarget] = useState(""); // dollars input
+  const [current, setCurrent] = useState(""); // dollars input
+  const [deadlineAt, setDeadlineAt] = useState(""); // yyyy-mm-dd
   const [notes, setNotes] = useState("");
 
-  const nameRef = useRef<HTMLInputElement | null>(null);
+  // Update form (progress add/subtract)
+  const [delta, setDelta] = useState("");
+  const [deltaNote, setDeltaNote] = useState("");
+  const deltaRef = useRef<HTMLInputElement | null>(null);
 
   // --- Auth ---
   useEffect(() => {
     let alive = true;
+
     (async () => {
-      setAuth("loading");
+      setAuthStatus("loading");
       const { data, error } = await supabase.auth.getUser();
       if (!alive) return;
 
       if (error || !data?.user) {
         setUserId(null);
-        setAuth("signed_out");
+        setAuthStatus("signed_out");
         return;
       }
 
       setUserId(data.user.id);
-      setAuth("signed_in");
+      setAuthStatus("signed_in");
     })();
 
     return () => {
@@ -151,459 +215,1001 @@ export default function GoalsPage() {
     };
   }, []);
 
-  async function load(uid: string) {
-    setLoading(true);
+  const sortedGoals = useMemo(() => sortGoals(goals), [goals]);
+  const primaryGoal = useMemo(() => sortedGoals.find((g) => !!g.is_primary) ?? null, [sortedGoals]);
+
+  const selectedGoal = useMemo(() => {
+    if (!selectedGoalId) return null;
+    return goals.find((g) => g.id === selectedGoalId) ?? null;
+  }, [goals, selectedGoalId]);
+
+  const goalsSupportPrimary = useMemo(() => hasPrimarySupport(goals), [goals]);
+
+  const resetForm = () => {
+    setTitle("");
+    setCurrency("AUD");
+    setTarget("");
+    setCurrent("");
+    setDeadlineAt("");
+    setNotes("");
+    setEditingId(null);
+    setCreating(false);
+  };
+
+  const beginCreate = () => {
+    resetForm();
+    setCreating(true);
+    setEditingId(null);
+  };
+
+  const beginEdit = (g: MoneyGoal) => {
+    setCreating(false);
+    setEditingId(g.id);
+    setTitle(String(g.title ?? "").trim());
+    setCurrency(String(g.currency ?? "AUD").toUpperCase() || "AUD");
+
+    const t = toInt(g.target_cents);
+    const c = toInt(g.current_cents);
+    setTarget(t == null ? "" : String((t / 100).toFixed(0)));
+    setCurrent(c == null ? "" : String((c / 100).toFixed(0)));
+
+    // deadline_at might be ISO. Convert to yyyy-mm-dd for input.
+    const dIso = typeof g.deadline_at === "string" ? g.deadline_at : "";
+    if (dIso) {
+      const ms = Date.parse(dIso);
+      if (!Number.isNaN(ms)) {
+        const d = new Date(ms);
+        const yyyy = d.getFullYear();
+        const mm = String(d.getMonth() + 1).padStart(2, "0");
+        const dd = String(d.getDate()).padStart(2, "0");
+        setDeadlineAt(`${yyyy}-${mm}-${dd}`);
+      } else {
+        setDeadlineAt("");
+      }
+    } else {
+      setDeadlineAt("");
+    }
+
+    setNotes(String(g.notes ?? ""));
+  };
+
+  async function loadGoals(uid: string) {
+    setLoadingGoals(true);
     try {
-      const { data, error } = await supabase
-        .from("money_goals")
-        .select("id,user_id,name,target_amount_cents,currency,target_date,priority,notes,created_at,updated_at")
-        .eq("user_id", uid)
-        .order("priority", { ascending: true })
-        .order("target_date", { ascending: true, nullsFirst: false })
-        .order("created_at", { ascending: false })
-        .limit(200);
+      const res = await supabase.from("money_goals").select("*").eq("user_id", uid);
+      if (res.error) throw res.error;
 
-      if (error) throw error;
+      const rows = (res.data ?? []) as MoneyGoal[];
+      const cleaned = rows.map((r) => ({
+        ...r,
+        status: normalizeStatus((r as any).status),
+        currency: String(r.currency ?? "AUD").toUpperCase(),
+      }));
 
-      const rows = (data ?? []) as any[];
-      setGoals(
-        rows.map((r) => ({
-          id: String(r.id),
-          user_id: String(r.user_id),
-          name: String(r.name ?? "Goal"),
-          target_amount_cents: Number(r.target_amount_cents ?? 0) || 0,
-          currency: String(r.currency ?? "AUD").toUpperCase(),
-          target_date: typeof r.target_date === "string" ? r.target_date : null,
-          priority: clampPriority(Number(r.priority ?? 2)),
-          notes: typeof r.notes === "string" ? r.notes : null,
-          created_at: r.created_at ?? null,
-          updated_at: r.updated_at ?? null,
-        }))
-      );
+      const ordered = sortGoals(cleaned);
+      setGoals(ordered);
+
+      // sensible selection default
+      if (!selectedGoalId && ordered.length > 0) {
+        const pick = ordered.find((g) => normalizeStatus(g.status) === "active") ?? ordered[0];
+        setSelectedGoalId(pick.id);
+      } else if (selectedGoalId) {
+        const stillExists = ordered.some((g) => g.id === selectedGoalId);
+        if (!stillExists) setSelectedGoalId(ordered[0]?.id ?? null);
+      }
     } catch (e: any) {
-      toast({ title: "Couldn’t load goals", description: e?.message ?? "Try again." });
+      notify({ title: "Couldn’t load goals", description: e?.message ?? "Unknown error" });
       setGoals([]);
     } finally {
-      setLoading(false);
+      setLoadingGoals(false);
     }
   }
 
-  // load + realtime
-  useEffect(() => {
-    if (!userId || auth !== "signed_in") return;
-
-    void load(userId);
-
-    const channel = supabase
-      .channel(`money_goals:${userId}`)
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "money_goals", filter: `user_id=eq.${userId}` },
-        () => {
-          // refresh list (simple + reliable)
-          void load(userId);
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userId, auth]);
-
-  const filteredGoals = useMemo(() => {
-    if (filter === "all") return goals;
-    if (filter === "p1") return goals.filter((g) => g.priority === 1);
-    if (filter === "p2") return goals.filter((g) => g.priority === 2);
-    return goals.filter((g) => g.priority === 3);
-  }, [goals, filter]);
-
-  const totals = useMemo(() => {
-    // Keep totals honest: grouped by currency (no fake single total)
-    const byCur = filteredGoals.reduce<Record<string, number>>((acc, g) => {
-      const cur = (g.currency || "AUD").toUpperCase();
-      acc[cur] = (acc[cur] ?? 0) + (g.target_amount_cents || 0);
-      return acc;
-    }, {});
-    const entries = Object.entries(byCur).sort((a, b) => a[0].localeCompare(b[0]));
-    return entries.map(([cur, cents]) => ({ cur, cents }));
-  }, [filteredGoals]);
-
-  const openEditorForNew = () => {
-    setEditingId(null);
-    setName("");
-    setAmount("");
-    setCurrency("AUD");
-    setTargetDate("");
-    setPriority(2);
-    setNotes("");
-    window.setTimeout(() => nameRef.current?.focus(), 0);
-  };
-
-  const openEditorForEdit = (g: Goal) => {
-    setEditingId(g.id);
-    setName(g.name || "");
-    setAmount(fromCents(g.target_amount_cents || 0));
-    setCurrency((g.currency || "AUD").toUpperCase());
-    setTargetDate(g.target_date || "");
-    setPriority(clampPriority(g.priority));
-    setNotes(g.notes || "");
-    window.setTimeout(() => nameRef.current?.focus(), 0);
-  };
-
-  const closeEditor = () => {
-    setEditingId(null);
-    setName("");
-    setAmount("");
-    setCurrency("AUD");
-    setTargetDate("");
-    setPriority(2);
-    setNotes("");
-  };
-
-  const saveGoal = async () => {
-    if (!userId) return;
-    const goalName = name.trim();
-    if (!goalName) {
-      toast({ title: "Name needed", description: "Give this goal a short name." });
-      nameRef.current?.focus();
-      return;
-    }
-
-    const cents = toCents(amount);
-    const cur = (currency || "AUD").toUpperCase();
-    const pr = clampPriority(priority);
-
-    // allow blank date
-    const dateVal = targetDate.trim() ? targetDate.trim() : null;
-
-    setSaving(true);
+  async function loadUpdates(uid: string, goalId: string) {
+    setLoadingUpdates(true);
     try {
-      if (!editingId) {
-        const { error } = await supabase.from("money_goals").insert({
-          user_id: userId,
-          name: goalName,
-          target_amount_cents: cents,
-          currency: cur,
-          target_date: dateVal,
-          priority: pr,
-          notes: notes.trim() ? notes.trim() : null,
-        } as any);
-        if (error) throw error;
+      const res = await supabase
+        .from("money_goal_updates")
+        .select("*")
+        .eq("user_id", uid)
+        .eq("goal_id", goalId)
+        .order("created_at", { ascending: false })
+        .limit(20);
 
-        toast({ title: "Saved", description: "Goal added." });
-        closeEditor();
+      if (res.error) {
+        setUpdates([]);
+        setLoadingUpdates(false);
         return;
       }
 
-      const { error } = await supabase
-        .from("money_goals")
-        .update({
-          name: goalName,
-          target_amount_cents: cents,
-          currency: cur,
-          target_date: dateVal,
-          priority: pr,
-          notes: notes.trim() ? notes.trim() : null,
-          updated_at: new Date().toISOString(),
-        } as any)
-        .eq("user_id", userId)
-        .eq("id", editingId);
-
-      if (error) throw error;
-
-      toast({ title: "Saved", description: "Goal updated." });
-      closeEditor();
-    } catch (e: any) {
-      toast({ title: "Couldn’t save", description: e?.message ?? "Try again." });
+      setUpdates((res.data ?? []) as GoalUpdate[]);
+    } catch {
+      setUpdates([]);
     } finally {
-      setSaving(false);
+      setLoadingUpdates(false);
     }
-  };
+  }
 
-  const deleteGoal = async (g: Goal) => {
+  useEffect(() => {
     if (!userId) return;
-    if (saving) return;
+    void loadGoals(userId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
 
-    const ok = window.confirm(`Delete this goal?\n\n${g.name}`);
-    if (!ok) return;
-
-    setSaving(true);
-    try {
-      const { error } = await supabase.from("money_goals").delete().eq("user_id", userId).eq("id", g.id);
-      if (error) throw error;
-
-      toast({ title: "Deleted", description: "Goal removed." });
-      if (editingId === g.id) closeEditor();
-    } catch (e: any) {
-      toast({ title: "Couldn’t delete", description: e?.message ?? "Try again." });
-    } finally {
-      setSaving(false);
+  useEffect(() => {
+    if (!userId || !selectedGoalId) {
+      setUpdates([]);
+      return;
     }
+    void loadUpdates(userId, selectedGoalId);
+  }, [userId, selectedGoalId]);
+
+  const activeGoals = useMemo(() => sortedGoals.filter((g) => normalizeStatus(g.status) === "active"), [sortedGoals]);
+  const pausedGoals = useMemo(() => sortedGoals.filter((g) => normalizeStatus(g.status) === "paused"), [sortedGoals]);
+  const doneGoals = useMemo(() => sortedGoals.filter((g) => normalizeStatus(g.status) === "done"), [sortedGoals]);
+  const archivedGoals = useMemo(() => sortedGoals.filter((g) => normalizeStatus(g.status) === "archived"), [sortedGoals]);
+
+  const selectedComputed = useMemo(() => {
+    if (!selectedGoal) return null;
+    const cur = toInt(selectedGoal.current_cents) ?? 0;
+    const tgt = toInt(selectedGoal.target_cents) ?? 0;
+    const curStr = moneyFromCents(cur, selectedGoal.currency);
+    const tgtStr = tgt > 0 ? moneyFromCents(tgt, selectedGoal.currency) : "—";
+    const p = tgt > 0 ? percent(cur, tgt) : 0;
+    const remaining = tgt > 0 ? Math.max(0, tgt - cur) : null;
+    return {
+      cur,
+      tgt,
+      curStr,
+      tgtStr,
+      p,
+      remaining,
+      remainingStr: remaining == null ? "—" : moneyFromCents(remaining, selectedGoal.currency),
+    };
+  }, [selectedGoal]);
+
+  async function upsertGoal() {
+    if (!userId) return;
+
+    const t = title.trim();
+    if (!t) {
+      notify({ title: "Missing title", description: "Give this goal a short name." });
+      return;
+    }
+
+    const targetCents = parseMoneyToCents(target);
+    const currentCents = parseMoneyToCents(current);
+
+    if (target && targetCents == null) {
+      notify({ title: "Target looks off", description: "Enter a number like 10000 or 10000.50" });
+      return;
+    }
+    if (current && currentCents == null) {
+      notify({ title: "Progress looks off", description: "Enter a number like 1200 or 1200.50" });
+      return;
+    }
+
+    // Deadline: if yyyy-mm-dd, store as ISO (9am local to avoid midnight TZ weirdness)
+    let deadlineIso: string | null = null;
+    if (deadlineAt.trim()) {
+      const parts = deadlineAt.trim().split("-");
+      if (parts.length === 3) {
+        const y = Number(parts[0]);
+        const m = Number(parts[1]);
+        const d = Number(parts[2]);
+        if (Number.isFinite(y) && Number.isFinite(m) && Number.isFinite(d)) {
+          const dt = new Date(y, m - 1, d, 9, 0, 0, 0);
+          deadlineIso = dt.toISOString();
+        }
+      }
+    }
+
+    const payload: any = {
+      user_id: userId,
+      title: t,
+      currency: (currency || "AUD").toUpperCase(),
+      target_cents: targetCents ?? null,
+      current_cents: currentCents ?? null,
+      deadline_at: deadlineIso,
+      notes: notes.trim() ? notes.trim() : null,
+      status: "active",
+      updated_at: new Date().toISOString(),
+    };
+
+    if (editingId) payload.id = editingId;
+
+    try {
+      const res = await supabase.from("money_goals").upsert([payload]).select("*").maybeSingle();
+      if (res.error) throw res.error;
+
+      notify({ title: editingId ? "Updated" : "Created", description: "Saved." });
+
+      resetForm();
+
+      await loadGoals(userId);
+      const savedId = String((res.data as any)?.id ?? editingId ?? "");
+      if (savedId) setSelectedGoalId(savedId);
+    } catch (e: any) {
+      notify({ title: "Couldn’t save", description: e?.message ?? "Unknown error" });
+    }
+  }
+
+  async function setGoalStatus(goal: MoneyGoal, status: GoalStatus) {
+    if (!userId) return;
+
+    try {
+      const res = await supabase
+        .from("money_goals")
+        .update({ status, updated_at: new Date().toISOString() } as any)
+        .eq("user_id", userId)
+        .eq("id", goal.id);
+
+      if (res.error) throw res.error;
+
+      await loadGoals(userId);
+      notify({ title: "Saved", description: "Updated." });
+    } catch (e: any) {
+      notify({ title: "Couldn’t update", description: e?.message ?? "Unknown error" });
+    }
+  }
+
+  async function deleteGoal(goal: MoneyGoal) {
+    if (!userId) return;
+
+    const status = normalizeStatus(goal.status);
+    if (status !== "archived") {
+      await setGoalStatus(goal, "archived");
+      return;
+    }
+
+    try {
+      // best-effort: remove updates too
+      try {
+        await supabase.from("money_goal_updates").delete().eq("user_id", userId).eq("goal_id", goal.id);
+      } catch {}
+
+      const res = await supabase.from("money_goals").delete().eq("user_id", userId).eq("id", goal.id);
+      if (res.error) throw res.error;
+
+      notify({ title: "Removed", description: "Deleted." });
+      await loadGoals(userId);
+      setSelectedGoalId((prev) => (prev === goal.id ? null : prev));
+    } catch (e: any) {
+      notify({ title: "Couldn’t delete", description: e?.message ?? "Unknown error" });
+    }
+  }
+
+  async function markPrimary(goal: MoneyGoal) {
+    if (!userId) return;
+
+    try {
+      // 1) clear all
+      const clearRes = await supabase.from("money_goals").update({ is_primary: false } as any).eq("user_id", userId);
+      if (clearRes.error) throw clearRes.error;
+
+      // 2) set one
+      const setRes = await supabase
+        .from("money_goals")
+        .update({ is_primary: true, updated_at: new Date().toISOString() } as any)
+        .eq("user_id", userId)
+        .eq("id", goal.id);
+
+      if (setRes.error) throw setRes.error;
+
+      await loadGoals(userId);
+      notify({ title: "Primary goal set", description: "Pinned." });
+    } catch {
+      notify({
+        title: "Primary goal not available",
+        description: "If you want this feature, run the optional migration that adds is_primary.",
+      });
+    }
+  }
+
+  async function applyDeltaCents(goal: MoneyGoal, deltaCents: number, note: string | null) {
+    if (!userId) return;
+
+    const cur = toInt(goal.current_cents) ?? 0;
+    const next = Math.max(0, cur + deltaCents);
+
+    const updRes = await supabase
+      .from("money_goals")
+      .update({ current_cents: next, updated_at: new Date().toISOString() } as any)
+      .eq("user_id", userId)
+      .eq("id", goal.id);
+
+    if (updRes.error) {
+      notify({ title: "Couldn’t update progress", description: updRes.error.message });
+      return;
+    }
+
+    // Best-effort: append update row (optional table)
+    try {
+      const ins = await supabase.from("money_goal_updates").insert([
+        {
+          user_id: userId,
+          goal_id: goal.id,
+          delta_cents: deltaCents,
+          note: note ? note : null,
+          run_id: safeUUID(),
+        } as any,
+      ]);
+      if (ins.error) {
+        // ignore silently (progress still saved)
+      }
+    } catch {
+      // ignore
+    }
+
+    await loadGoals(userId);
+    if (selectedGoalId === goal.id) {
+      await loadUpdates(userId, goal.id);
+    }
+
+    notify({ title: "Saved", description: "Progress updated." });
+  }
+
+  async function addProgress() {
+    if (!userId || !selectedGoal) return;
+
+    const cents = parseMoneyToCents(delta);
+    if (cents == null) {
+      notify({ title: "Enter an amount", description: "Example: 50 or 50.00 (use - to subtract)" });
+      return;
+    }
+    if (cents === 0) return;
+
+    const note = deltaNote.trim() ? deltaNote.trim() : null;
+    setDelta("");
+    setDeltaNote("");
+    await applyDeltaCents(selectedGoal, cents, note);
+    window.setTimeout(() => deltaRef.current?.focus(), 0);
+  }
+
+  async function quickAdd(amountDollars: number) {
+    if (!selectedGoal) return;
+    await applyDeltaCents(selectedGoal, Math.round(amountDollars * 100), null);
+  }
+
+  async function quickSubtract(amountDollars: number) {
+    if (!selectedGoal) return;
+    await applyDeltaCents(selectedGoal, -Math.round(amountDollars * 100), null);
+  }
+
+  const subtitle = "Goals are where money gets meaning.";
+
+  if (authStatus === "loading") {
+    return (
+      <Page title="Goals" subtitle={subtitle}>
+        <div className="mx-auto w-full max-w-[900px]">
+          <Card className="border-zinc-200 bg-white">
+            <CardContent>
+              <div className="flex items-center gap-2">
+                <Chip>Loading…</Chip>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </Page>
+    );
+  }
+
+  if (authStatus === "signed_out" || !userId) {
+    return (
+      <Page title="Goals" subtitle={subtitle}>
+        <div className="mx-auto w-full max-w-[900px]">
+          <Card className="border-zinc-200 bg-white">
+            <CardContent>
+              <div className="text-[15px] leading-relaxed text-zinc-800">Sign in to use Goals.</div>
+            </CardContent>
+          </Card>
+        </div>
+      </Page>
+    );
+  }
+
+  const SectionHeader = ({ title, right }: { title: string; right?: React.ReactNode }) => (
+    <div className="flex items-center justify-between gap-3">
+      <div className="text-sm font-semibold text-zinc-900">{title}</div>
+      {right}
+    </div>
+  );
+
+  const GoalRow = ({ g }: { g: MoneyGoal }) => {
+    const cur = toInt(g.current_cents) ?? 0;
+    const tgt = toInt(g.target_cents) ?? 0;
+    const p = tgt > 0 ? percent(cur, tgt) : 0;
+    const status = normalizeStatus(g.status);
+    const isSelected = selectedGoalId === g.id;
+
+    const pill =
+      status === "active" ? (
+        <Badge>Active</Badge>
+      ) : status === "paused" ? (
+        <Badge>Paused</Badge>
+      ) : status === "done" ? (
+        <Badge>Done</Badge>
+      ) : (
+        <Badge>Archived</Badge>
+      );
+
+    return (
+      <button
+        type="button"
+        onClick={() => setSelectedGoalId(g.id)}
+        className={[
+          "w-full rounded-2xl border px-3 py-3 text-left transition",
+          isSelected ? "border-zinc-300 bg-zinc-50" : "border-zinc-200 bg-white hover:bg-zinc-50",
+        ].join(" ")}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <div className="truncate text-[15px] font-semibold text-zinc-900">{String(g.title ?? "Goal").trim() || "Goal"}</div>
+              {g.is_primary ? <Chip className="text-xs border-zinc-200 bg-white text-zinc-700">Primary</Chip> : null}
+              {pill}
+            </div>
+
+            <div className="mt-1 text-xs text-zinc-600">
+              {tgt > 0 ? (
+                <>
+                  {moneyFromCents(cur, g.currency)} / {moneyFromCents(tgt, g.currency)} • {p}%
+                </>
+              ) : (
+                <>{moneyFromCents(cur, g.currency)} saved</>
+              )}
+
+              {g.deadline_at ? <span> • target by {fmtDateShort(g.deadline_at)}</span> : null}
+            </div>
+          </div>
+
+          <div className="shrink-0 text-xs text-zinc-500">{isSelected ? "Selected" : "Open"}</div>
+        </div>
+
+        {tgt > 0 ? (
+          <div className="mt-3 h-2 w-full rounded-full bg-zinc-100">
+            <div className="h-2 rounded-full bg-zinc-300" style={{ width: `${clamp(p, 0, 100)}%` }} />
+          </div>
+        ) : null}
+      </button>
+    );
   };
 
-  const subtitle =
-    "Goals make money answers meaningful. They don’t force decisions — they anchor trade-offs calmly.";
+  const statusPill = (s: GoalStatus) =>
+    s === "active" ? "Active" : s === "paused" ? "Paused" : s === "done" ? "Done" : "Archived";
 
-  const editorOpen = editingId !== null || name.trim() || amount.trim() || targetDate.trim() || notes.trim();
+  const selectedStatus = selectedGoal ? normalizeStatus(selectedGoal.status) : "active";
+
+  const canShowDelta = !!selectedGoal && selectedStatus !== "archived";
+  const canEditSelected = !!selectedGoal;
+  const canPinSelected = !!selectedGoal && goalsSupportPrimary;
+
+  const selectedIsPrimary = !!selectedGoal?.is_primary;
 
   return (
-    <Page title="Goals" subtitle={subtitle} right={<div className="flex items-center gap-2"></div>}>
-      <div className="mx-auto w-full max-w-[860px] space-y-4">
+    <Page
+      title="Goals"
+      subtitle={subtitle}
+      right={
+        <div className="flex items-center gap-2">
+          <Chip
+            onClick={() => {
+              router.push("/money");
+              router.refresh();
+            }}
+            title="Back to Money"
+            className="border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50"
+          >
+            Money
+          </Chip>
+
+          <Button onClick={beginCreate} disabled={creating || !!editingId}>
+            New goal
+          </Button>
+        </div>
+      }
+    >
+      <div className="mx-auto w-full max-w-[900px] space-y-4">
+        {/* Focus spotlight */}
         <Card className="border-zinc-200 bg-white">
           <CardContent>
-            <div className="flex items-center justify-between gap-3 flex-wrap">
-              <div className="flex items-center gap-2 flex-wrap">
-                {auth === "loading" || loading ? <Chip>Loading…</Chip> : <Chip>Ready</Chip>}
-                {auth === "signed_in" ? <Badge>Signed in</Badge> : <Badge>Signed out</Badge>}
-                <Chip className="text-xs border-zinc-200 bg-white text-zinc-700">Money → Goals</Chip>
-              </div>
-
-              <div className="flex items-center gap-2 flex-wrap">
-                <Button variant="secondary" onClick={() => setFilter("all")}>
-                  All
-                </Button>
-                <Button variant="secondary" onClick={() => setFilter("p1")}>
-                  P1
-                </Button>
-                <Button variant="secondary" onClick={() => setFilter("p2")}>
-                  P2
-                </Button>
-                <Button variant="secondary" onClick={() => setFilter("p3")}>
-                  P3
-                </Button>
-              </div>
-            </div>
-
-            <div className="mt-3 flex items-center justify-between gap-3 flex-wrap">
-              <div className="text-xs text-zinc-600">
-                {filteredGoals.length} goal{filteredGoals.length === 1 ? "" : "s"} shown
-              </div>
-
-              <div className="flex items-center gap-2 flex-wrap">
-                {totals.length === 0 ? (
-                  <Chip className="text-xs border-zinc-200 bg-white text-zinc-700">No totals yet</Chip>
-                ) : (
-                  totals.map((t) => (
-                    <Chip key={t.cur} className="text-xs border-zinc-200 bg-white text-zinc-700" title="Sum of shown goals">
-                      Total ({t.cur}): {fmtMoney(t.cents, t.cur)}
-                    </Chip>
-                  ))
-                )}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Editor */}
-        <Card className="border-zinc-200 bg-white">
-          <CardContent>
-            <div className="flex items-center justify-between gap-3 flex-wrap">
-              <div className="text-sm font-semibold text-zinc-900">{editingId ? "Edit goal" : "Add a goal"}</div>
-
-              <div className="flex items-center gap-2">
-                <Button onClick={openEditorForNew} disabled={auth !== "signed_in" || saving}>
-                  New goal
-                </Button>
-              </div>
-            </div>
-
-            <div className="mt-3 grid gap-3 md:grid-cols-12">
-              <div className="md:col-span-6">
-                <div className="text-xs text-zinc-600 mb-1">Name</div>
-                <input
-                  ref={nameRef}
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="e.g. Emergency fund"
-                  className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
-                  disabled={auth !== "signed_in" || saving}
-                />
-              </div>
-
-              <div className="md:col-span-3">
-                <div className="text-xs text-zinc-600 mb-1">Target amount</div>
-                <input
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
-                  inputMode="decimal"
-                  placeholder="0.00"
-                  className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
-                  disabled={auth !== "signed_in" || saving}
-                />
-              </div>
-
-              <div className="md:col-span-3">
-                <div className="text-xs text-zinc-600 mb-1">Currency</div>
-                <select
-                  value={currency}
-                  onChange={(e) => setCurrency(e.target.value.toUpperCase())}
-                  className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
-                  disabled={auth !== "signed_in" || saving}
-                >
-                  <option value="AUD">AUD</option>
-                  <option value="USD">USD</option>
-                  <option value="NZD">NZD</option>
-                  <option value="EUR">EUR</option>
-                  <option value="GBP">GBP</option>
-                </select>
-              </div>
-
-              <div className="md:col-span-4">
-                <div className="text-xs text-zinc-600 mb-1">Target date (optional)</div>
-                <input
-                  value={targetDate}
-                  onChange={(e) => setTargetDate(e.target.value)}
-                  type="date"
-                  className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
-                  disabled={auth !== "signed_in" || saving}
-                />
-              </div>
-
-              <div className="md:col-span-4">
-                <div className="text-xs text-zinc-600 mb-1">Priority</div>
-                <div className="flex gap-2 flex-wrap">
-                  {[1, 2, 3].map((p) => (
-                    <button
-                      key={p}
-                      type="button"
-                      onClick={() => setPriority(p as 1 | 2 | 3)}
-                      className={[
-                        "rounded-full border px-3 py-2 text-xs transition",
-                        priority === p ? "border-zinc-900 bg-zinc-900 text-white" : "border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50",
-                      ].join(" ")}
-                      disabled={auth !== "signed_in" || saving}
-                      title={priorityLabel(p as 1 | 2 | 3)}
-                    >
-                      P{p}
-                    </button>
-                  ))}
+            <SectionHeader
+              title="Focus"
+              right={
+                <div className="flex items-center gap-2">
+                  {loadingGoals ? <Chip>Updating…</Chip> : <Chip>{sortedGoals.length} goals</Chip>}
                 </div>
-              </div>
-
-              <div className="md:col-span-12">
-                <div className="text-xs text-zinc-600 mb-1">Notes (optional)</div>
-                <textarea
-                  value={notes}
-                  onChange={(e) => setNotes(e.target.value)}
-                  placeholder="Anything that helps future-you understand this goal (constraints, why it matters, what counts)."
-                  className="w-full min-h-[84px] resize-y rounded-2xl border border-zinc-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
-                  disabled={auth !== "signed_in" || saving}
-                />
-              </div>
-            </div>
-
-            <div className="mt-3 flex items-center justify-between gap-2 flex-wrap">
-              <div className="text-xs text-zinc-600">
-                {name.trim() ? (
-                  <>
-                    {priorityLabel(priority)} • {fmtMoney(toCents(amount), currency)} • {softDueText(targetDate.trim() ? targetDate.trim() : null)}
-                  </>
-                ) : (
-                  <>Add a goal when you’re ready.</>
-                )}
-              </div>
-
-              <div className="flex items-center gap-2">
-                <Button onClick={saveGoal} disabled={auth !== "signed_in" || saving || !name.trim()}>
-                  {saving ? "Saving…" : "Save"}
-                </Button>
-                <Button variant="secondary" onClick={closeEditor} disabled={auth !== "signed_in" || saving || !editorOpen}>
-                  Clear
-                </Button>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* List */}
-        <Card className="border-zinc-200 bg-white">
-          <CardContent>
-            <div className="flex items-center justify-between gap-2 flex-wrap">
-              <div className="text-sm font-semibold text-zinc-900">Your goals</div>
-              <div className="text-xs text-zinc-500">Tap a goal to edit. Goals are calm anchors — not pressure.</div>
-            </div>
+              }
+            />
 
             <div className="mt-3">
-              {auth !== "signed_in" ? (
-                <div className="text-sm text-zinc-700">Sign in to use Goals.</div>
-              ) : loading ? (
-                <div className="space-y-3" aria-hidden="true">
-                  <div className="h-5 w-3/4 rounded bg-zinc-100" />
-                  <div className="h-5 w-2/3 rounded bg-zinc-100" />
-                  <div className="h-5 w-1/2 rounded bg-zinc-100" />
-                </div>
-              ) : filteredGoals.length === 0 ? (
+              {primaryGoal && normalizeStatus(primaryGoal.status) === "active" ? (
                 <div className="rounded-2xl border border-zinc-200 bg-white p-4">
-                  <div className="text-sm font-semibold text-zinc-900">No goals yet</div>
-                  <div className="mt-1 text-sm text-zinc-600">
-                    Add one small goal first. Once you have goals, Keystone can answer “can we afford this?” with real context.
-                  </div>
-                  <div className="mt-3">
-                    <Button onClick={openEditorForNew}>Add a goal</Button>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-[15px] font-semibold text-zinc-900 truncate">
+                        {String(primaryGoal.title ?? "Goal").trim() || "Goal"}
+                      </div>
+
+                      <div className="mt-1 text-xs text-zinc-600">
+                        {toInt(primaryGoal.target_cents) ? (
+                          <>
+                            {moneyFromCents(toInt(primaryGoal.current_cents) ?? 0, primaryGoal.currency)} /{" "}
+                            {moneyFromCents(toInt(primaryGoal.target_cents) ?? 0, primaryGoal.currency)}
+                          </>
+                        ) : (
+                          <>{moneyFromCents(toInt(primaryGoal.current_cents) ?? 0, primaryGoal.currency)} saved</>
+                        )}
+                        {primaryGoal.deadline_at ? <span> • target by {fmtDateShort(primaryGoal.deadline_at)}</span> : null}
+                      </div>
+
+                      {toInt(primaryGoal.target_cents) ? (
+                        <div className="mt-3 h-2 w-full rounded-full bg-zinc-100">
+                          <div
+                            className="h-2 rounded-full bg-zinc-300"
+                            style={{
+                              width: `${clamp(
+                                percent(toInt(primaryGoal.current_cents) ?? 0, toInt(primaryGoal.target_cents) ?? 0),
+                                0,
+                                100
+                              )}%`,
+                            }}
+                          />
+                        </div>
+                      ) : null}
+                    </div>
+
+                    <div className="shrink-0 flex items-center gap-2">
+                      <Chip onClick={() => setSelectedGoalId(primaryGoal.id)} className="text-xs" title="Open details">
+                        Open
+                      </Chip>
+                      <Chip onClick={() => beginEdit(primaryGoal)} className="text-xs" title="Edit">
+                        Edit
+                      </Chip>
+                    </div>
                   </div>
                 </div>
               ) : (
-                <ul className="space-y-2">
-                  {filteredGoals.map((g) => (
-                    <li key={g.id}>
-                      <button
-                        type="button"
-                        onClick={() => openEditorForEdit(g)}
-                        className="w-full rounded-2xl border border-zinc-200 bg-white p-3 text-left hover:bg-zinc-50"
-                        disabled={saving}
-                        title="Edit"
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <div className="truncate text-sm font-semibold text-zinc-900">{g.name}</div>
-                              <Chip className="text-xs border-zinc-200 bg-white text-zinc-700">P{g.priority}</Chip>
-                              {g.target_date ? (
-                                <Chip className="text-xs border-zinc-200 bg-white text-zinc-700">{fmtDatePretty(g.target_date)}</Chip>
-                              ) : (
-                                <Chip className="text-xs border-zinc-200 bg-white text-zinc-700">No date</Chip>
-                              )}
-                            </div>
+                <div className="rounded-2xl border border-zinc-200 bg-white p-4">
+                  <div className="text-[15px] leading-relaxed text-zinc-800">
+                    This is a calm anchor — not a dashboard.
+                  </div>
+                  <div className="mt-2 text-xs text-zinc-600">
+                    You can run multiple goals at once. If you enable “Primary”, Keystone can keep one goal in focus.
+                  </div>
 
-                            {g.notes ? (
-                              <div className="mt-1 line-clamp-2 text-xs leading-relaxed text-zinc-600">{g.notes}</div>
-                            ) : (
-                              <div className="mt-1 text-xs text-zinc-500">No notes</div>
-                            )}
-                          </div>
-
-                          <div className="shrink-0 text-right">
-                            <div className="text-sm font-semibold text-zinc-900">{fmtMoney(g.target_amount_cents, g.currency)}</div>
-                            <div className="mt-1 text-xs text-zinc-500">{softDueText(g.target_date)}</div>
-                          </div>
-                        </div>
-                      </button>
-
-                      <div className="mt-2 flex items-center justify-end gap-2">
-                        <Chip
-                          onClick={() => openEditorForEdit(g)}
-                          title="Edit"
-                          className="text-xs border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50"
-                        >
-                          Edit
-                        </Chip>
-                        <Chip
-                          onClick={() => void deleteGoal(g)}
-                          title="Delete"
-                          className="text-xs border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100"
-                        >
-                          Delete
-                        </Chip>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
+                  <div className="mt-3 flex items-center gap-2 flex-wrap">
+                    <Chip className="text-xs border-zinc-200 bg-white text-zinc-700">Multiple at once</Chip>
+                    {!goalsSupportPrimary ? (
+                      <Chip className="text-xs border-zinc-200 bg-white text-zinc-700" title="Run the optional migration to add is_primary">
+                        Primary not enabled
+                      </Chip>
+                    ) : null}
+                  </div>
+                </div>
               )}
             </div>
           </CardContent>
         </Card>
+
+        {/* Create / Edit */}
+        {(creating || editingId) && (
+          <Card className="border-zinc-200 bg-white">
+            <CardContent>
+              <SectionHeader title={editingId ? "Edit goal" : "New goal"} />
+
+              <div className="mt-3 grid gap-3 md:grid-cols-12">
+                <div className="md:col-span-6">
+                  <div className="text-xs text-zinc-600 mb-1">Name</div>
+                  <input
+                    className="w-full rounded-xl border border-zinc-200 px-3 py-2 bg-white"
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
+                    placeholder="e.g. $100k buffer"
+                  />
+                </div>
+
+                <div className="md:col-span-2">
+                  <div className="text-xs text-zinc-600 mb-1">Currency</div>
+                  <input
+                    className="w-full rounded-xl border border-zinc-200 px-3 py-2 bg-white"
+                    value={currency}
+                    onChange={(e) => setCurrency(e.target.value.toUpperCase())}
+                    placeholder="AUD"
+                  />
+                </div>
+
+                <div className="md:col-span-2">
+                  <div className="text-xs text-zinc-600 mb-1">Target</div>
+                  <input
+                    className="w-full rounded-xl border border-zinc-200 px-3 py-2 bg-white"
+                    value={target}
+                    onChange={(e) => setTarget(e.target.value)}
+                    placeholder="100000"
+                  />
+                </div>
+
+                <div className="md:col-span-2">
+                  <div className="text-xs text-zinc-600 mb-1">Already saved</div>
+                  <input
+                    className="w-full rounded-xl border border-zinc-200 px-3 py-2 bg-white"
+                    value={current}
+                    onChange={(e) => setCurrent(e.target.value)}
+                    placeholder="0"
+                  />
+                </div>
+
+                <div className="md:col-span-4">
+                  <div className="text-xs text-zinc-600 mb-1">Target date (optional)</div>
+                  <input
+                    type="date"
+                    className="w-full rounded-xl border border-zinc-200 px-3 py-2 bg-white"
+                    value={deadlineAt}
+                    onChange={(e) => setDeadlineAt(e.target.value)}
+                  />
+                </div>
+
+                <div className="md:col-span-8">
+                  <div className="text-xs text-zinc-600 mb-1">Notes (optional)</div>
+                  <input
+                    className="w-full rounded-xl border border-zinc-200 px-3 py-2 bg-white"
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value)}
+                    placeholder="What does this protect or unlock?"
+                  />
+                </div>
+              </div>
+
+              <div className="mt-4 flex items-center justify-between gap-2 flex-wrap">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Button onClick={() => void upsertGoal()}>{editingId ? "Save changes" : "Create goal"}</Button>
+                  <Button variant="secondary" onClick={resetForm}>
+                    Cancel
+                  </Button>
+                </div>
+
+                <div className="text-xs text-zinc-500">Start simple. You can refine later without losing the point.</div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Two-column layout */}
+        <div className="grid gap-4 md:grid-cols-12">
+          {/* Goals list */}
+          <div className="md:col-span-5">
+            <Card className="border-zinc-200 bg-white">
+              <CardContent>
+                <SectionHeader
+                  title="Your goals"
+                  right={
+                    <div className="flex items-center gap-2">
+                      {loadingGoals ? <Chip>Updating…</Chip> : null}
+                      <Chip className="text-xs">Multiple at once</Chip>
+                    </div>
+                  }
+                />
+
+                <div className="mt-3 space-y-3">
+                  {sortedGoals.length === 0 ? (
+                    <div className="rounded-2xl border border-zinc-200 bg-white p-4">
+                      <div className="text-[15px] leading-relaxed text-zinc-800">No goals yet.</div>
+                      <div className="mt-2 text-xs text-zinc-600">A goal is just a promise you can keep seeing.</div>
+                      <div className="mt-3">
+                        <Button onClick={beginCreate}>Create your first goal</Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      {activeGoals.length > 0 ? (
+                        <div className="space-y-2">
+                          <div className="text-xs font-semibold text-zinc-900">Active</div>
+                          {activeGoals.map((g) => (
+                            <GoalRow key={g.id} g={g} />
+                          ))}
+                        </div>
+                      ) : null}
+
+                      {pausedGoals.length > 0 ? (
+                        <div className="space-y-2 pt-1">
+                          <div className="text-xs font-semibold text-zinc-900">Paused</div>
+                          {pausedGoals.map((g) => (
+                            <GoalRow key={g.id} g={g} />
+                          ))}
+                        </div>
+                      ) : null}
+
+                      {doneGoals.length > 0 ? (
+                        <div className="space-y-2 pt-1">
+                          <div className="text-xs font-semibold text-zinc-900">Done</div>
+                          {doneGoals.map((g) => (
+                            <GoalRow key={g.id} g={g} />
+                          ))}
+                        </div>
+                      ) : null}
+
+                      {archivedGoals.length > 0 ? (
+                        <div className="space-y-2 pt-1">
+                          <div className="text-xs font-semibold text-zinc-900">Archived</div>
+                          {archivedGoals.map((g) => (
+                            <GoalRow key={g.id} g={g} />
+                          ))}
+                        </div>
+                      ) : null}
+                    </>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Selected goal detail */}
+          <div className="md:col-span-7">
+            <Card className="border-zinc-200 bg-white">
+              <CardContent>
+                <SectionHeader
+                  title="Details"
+                  right={selectedGoal ? <Chip className="text-xs">{statusPill(selectedStatus)}</Chip> : <Chip className="text-xs">Select one</Chip>}
+                />
+
+                {!selectedGoal ? (
+                  <div className="mt-3 rounded-2xl border border-zinc-200 bg-white p-4">
+                    <div className="text-[15px] leading-relaxed text-zinc-800">Choose a goal on the left.</div>
+                    <div className="mt-2 text-xs text-zinc-600">This is designed to feel like a calm anchor.</div>
+                  </div>
+                ) : (
+                  <div className="mt-3 space-y-4">
+                    {/* Summary card */}
+                    <div className="rounded-2xl border border-zinc-200 bg-white p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="text-[16px] font-semibold text-zinc-900 truncate">
+                            {String(selectedGoal.title ?? "Goal").trim() || "Goal"}
+                          </div>
+
+                          <div className="mt-1 text-xs text-zinc-600">
+                            {selectedStatus}
+                            {selectedGoal.deadline_at ? <span> • target by {fmtDateShort(selectedGoal.deadline_at)}</span> : null}
+                            {selectedIsPrimary ? <span> • primary</span> : null}
+                          </div>
+
+                          <div className="mt-3 grid gap-2">
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="text-xs text-zinc-600">Saved so far</div>
+                              <div className="text-xs font-semibold text-zinc-900">{selectedComputed?.curStr}</div>
+                            </div>
+
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="text-xs text-zinc-600">Target</div>
+                              <div className="text-xs font-semibold text-zinc-900">{selectedComputed?.tgtStr}</div>
+                            </div>
+
+                            {selectedComputed?.remaining != null ? (
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="text-xs text-zinc-600">Remaining</div>
+                                <div className="text-xs font-semibold text-zinc-900">{selectedComputed?.remainingStr}</div>
+                              </div>
+                            ) : null}
+                          </div>
+
+                          {/* Progress bar */}
+                          {selectedComputed && selectedComputed.tgt > 0 ? (
+                            <div className="mt-3">
+                              <div className="flex items-center justify-between text-xs text-zinc-600">
+                                <span>{selectedComputed.p}%</span>
+                                <span>{moneyFromCents(selectedComputed.tgt, selectedGoal.currency)}</span>
+                              </div>
+                              <div className="mt-2 h-2 w-full rounded-full bg-zinc-100">
+                                <div
+                                  className="h-2 rounded-full bg-zinc-300"
+                                  style={{ width: `${clamp(selectedComputed.p, 0, 100)}%` }}
+                                />
+                              </div>
+                            </div>
+                          ) : null}
+
+                          {selectedGoal.notes ? (
+                            <div className="mt-3 text-[13px] leading-relaxed text-zinc-700 whitespace-pre-wrap">
+                              {String(selectedGoal.notes)}
+                            </div>
+                          ) : null}
+                        </div>
+
+                        {/* Top right actions */}
+                        <div className="shrink-0 flex flex-col items-end gap-2">
+                          <div className="flex items-center gap-2">
+                            {canPinSelected ? (
+                              <Chip
+                                onClick={() => void markPrimary(selectedGoal)}
+                                className="text-xs"
+                                title={selectedIsPrimary ? "Primary already" : "Set as primary"}
+                              >
+                                {selectedIsPrimary ? "Primary" : "Set primary"}
+                              </Chip>
+                            ) : null}
+
+                            {canEditSelected ? (
+                              <Chip onClick={() => beginEdit(selectedGoal)} className="text-xs" title="Edit">
+                                Edit
+                              </Chip>
+                            ) : null}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Progress update */}
+                    <div className="rounded-2xl border border-zinc-200 bg-white p-4">
+                      <SectionHeader
+                        title="Progress"
+                        right={
+                          canShowDelta ? (
+                            <div className="flex items-center gap-2">
+                              <Chip className="text-xs" title="Use - to subtract">
+                                + / -
+                              </Chip>
+                              {loadingUpdates ? <Chip className="text-xs">Updating…</Chip> : null}
+                            </div>
+                          ) : (
+                            <Chip className="text-xs">Archived</Chip>
+                          )
+                        }
+                      />
+
+                      {canShowDelta ? (
+                        <>
+                          <div className="mt-3 flex flex-wrap items-center gap-2">
+                            <Chip onClick={() => void quickAdd(10)} className="text-xs" title="Add $10">
+                              +$10
+                            </Chip>
+                            <Chip onClick={() => void quickAdd(50)} className="text-xs" title="Add $50">
+                              +$50
+                            </Chip>
+                            <Chip onClick={() => void quickAdd(200)} className="text-xs" title="Add $200">
+                              +$200
+                            </Chip>
+                            <Chip onClick={() => void quickAdd(1000)} className="text-xs" title="Add $1000">
+                              +$1000
+                            </Chip>
+
+                            <div className="w-px h-5 bg-zinc-100 mx-1" />
+
+                            <Chip onClick={() => void quickSubtract(10)} className="text-xs" title="Subtract $10">
+                              -$10
+                            </Chip>
+                            <Chip onClick={() => void quickSubtract(50)} className="text-xs" title="Subtract $50">
+                              -$50
+                            </Chip>
+                          </div>
+
+                          <div className="mt-3 grid gap-3 md:grid-cols-12">
+                            <div className="md:col-span-4">
+                              <div className="text-xs text-zinc-600 mb-1">Amount</div>
+                              <input
+                                ref={deltaRef}
+                                className="w-full rounded-xl border border-zinc-200 px-3 py-2 bg-white"
+                                value={delta}
+                                onChange={(e) => setDelta(e.target.value)}
+                                placeholder="e.g. 50 or -20"
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") {
+                                    e.preventDefault();
+                                    void addProgress();
+                                  }
+                                }}
+                              />
+                            </div>
+
+                            <div className="md:col-span-8">
+                              <div className="text-xs text-zinc-600 mb-1">Note (optional)</div>
+                              <input
+                                className="w-full rounded-xl border border-zinc-200 px-3 py-2 bg-white"
+                                value={deltaNote}
+                                onChange={(e) => setDeltaNote(e.target.value)}
+                                placeholder="e.g. sold marketplace items"
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") {
+                                    e.preventDefault();
+                                    void addProgress();
+                                  }
+                                }}
+                              />
+                            </div>
+                          </div>
+
+                          <div className="mt-3 flex items-center justify-between gap-2 flex-wrap">
+                            <Button onClick={() => void addProgress()}>Save progress</Button>
+                            <div className="text-xs text-zinc-500">This updates the goal total. Updates feed is best-effort.</div>
+                          </div>
+
+                          {/* Recent updates */}
+                          <div className="mt-4">
+                            <div className="text-xs font-semibold text-zinc-900 mb-2">Recent</div>
+
+                            {updates.length === 0 ? (
+                              <div className="text-xs text-zinc-600">No updates recorded yet.</div>
+                            ) : (
+                              <div className="space-y-2">
+                                {updates.slice(0, 8).map((u) => {
+                                  const when = u.created_at ? relativeDayLabel(u.created_at) : "—";
+                                  const sign = u.delta_cents >= 0 ? "+" : "−";
+                                  const amt = moneyFromCents(Math.abs(u.delta_cents), selectedGoal.currency);
+                                  return (
+                                    <div key={u.id} className="flex items-start justify-between gap-3 rounded-xl border border-zinc-200 bg-white px-3 py-2">
+                                      <div className="min-w-0">
+                                        <div className="text-xs text-zinc-900">
+                                          <span className="font-semibold">{sign + amt}</span>
+                                          {u.note ? <span className="text-zinc-700"> — {u.note}</span> : null}
+                                        </div>
+                                        <div className="text-[11px] text-zinc-500 mt-0.5">{when}</div>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        </>
+                      ) : (
+                        <div className="mt-3 text-sm text-zinc-700">This goal is archived. Restore it to update progress.</div>
+                      )}
+                    </div>
+
+                    {/* Status + safety */}
+                    <div className="rounded-2xl border border-zinc-200 bg-white p-4">
+                      <SectionHeader title="State" right={<Chip className="text-xs">Safe changes</Chip>} />
+
+                      <div className="mt-3 flex flex-wrap items-center gap-2">
+                        <Chip
+                          onClick={() => void setGoalStatus(selectedGoal, "active")}
+                          className="text-xs"
+                          title="Mark active"
+                        >
+                          Active
+                        </Chip>
+                        <Chip
+                          onClick={() => void setGoalStatus(selectedGoal, "paused")}
+                          className="text-xs"
+                          title="Pause this goal"
+                        >
+                          Pause
+                        </Chip>
+                        <Chip
+                          onClick={() => void setGoalStatus(selectedGoal, "done")}
+                          className="text-xs"
+                          title="Mark done"
+                        >
+                          Done
+                        </Chip>
+                        <Chip
+                          onClick={() => void setGoalStatus(selectedGoal, "archived")}
+                          className="text-xs"
+                          title="Archive"
+                        >
+                          Archive
+                        </Chip>
+
+                        <div className="w-px h-5 bg-zinc-100 mx-1" />
+
+                        <Chip
+                          onClick={() => void deleteGoal(selectedGoal)}
+                          className="text-xs border-rose-200 bg-rose-50 text-rose-700"
+                          title="Archive (or delete if already archived)"
+                        >
+                          Remove
+                        </Chip>
+                      </div>
+
+                      <div className="mt-2 text-xs text-zinc-500">
+                        “Remove” will archive first. Only archived goals are deleted.
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        </div>
       </div>
     </Page>
   );
