@@ -28,8 +28,11 @@ export function AttachmentsBlock(props: {
   initial?: AttachmentMeta[] | null;
   title?: string; // e.g. "Attachments"
   bucket?: string; // default "captures" for fastest V1
+
+  // ✅ NEW: allows parent to show imported-from-capture count in the subtitle
+  extraImportedCount?: number;
 }) {
-  const { userId, decisionId, initial, title = "Attachments", bucket = "captures" } = props;
+  const { userId, decisionId, initial, title = "Attachments", bucket = "captures", extraImportedCount = 0 } = props;
 
   const [files, setFiles] = useState<File[]>([]);
   const [saving, setSaving] = useState(false);
@@ -135,10 +138,18 @@ export function AttachmentsBlock(props: {
   };
 
   const subtitle = useMemo(() => {
-    if (attachments.length === 0 && files.length === 0) return "No attachments.";
+    // While files are staged, that status takes priority
     if (files.length > 0) return `${files.length} ready to upload`;
-    return `${attachments.length} attached`;
-  }, [attachments.length, files.length]);
+
+    const savedCount = attachments.length;
+    const importedCount = Math.max(0, extraImportedCount);
+
+    if (savedCount === 0 && importedCount === 0) return "No attachments.";
+    if (savedCount === 0 && importedCount > 0) return `${importedCount} imported`;
+    if (savedCount > 0 && importedCount === 0) return `${savedCount} attached`;
+
+    return `${savedCount} attached • ${importedCount} imported`;
+  }, [attachments.length, files.length, extraImportedCount]);
 
   return (
     <div
