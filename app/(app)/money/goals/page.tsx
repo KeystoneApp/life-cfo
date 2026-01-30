@@ -148,21 +148,26 @@ export default function GoalsPage() {
   const router = useRouter();
 
   const toastApi: any = useToast();
-  const showToast =
-    toastApi?.showToast ??
-    ((args: any) => {
-      if (toastApi?.toast) {
-        toastApi.toast({
-          title: args?.title ?? "Done",
-          description: args?.description ?? args?.message ?? "",
-          variant: args?.variant,
-          action: args?.action,
-        });
-      }
-    });
 
   const notify = (opts: { title?: string; description?: string; variant?: any }) => {
-    showToast({ title: opts.title, description: opts.description, variant: opts.variant });
+    const title = String(opts.title ?? "Done");
+    const description = String(opts.description ?? "");
+    const variant = opts.variant;
+
+    // Prefer the underlying toast() API (most reliable)
+    if (typeof toastApi?.toast === "function") {
+      toastApi.toast({ title, description, variant });
+      return;
+    }
+
+    // If your implementation uses showToast(), pass the exact shape it expects
+    if (typeof toastApi?.showToast === "function") {
+      toastApi.showToast({ title, description, variant });
+      return;
+    }
+
+    // Last resort: avoid silent failures
+    console.warn("Toast API not available", { title, description, variant });
   };
 
   const [userId, setUserId] = useState<string | null>(null);
@@ -377,8 +382,21 @@ export default function GoalsPage() {
       return;
     }
 
-    const targetCents = parseMoneyToCents(target);
-    const currentCents = parseMoneyToCents(current);
+    // Your DB requires NOT NULL, so "no target" becomes 0 (save-as-much-as-possible mode)
+    const targetCentsRaw = parseMoneyToCents(target);
+    const currentCentsRaw = parseMoneyToCents(current);
+
+    if (target && targetCentsRaw == null) {
+      notify({ title: "Target looks off", description: "Enter a number like 10000 or 10000.50" });
+      return;
+    }
+    if (current && currentCentsRaw == null) {
+      notify({ title: "Progress looks off", description: "Enter a number like 1200 or 1200.50" });
+      return;
+    }
+
+    const targetCents = targetCentsRaw ?? 0;
+    const currentCents = currentCentsRaw ?? 0;
 
     if (target && targetCents == null) {
       notify({ title: "Target looks off", description: "Enter a number like 10000 or 10000.50" });
@@ -408,8 +426,10 @@ export default function GoalsPage() {
       user_id: userId,
       title: t,
       currency: (currency || "AUD").toUpperCase(),
-      target_cents: targetCents ?? null,
-      current_cents: currentCents ?? null,
+      target_cents: targetCents,
+      current_cents: currentCents,
+      // keep both if both columns exist (harmless if one is ignored by your select("*"))
+      target_date: deadlineAt.trim() ? deadlineAt.trim() : null,
       deadline_at: deadlineIso,
       notes: notes.trim() ? notes.trim() : null,
       status: "active",
