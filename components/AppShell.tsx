@@ -123,6 +123,10 @@ export function AppShell({ children }: AppShellProps) {
     { href: "/accounts", label: "Accounts" },
     { href: "/net-worth", label: "Net Worth" },
     { href: "/liabilities", label: "Liabilities" },
+
+    // ✅ NEW — Goals (Money → Goals)
+    { href: "/money/goals", label: "Goals" },
+
     { href: "/bills", label: "Bills" },
     { href: "/income", label: "Income" },
     { href: "/investments", label: "Investments" },
