@@ -53,13 +53,6 @@ export default function PlannedUpgradesPage() {
           subtitle="High confidence. These are already part of the intended direction."
           items={[
             "More automation of Money inputs (less manual entry over time).",
-            "Engine becoming fully background/automatic (invisible to the user).",
-            "Assisted retrieval everywhere (recognition-first search across Bills, Accounts, Decisions, etc.).",
-            "Smarter Home orientation (gentle surfacing in human language — no dashboards).",
-            "Per-page feedback prompts (lightweight, optional, in-context).",
-            "File attachments in Framing/Thinking (so evidence can live with the decision).",
-            "Clearer Back/Next flow consistency across pages (without adding more buttons everywhere).",
-            "Smarter AI framing improvements (helpful, non-duplicative, calm).",
           ]}
         />
 
@@ -69,7 +62,6 @@ export default function PlannedUpgradesPage() {
           items={[
             "Deeper decision constellations (better linking, related decisions, and recall).",
             "More meaning-layer tools (stronger Domains/Groups organisation and browsing).",
-            "A richer Net Worth story (optionally: assets vs liabilities beyond accounts, and future planning views).",
             "Money intelligence upgrades (safe planning surfaces; optional, never overwhelming).",
             "A more complete family context layer to support better decision reasoning over time.",
           ]}

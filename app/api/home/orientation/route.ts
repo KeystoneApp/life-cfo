@@ -14,12 +14,12 @@ function pickSentence(input: {
   hasIncome: boolean;
   hasBills: boolean;
 }) {
-  // Priority: Framing -> Revisit -> Bills -> steady -> silence
+  // Priority: Revisit -> Bills -> steady -> silence
 
   if (input.hasUnframedCapture) {
     return {
       text: "There’s something waiting to be shaped into a decision.",
-      href: "/framing",
+      href: "/capture",
     };
   }
 

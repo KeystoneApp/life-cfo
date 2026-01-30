@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { Card, CardContent } from "@/components/ui";
 
-type Kind = "framing" | "thinking";
+type Kind = "thinking";
 
 type Props = {
   decisionId: string;
@@ -24,7 +24,7 @@ function useDebouncedCallback(fn: () => void, delayMs: number) {
 export function DecisionNotes({ decisionId, kind, label }: Props) {
   const title = useMemo(() => {
     if (label) return label;
-    return kind === "framing" ? "Notes" : "Scratchpad";
+    return "Scratchpad";
   }, [kind, label]);
 
   const [open, setOpen] = useState(false);
@@ -140,7 +140,7 @@ export function DecisionNotes({ decisionId, kind, label }: Props) {
                 setText(e.target.value);
                 debouncedSave();
               }}
-              placeholder={kind === "framing" ? "Why this matters, constraints, values signals…" : "Anything you’re thinking through…"}
+              placeholder={kind === "thinking" ? "Why this matters, constraints, values signals…" : "Anything you’re thinking through…"}
               className="min-h-[90px] w-full resize-none rounded-xl border border-zinc-200 bg-white p-3 text-sm text-zinc-900 outline-none focus:border-zinc-300"
             />
           </div>

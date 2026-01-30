@@ -10,7 +10,7 @@ import { createClient } from "@supabase/supabase-js";
  * - Intent classification
  * - Safe data retrieval
  * - Grounded snapshot building
- * - Escalation to Framing
+ * - Escalation to Capture seed (Framing-style)
  *
  * ❗️NO UI
  * ❗️NO side effects
@@ -30,17 +30,19 @@ export type AskAction =
   | "open_money"
   | "open_decisions"
   | "open_review"
-  | "create_framing"
+  | "create_capture"
   | "none";
 
 export type AskResult = {
   answer: string;
   action: AskAction;
-  suggested_next?: "create_framing";
+  suggested_next?: "create_capture";
+  // NOTE: kept name "framing_seed" to avoid breaking callers,
+  // but it represents a Capture seed (title + prompt + notes).
   framing_seed?: {
     title: string;
-    knowns: string[];
-    unknowns: string[];
+    prompt: string;
+    notes: string[];
   };
 };
 
@@ -113,17 +115,14 @@ export async function resolveHomeAsk(args: {
             }).format(b.amount_cents / 100)
           : "—";
 
-      const due = b.next_due_at
-        ? new Date(b.next_due_at).toLocaleDateString()
-        : "—";
+      const due = b.next_due_at ? new Date(b.next_due_at).toLocaleDateString() : "—";
 
-      return `• ${b.name} — ${due} — ${amt}${b.autopay ? " (autopay)" : ""}`;
+      const name = String(b.name ?? "Bill").trim() || "Bill";
+      return `• ${name} — ${due} — ${amt}${b.autopay ? " (autopay)" : ""}`;
     });
 
     return {
-      answer: `In the next 30 days (until ${end.toLocaleDateString()}), you have:\n\n${lines.join(
-        "\n"
-      )}`,
+      answer: `In the next 30 days (until ${end.toLocaleDateString()}), you have:\n\n${lines.join("\n")}`,
       action: "open_bills",
     };
   }
@@ -144,25 +143,23 @@ export async function resolveHomeAsk(args: {
 
     const { data: upcomingBills } = await supabase
       .from("recurring_bills")
-      .select("name,amount_cents,next_due_at")
+      .select("name,amount_cents,currency,next_due_at")
       .eq("user_id", userId)
       .eq("active", true)
       .gte("next_due_at", nowIso)
       .limit(6);
 
+    // Note: conservative — if currencies are mixed, we still present a single AUD total
+    // (matches current V1 assumptions in this resolver). This is framing-only.
     const cashTotal =
       accounts?.reduce((sum, a) => {
-        const n =
-          typeof a.current_balance_cents === "number"
-            ? a.current_balance_cents
-            : 0;
+        const n = typeof a.current_balance_cents === "number" ? a.current_balance_cents : 0;
         return sum + n;
       }, 0) ?? 0;
 
     const billTotal =
       upcomingBills?.reduce((sum, b) => {
-        const n =
-          typeof b.amount_cents === "number" ? b.amount_cents : 0;
+        const n = typeof b.amount_cents === "number" ? b.amount_cents : 0;
         return sum + n;
       }, 0) ?? 0;
 
@@ -179,20 +176,20 @@ export async function resolveHomeAsk(args: {
           currency: "AUD",
         }).format(billTotal / 100)}`,
         ``,
-        `What would make this feel safe is keeping a clear buffer and confirming timing.`,
+        `I can’t say “yes” or “no” from here — but we can frame it so it’s safe and clear.`,
       ].join("\n"),
       action: "open_money",
-      suggested_next: "create_framing",
+      suggested_next: "create_capture",
       framing_seed: {
         title: question,
-        knowns: [
-          "Current cash position",
-          "Known upcoming commitments",
-        ],
-        unknowns: [
-          "Exact timing",
-          "Whether this is one-off or recurring",
-          "Which account it would come from",
+        prompt: question,
+        notes: [
+          "Goal: assess affordability without granting permission",
+          "Known: current cash position (accounts)",
+          "Known: upcoming commitments (active recurring bills)",
+          "Unknown: exact timing and which account it comes from",
+          "Unknown: whether this is one-off or recurring",
+          "Unknown: the buffer you want to keep",
         ],
       },
     };
@@ -204,14 +201,13 @@ export async function resolveHomeAsk(args: {
    * ============================
    */
   return {
-    answer:
-      "I can’t confidently answer that yet with the data I have. If this feels important, we can frame it properly.",
+    answer: "I can’t confidently answer that yet with the data I have. If this matters, we can capture it properly.",
     action: "none",
-    suggested_next: "create_framing",
+    suggested_next: "create_capture",
     framing_seed: {
       title: question,
-      knowns: [],
-      unknowns: ["More context is needed"],
+      prompt: question,
+      notes: ["More context is needed to answer safely from data."],
     },
   };
 }

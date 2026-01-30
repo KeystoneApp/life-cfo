@@ -109,7 +109,6 @@ export function AppShell({ children }: AppShellProps) {
 
   const decideItems: NavItem[] = [
     { href: "/capture", label: "Capture" },
-    { href: "/framing", label: "Framing" },
     { href: "/thinking", label: "Thinking" },
   ];
 

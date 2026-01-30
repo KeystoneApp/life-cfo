@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
 type Action = "open_bills" | "open_money" | "open_decisions" | "open_review" | "open_chapters" | "none";
-type SuggestedNext = "none" | "create_framing";
+type SuggestedNext = "none" | "create_capture" | "open_thinking";
 
 type AskRequest = { userId: string; question: string };
 
@@ -20,7 +20,7 @@ function isAction(x: unknown): x is Action {
   );
 }
 function isSuggestedNext(x: unknown): x is SuggestedNext {
-  return typeof x === "string" && (["none", "create_framing"] as const).includes(x as SuggestedNext);
+  return typeof x === "string" && (["none", "create_capture", "open_thinking"] as const).includes(x as SuggestedNext);
 }
 
 function monthBoundsLocal() {
@@ -168,7 +168,7 @@ async function buildFactsPack(userId: string) {
 
   const decisions_open = (decisions ?? []) as DecisionFact[];
 
-  // ✅ Step 8: deterministic, capped preview titles (read-only enrichment; fail-soft)
+  // ✅ deterministic, capped preview titles (read-only enrichment; fail-soft)
   type OpenDecisionPreviewRow = { title: string | null; created_at: string | null };
 
   let openDecisionTitles: string[] = [];
@@ -190,7 +190,7 @@ async function buildFactsPack(userId: string) {
     openDecisionTitles = [];
   }
 
-  // ✅ Step 9: FAMILY (family_members) + PETS — read-only, fail-soft
+  // ✅ FAMILY (family_members) + PETS — read-only, fail-soft
   let familyMembers: Array<{
     id: string;
     name: string;
@@ -259,7 +259,7 @@ async function buildFactsPack(userId: string) {
     pets = [];
   }
 
-  // ✅ Step 9b: REVIEW (scheduled, not yet reviewed) — read-only, fail-soft
+  // ✅ REVIEW (scheduled, not yet reviewed) — read-only, fail-soft
   type ReviewRow = { id: string; title: string | null; review_at: string | null; reviewed_at: string | null };
 
   let reviewItems: Array<{ id: string; title: string; review_at: string }> = [];
@@ -271,7 +271,7 @@ async function buildFactsPack(userId: string) {
       .select("id,title,review_at,reviewed_at")
       .eq("user_id", userId)
       .not("review_at", "is", null)
-      .is("reviewed_at", null) // only pending reviews
+      .is("reviewed_at", null)
       .order("review_at", { ascending: true })
       .limit(10);
 
@@ -291,8 +291,14 @@ async function buildFactsPack(userId: string) {
     reviewItems = [];
   }
 
-  // ✅ Step 10: CHAPTERS (matches Chapters page; fallback supports chaptered_at)
-  type ChapterRow = { id: string; title: string | null; chaptered_at: string | null; status: string | null; created_at: string | null };
+  // ✅ CHAPTERS
+  type ChapterRow = {
+    id: string;
+    title: string | null;
+    chaptered_at: string | null;
+    status: string | null;
+    created_at: string | null;
+  };
 
   let chapterItems: Array<{ id: string; title: string; chaptered_at: string | null }> = [];
   let chaptersErrFlag = false;
@@ -302,7 +308,6 @@ async function buildFactsPack(userId: string) {
       .from("decisions")
       .select("id,title,chaptered_at,status,created_at")
       .eq("user_id", userId)
-      // prefer exact UI contract (status='chapter') but allow fallback when only chaptered_at is used
       .or("status.eq.chapter,chaptered_at.not.is.null")
       .order("chaptered_at", { ascending: false, nullsFirst: false })
       .order("created_at", { ascending: false })
@@ -397,8 +402,6 @@ async function buildFactsPack(userId: string) {
       autopay: !!b.autopay,
       cadence: b.cadence ?? null,
     })),
-
-    // existing (kept)
     decisions_open: decisions_open.map((d) => ({
       id: d.id,
       title: String(d.title ?? "Decision").trim(),
@@ -408,15 +411,11 @@ async function buildFactsPack(userId: string) {
       review_at: d.review_at ?? null,
       reviewed_at: (d as any).reviewed_at ?? null,
     })),
-
-    // ✅ Step 8 (kept): count + titles (titles are capped, deterministic, read-only)
     open_decisions_preview: {
       count: decisions_open.length,
       titles: openDecisionTitles,
       notes: "Preview titles are capped (max 3) and ordered by created_at ascending. Use only these titles when giving examples.",
     },
-
-    // ✅ Step 9 (kept): Family + Pets
     family: {
       count_members: familyMembers.length,
       members: familyMembers,
@@ -425,21 +424,16 @@ async function buildFactsPack(userId: string) {
       notes:
         "Family is read-only. Ages are approximate (derived from birth_year). Relationships are free-text if provided. Pets are included as part of the household.",
     },
-
-    // ✅ Step 9b (kept): Review (pending only)
     review: {
       count: reviewItems.length,
       upcoming: reviewItems.slice(0, 3),
       notes: "Review items are decisions with a review_at date that have not been reviewed yet (reviewed_at is null). Read-only.",
     },
-
-    // ✅ Step 10 (new): Chapters
     chapters: {
       count: chapterItems.length,
       recent: chapterItems.slice(0, 3),
       notes: "Chapters are completed decisions kept for reference (status='chapter' or chaptered_at set). Read-only.",
     },
-
     money_summary: {
       balances_by_currency: balancesEntries.map(([currency, cents]) => ({
         currency,
@@ -501,7 +495,7 @@ REVIEW:
     - Never say "due".
   - Keep tone calm and non-urgent.
 - Set action="open_review" for review questions.
-- Do not suggest action. Do not escalate to framing.
+- Do not suggest action.
 - If no review items exist, say so plainly and STOP.
 
 CHAPTERS:
@@ -515,9 +509,8 @@ CHAPTERS:
 
 AFFORD / SHOULD-WE:
 - Never grant permission.
-- Provide a bounded frame (accounts + upcoming bills).
-- If it needs more context/tradeoffs/missing inputs, set suggested_next="create_framing"
-  and include framing_seed (title, prompt, notes[]).
+- Provide a bounded frame (accounts + upcoming bills) if relevant.
+- If it needs more context/tradeoffs/missing inputs, set suggested_next="create_capture"
 
 Return JSON only matching schema.
 `.trim();
@@ -545,7 +538,7 @@ export async function POST(req: Request) {
           answer: "There are no items scheduled for review (from what I can see).",
           action: "open_review",
           suggested_next: "none",
-          framing_seed: null,
+          capture_seed: null,
         });
       }
 
@@ -562,7 +555,7 @@ export async function POST(req: Request) {
         answer,
         action: "open_review",
         suggested_next: "none",
-        framing_seed: null,
+        capture_seed: null,
       });
     }
 
@@ -577,7 +570,7 @@ export async function POST(req: Request) {
           answer: "There are no chapters yet (from what I can see).",
           action: "open_chapters",
           suggested_next: "none",
-          framing_seed: null,
+          capture_seed: null,
         });
       }
 
@@ -594,7 +587,7 @@ export async function POST(req: Request) {
         answer,
         action: "open_chapters",
         suggested_next: "none",
-        framing_seed: null,
+        capture_seed: null,
       });
     }
 
@@ -618,8 +611,8 @@ export async function POST(req: Request) {
                 type: "string",
                 enum: ["open_bills", "open_money", "open_decisions", "open_review", "open_chapters", "none"],
               },
-              suggested_next: { type: "string", enum: ["none", "create_framing"] },
-              framing_seed: {
+              suggested_next: { type: "string", enum: ["none", "create_capture", "open_thinking"] },
+              capture_seed: {
                 anyOf: [
                   { type: "null" },
                   {
@@ -635,7 +628,7 @@ export async function POST(req: Request) {
                 ],
               },
             },
-            required: ["answer", "action", "suggested_next", "framing_seed"],
+            required: ["answer", "action", "suggested_next", "capture_seed"],
           },
         },
       },
@@ -648,7 +641,7 @@ export async function POST(req: Request) {
       parsed = JSON.parse(raw);
     } catch {
       return NextResponse.json(
-        { answer: "I couldn’t format that safely. Try again.", action: "none", suggested_next: "none", framing_seed: null },
+        { answer: "I couldn’t format that safely. Try again.", action: "none", suggested_next: "none", capture_seed: null },
         { status: 502 }
       );
     }
@@ -659,18 +652,18 @@ export async function POST(req: Request) {
     const action: Action = isAction(obj.action) ? (obj.action as Action) : "none";
     const suggested_next: SuggestedNext = isSuggestedNext(obj.suggested_next) ? (obj.suggested_next as SuggestedNext) : "none";
 
-    const framing_seed =
-      suggested_next === "create_framing" && obj.framing_seed && typeof obj.framing_seed === "object"
+    const capture_seed =
+      suggested_next === "create_capture" && obj.capture_seed && typeof obj.capture_seed === "object"
         ? {
-            title: String((obj.framing_seed as any).title ?? "").slice(0, 120) || "Decision to frame",
-            prompt: String((obj.framing_seed as any).prompt ?? "").slice(0, 2000) || "",
-            notes: Array.isArray((obj.framing_seed as any).notes)
-              ? ((obj.framing_seed as any).notes as unknown[]).map((x: unknown) => String(x)).slice(0, 10)
+            title: String((obj.capture_seed as any).title ?? "").slice(0, 120) || "Capture",
+            prompt: String((obj.capture_seed as any).prompt ?? "").slice(0, 2000) || "",
+            notes: Array.isArray((obj.capture_seed as any).notes)
+              ? ((obj.capture_seed as any).notes as unknown[]).map((x: unknown) => String(x)).slice(0, 10)
               : [],
           }
         : null;
 
-    return NextResponse.json({ answer, action, suggested_next, framing_seed });
+    return NextResponse.json({ answer, action, suggested_next, capture_seed });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : "Unknown error";
     return NextResponse.json({ error: msg }, { status: 500 });

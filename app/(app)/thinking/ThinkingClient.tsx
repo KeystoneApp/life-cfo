@@ -851,7 +851,7 @@ export default function ThinkingClient() {
               const customDate = customDateById[d.id] ?? "";
 
               const originLabel =
-                d.origin === "capture" ? "Sent from Capture." : d.origin === "framing" ? "Prepared in Framing." : "";
+                d.origin === "capture" ? "Sent from Capture." : "";
 
               const parts = splitThinkingContext(d.context);
               const originalSnapshot = originalCaptureById[d.id] ?? { title: d.title ?? "", captured: parts.captured ?? "" };

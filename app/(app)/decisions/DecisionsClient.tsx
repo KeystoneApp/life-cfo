@@ -557,7 +557,7 @@ export default function DecisionsClient() {
             <CardContent>
               <div className="space-y-2">
                 <div className="text-sm font-semibold text-zinc-900">Nothing committed yet.</div>
-                <div className="text-sm text-zinc-600">Capture → Framing → Thinking. When you decide, it lands here.</div>
+                <div className="text-sm text-zinc-600">Capture → Thinking → Decisions. When you decide, it lands here.</div>
               </div>
             </CardContent>
           </Card>

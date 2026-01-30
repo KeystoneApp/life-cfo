@@ -2,7 +2,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { Page } from "@/components/Page";
 import { Card, CardContent, Chip } from "@/components/ui";
@@ -87,6 +87,9 @@ function normalizeForCompare(s: string) {
 
 export default function CapturePage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+
+  const openId = (searchParams?.get("open") || "").trim();
 
   const [userId, setUserId] = useState<string | null>(null);
 
@@ -148,6 +151,13 @@ export default function CapturePage() {
       mounted = false;
     };
   }, []);
+
+  // ✅ If we were deep-linked to a specific capture, ensure it will be visible.
+  useEffect(() => {
+    if (!openId) return;
+    setShowAll(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openId]);
 
   const flashAffirmation = (msg: string, ms = 1500) => {
     setAffirmation(msg);
@@ -299,6 +309,22 @@ export default function CapturePage() {
     clearSelection();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showAll]);
+
+  // ✅ If deep-linked to a capture id, select it and scroll to it once loaded.
+  useEffect(() => {
+    if (!openId) return;
+    if (!hasLoaded) return;
+
+    const exists = recent.some((r) => r.id === openId);
+    if (!exists) return;
+
+    setSelected({ [openId]: true });
+
+    window.setTimeout(() => {
+      const el = document.getElementById(`cap-${openId}`);
+      if (el) el.scrollIntoView({ block: "center", behavior: "smooth" });
+    }, 0);
+  }, [openId, hasLoaded, recent]);
 
   const requestDelete = (ids: string[], all: boolean) => {
     if (ids.length === 0) return;
@@ -834,7 +860,9 @@ export default function CapturePage() {
             {/* “Sent to Thinking” prompt (no auto-nav) */}
             {pushedDecisionIds.length > 0 ? (
               <div className="mt-4 flex items-center justify-between rounded-2xl border border-zinc-200 bg-white px-4 py-3">
-                <div className="text-sm text-zinc-700">Sent to Thinking{pushedDecisionIds.length === 1 ? "." : ` (${pushedDecisionIds.length}).`}</div>
+                <div className="text-sm text-zinc-700">
+                  Sent to Thinking{pushedDecisionIds.length === 1 ? "." : ` (${pushedDecisionIds.length}).`}
+                </div>
                 <Chip onClick={() => router.push("/thinking")} title="Go to Thinking">
                   Go to Thinking <span className="ml-1 opacity-70">›</span>
                 </Chip>
@@ -921,7 +949,7 @@ export default function CapturePage() {
                     const checked = !!selected[r.id];
 
                     return (
-                      <div key={r.id} className="rounded-2xl border border-zinc-200 bg-white px-4 py-3">
+                      <div id={`cap-${r.id}`} key={r.id} className="rounded-2xl border border-zinc-200 bg-white px-4 py-3">
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0 flex-1">
                             <div className="truncate text-sm font-semibold text-zinc-900">{title}</div>

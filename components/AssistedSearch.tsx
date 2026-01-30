@@ -12,7 +12,6 @@ type Scope =
   | "revisit"
   | "chapters"
   | "capture"
-  | "framing"
   | "bills"
   | "accounts"
   | "investments"
@@ -49,12 +48,12 @@ function routeForDecision(_scope: Scope, decisionId: string) {
 
 function routeForInbox(_scope: Scope, _inboxId: string) {
   // V1: keep calm. No deep-link yet.
-  return `/framing`;
+  return `/thinking`;
 }
 
 function routeForCapture(_scope: Scope, inboxId: string) {
-  // Capture items live in decision_inbox. Best next step is Framing (focused).
-  return `/framing?open=${encodeURIComponent(inboxId)}`;
+  // Capture items live in decision_inbox. Best next step is Thinking (focused).
+  return `/thinking?from=capture&open=${encodeURIComponent(inboxId)}`;
 }
 
 function routeForBill(_scope: Scope, _billId: string) {
@@ -116,7 +115,7 @@ function scopeDecisionFilter(scope: Scope) {
   // decisions: anything not draft and not chapter
   // revisit: anything not draft with review_at present
   // chapters: only chapter
-  // capture/framing: broad
+  // capture/thinking: broad
   if (scope === "thinking") return { statusEq: "draft" as const };
 
   if (scope === "chapters") return { statusEq: "chapter" as const };

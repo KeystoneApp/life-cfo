@@ -43,7 +43,6 @@ function questionForPath(path: string) {
   const map: Record<string, string> = {
     "/home": "After using Home, do you feel more settled?",
     "/capture": "Was it easy to put this down here?",
-    "/framing": "Did the decision feel clearer after Framing?",
     "/thinking": "Did this help you think without overwhelm?",
     "/decisions": "Did this feel like a safe place to record what you decided?",
     "/revisit": "Did Review show the right amount—no more, no less?",

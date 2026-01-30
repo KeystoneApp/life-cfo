@@ -29,7 +29,7 @@ function Diagram() {
 
         <div className="rounded-2xl border border-zinc-200 bg-white p-3">
           <div className="text-xs font-semibold text-zinc-700">Decisions</div>
-          <div className="mt-1 text-sm text-zinc-700">Capture → Framing → Thinking → Decisions → Review → Chapters</div>
+          <div className="mt-1 text-sm text-zinc-700">Capture → Thinking → Decisions → Review → Chapters</div>
         </div>
 
         <div className="text-center text-xs text-zinc-400">↓</div>
@@ -78,18 +78,14 @@ export default function HowKeystoneWorksPage() {
               <div className="grid gap-3">
                 <Step
                   title="1) Get it out of your head"
-                  body="Start on Home. Write what’s on your mind — a worry, a decision, a loose end. Keystone is built for unloading first."
+                  body="Start with Capture. Write what’s on your mind — a worry, a decision, a loose end. Keystone is built for unloading first."
                 />
                 <Step
-                  title="2) Make the decision clear"
-                  body="Capture holds raw inputs. Framing turns them into a clear, neutral decision statement you can work with."
-                />
-                <Step
-                  title="3) Think safely, then commit"
+                  title="2) Think safely, then commit"
                   body="Thinking is a safe workspace for options and reasoning. Decisions is where you record what you decided (only when you choose to)."
                 />
                 <Step
-                  title="4) Bring it back only when needed"
+                  title="3) Bring it back only when needed"
                   body="Review shows only what’s due or due soon. No backlogs, no noise. Chapters holds what you’ve honoured and closed."
                 />
               </div>
