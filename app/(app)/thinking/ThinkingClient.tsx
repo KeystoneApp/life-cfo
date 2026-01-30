@@ -1126,7 +1126,14 @@ export default function ThinkingClient() {
 
                           <div className="rounded-xl border border-zinc-200 bg-white p-3 space-y-2">
                             {userId ? (
-                              <AttachmentsBlock userId={userId} decisionId={d.id} title={attachmentsTitle} bucket="captures" />
+                              <AttachmentsBlock
+                                userId={userId}
+                                decisionId={d.id}
+                                title={attachmentsTitle}
+                                bucket="captures"
+                                extraImportedCount={importedCount}
+                              />
+
                             ) : (
                               <div className="text-sm text-zinc-600">Attachments unavailable.</div>
                             )}
