@@ -211,6 +211,69 @@ async function buildFactsPack(userId: string) {
 
   const acct = (accounts ?? []) as AccountFact[];
 
+    // --- Goal ↔ Account links (V1: explicit join only) ---
+  type GoalAccountLinkRow = { goal_id: string; account_id: string; weight: number | null };
+
+  let goalAccountLinks: GoalAccountLinkRow[] = [];
+  let goalAccountsErrFlag = false;
+
+  try {
+    const { data, error } = await supabase
+      .from("money_goal_accounts")
+      .select("goal_id,account_id,weight")
+      .eq("user_id", userId)
+      .limit(500);
+
+    goalAccountsErrFlag = !!error;
+    if (!error && Array.isArray(data)) goalAccountLinks = data as GoalAccountLinkRow[];
+  } catch {
+    goalAccountsErrFlag = true;
+    goalAccountLinks = [];
+  }
+
+  const acctById = new Map(
+    acct.map((a) => [
+      a.id,
+      {
+        id: a.id,
+        name: String(a.name ?? "Account"),
+        currency: String(a.currency ?? "AUD").toUpperCase(),
+        current_balance_cents:
+          typeof a.current_balance_cents === "number"
+            ? a.current_balance_cents
+            : a.current_balance_cents == null
+              ? null
+              : Number(a.current_balance_cents),
+      },
+    ])
+  );
+
+  const linkedAccountsByGoalId = new Map<
+    string,
+    Array<{ id: string; name: string; currency: string; current_balance_cents: number | null; weight: number }>
+  >();
+
+  for (const link of goalAccountLinks) {
+    const goalId = String(link.goal_id);
+    const acctId = String(link.account_id);
+    const a = acctById.get(acctId);
+    if (!a) continue;
+
+    const arr = linkedAccountsByGoalId.get(goalId) ?? [];
+    arr.push({
+      id: a.id,
+      name: a.name,
+      currency: a.currency,
+      current_balance_cents: typeof a.current_balance_cents === "number" && Number.isFinite(a.current_balance_cents)
+        ? a.current_balance_cents
+        : null,
+      weight: typeof link.weight === "number" && Number.isFinite(link.weight) ? link.weight : 100,
+    });
+    linkedAccountsByGoalId.set(goalId, arr);
+  }
+
+  // We'll use linkedAccountsByGoalId later when building goals facts.
+
   const { data: decisions, error: decErr } = await supabase
     .from("decisions")
     .select("id,title,status,created_at,decided_at,review_at,reviewed_at")
@@ -416,6 +479,7 @@ async function buildFactsPack(userId: string) {
       notes: typeof g.notes === "string" ? g.notes : null,
       is_primary: typeof (g as any).is_primary === "boolean" ? ((g as any).is_primary as boolean) : null,
       sort_order: typeof (g as any).sort_order === "number" ? ((g as any).sort_order as number) : null,
+      linked_accounts: (linkedAccountsByGoalId.get(String(g.id)) ?? []).sort((a, b) => (a.weight ?? 100) - (b.weight ?? 100)),
       created_at: typeof g.created_at === "string" ? g.created_at : null,
       updated_at: typeof g.updated_at === "string" ? g.updated_at : null,
     };
@@ -490,6 +554,7 @@ async function buildFactsPack(userId: string) {
       chapters_ok: !chaptersErrFlag,
       chapters_count: chapterItems.length,
       goals_ok: !goalsErrFlag,
+      goal_accounts_ok: !goalAccountsErrFlag,
       goals_count_total: goalsClean.length,
       goals_count_active: goalsActive.length,
       goals_preview_titles_count: goalsPreviewTitles.length,
@@ -893,6 +958,21 @@ if (isGoalsIntent(question) || isBufferIntent(question)) {
     const bits: string[] = [];
     bits.push(`Your buffer goal (“${title}”) is at ${cur ?? "—"} / ${tgt}${p != null ? ` (${p}%)` : ""}.`);
     if (rem) bits.push(`Remaining: ${rem}.`);
+
+        const linked = Array.isArray((buffer as any).linked_accounts) ? (buffer as any).linked_accounts : [];
+    if (linked.length > 0) {
+      const preview = linked
+        .slice(0, 3)
+        .map((a: any) => {
+          const name = typeof a?.name === "string" ? a.name : "Account";
+          const bal = moneyFromCents(a?.current_balance_cents ?? null, a?.currency ?? "AUD") ?? "—";
+          return `${name} (${bal})`;
+        })
+        .join(", ");
+      bits.push(`Funds visible in: ${preview}${linked.length > 3 ? ` +${linked.length - 3} more` : ""}.`);
+    } else {
+      bits.push("I can’t see which account funds this goal yet.");
+    }
 
     return NextResponse.json({
       answer: bits.join(" "),
