@@ -152,6 +152,26 @@ export default function HomePage() {
   const affirmationTimerRef = useRef<number | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
 
+  // --- One-time onboarding nudge (Home) ---
+  const ONBOARDING_KEY = "keystone_onboarding_seen_v1";
+  const [showOnboarding, setShowOnboarding] = useState(false);
+
+  useEffect(() => {
+    try {
+      const seen = typeof window !== "undefined" ? window.localStorage.getItem(ONBOARDING_KEY) : "1";
+      if (!seen) setShowOnboarding(true);
+    } catch {
+      setShowOnboarding(false);
+    }
+  }, []);
+
+  const dismissOnboarding = () => {
+    try {
+      window.localStorage.setItem(ONBOARDING_KEY, "1");
+    } catch {}
+    setShowOnboarding(false);
+  };
+
   // --- Auth (quiet) ---
   useEffect(() => {
     let mounted = true;
@@ -448,15 +468,7 @@ export default function HomePage() {
     </button>
   );
 
-  const GhostChip = ({
-    children,
-    onClick,
-    title,
-  }: {
-    children: React.ReactNode;
-    onClick?: () => void;
-    title?: string;
-  }) => (
+  const GhostChip = ({ children, onClick, title }: { children: React.ReactNode; onClick?: () => void; title?: string }) => (
     <Chip onClick={onClick} title={title} className="text-xs px-2 py-1 border-zinc-200 bg-transparent text-zinc-700 hover:bg-zinc-50">
       {children}
     </Chip>
@@ -465,6 +477,41 @@ export default function HomePage() {
   return (
     <Page title="Home" subtitle={subtitle} right={<div className="flex items-center gap-2"></div>}>
       <div className="mx-auto w-full max-w-[760px] space-y-6">
+        {/* ✅ One-time onboarding nudge */}
+        {showOnboarding ? (
+          <Card className="border-zinc-200 bg-white">
+            <CardContent>
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold text-zinc-900">New here?</div>
+                  <div className="mt-1 text-sm leading-relaxed text-zinc-700">
+                    If you want a quick sense of how Keystone works, start here.
+                  </div>
+
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <Chip onClick={() => router.push("/how-it-works")} title="How Keystone works" className="text-xs">
+                      How Keystone works <span className="ml-1 opacity-70">→</span>
+                    </Chip>
+                    <Chip onClick={dismissOnboarding} title="Dismiss" className="text-xs">
+                      Dismiss
+                    </Chip>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={dismissOnboarding}
+                  className="rounded-full border border-zinc-200 bg-white px-2 py-1 text-xs text-zinc-600 hover:border-zinc-300"
+                  aria-label="Dismiss onboarding"
+                  title="Dismiss"
+                >
+                  ×
+                </button>
+              </div>
+            </CardContent>
+          </Card>
+        ) : null}
+
         <Card className="border-zinc-200 bg-white">
           <CardContent>
             <div className="space-y-3">
