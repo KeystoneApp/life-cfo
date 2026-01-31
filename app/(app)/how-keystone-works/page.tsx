@@ -1,4 +1,4 @@
-// app/(app)/how-it-works/page.tsx
+// app/(app)/how-keystone-works/page.tsx
 "use client";
 
 import { Page } from "@/components/Page";

@@ -489,7 +489,7 @@ export default function HomePage() {
                   </div>
 
                   <div className="mt-3 flex flex-wrap items-center gap-2">
-                    <Chip onClick={() => router.push("/how-it-works")} title="How Keystone works" className="text-xs">
+                    <Chip onClick={() => router.push("/how-keystone-works")} title="How Keystone works" className="text-xs">
                       How Keystone works <span className="ml-1 opacity-70">→</span>
                     </Chip>
                     <Chip onClick={dismissOnboarding} title="Dismiss" className="text-xs">
