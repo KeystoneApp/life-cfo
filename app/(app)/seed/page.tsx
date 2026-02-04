@@ -51,10 +51,7 @@ function todayDate() {
   return `${yyyy}-${mm}-${dd}`;
 }
 
-async function upsertSeedRun(
-  userId: string,
-  patch: Partial<SeedRunRow> & { created_ids?: Record<string, string[]> }
-) {
+async function upsertSeedRun(userId: string, patch: Partial<SeedRunRow> & { created_ids?: Record<string, string[]> }) {
   // 1 row per user
   const base: Partial<SeedRunRow> = {
     user_id: userId,
@@ -244,11 +241,7 @@ export default function SeedPage() {
       setStatusLine("Deleting decision domains…");
       const ddByDecision = ids["decision_domains:by_decision_id"];
       if (ddByDecision?.length) {
-        const res = await dbAny
-          .from("decision_domains")
-          .delete()
-          .eq("user_id", userId)
-          .in("decision_id", ddByDecision);
+        const res = await dbAny.from("decision_domains").delete().eq("user_id", userId).in("decision_id", ddByDecision);
         if (res?.error) throw res.error;
       }
 
@@ -256,11 +249,7 @@ export default function SeedPage() {
       setStatusLine("Deleting constellation items…");
       const ciByDecision = ids["constellation_items:by_decision_id"];
       if (ciByDecision?.length) {
-        const res = await dbAny
-          .from("constellation_items")
-          .delete()
-          .eq("user_id", userId)
-          .in("decision_id", ciByDecision);
+        const res = await dbAny.from("constellation_items").delete().eq("user_id", userId).in("decision_id", ciByDecision);
         if (res?.error) throw res.error;
       }
 
@@ -268,11 +257,7 @@ export default function SeedPage() {
       setStatusLine("Deleting domain constellations…");
       const dcByDomain = ids["domain_constellations:by_domain_id"];
       if (dcByDomain?.length) {
-        const res = await dbAny
-          .from("domain_constellations")
-          .delete()
-          .eq("user_id", userId)
-          .in("domain_id", dcByDomain);
+        const res = await dbAny.from("domain_constellations").delete().eq("user_id", userId).in("domain_id", dcByDomain);
         if (res?.error) throw res.error;
       }
 
@@ -348,6 +333,19 @@ export default function SeedPage() {
       // ✅ Stop TS2589 by breaking the chain and casting to any
       const insertReturningIds = async (table: string, rows: any[], selectCols: string) => {
         const q = dbAny.from(table).insert(rows).select(selectCols) as any;
+        const res = (await q) as any;
+
+        if (res?.error) throw res.error;
+
+        const data = (res?.data ?? []) as any[];
+        const ids = data.map((r) => String(r?.id)).filter(Boolean);
+        remember(table, ids);
+        return data;
+      };
+
+      // ✅ Idempotent upsert (used only where needed to prevent seed abort)
+      const upsertReturningIds = async (table: string, rows: any[], selectCols: string, onConflict: string) => {
+        const q = dbAny.from(table).upsert(rows, { onConflict }).select(selectCols) as any;
         const res = (await q) as any;
 
         if (res?.error) throw res.error;
@@ -634,18 +632,27 @@ export default function SeedPage() {
 
       // 9) DOMAINS + CONSTELLATIONS
       setStatusLine("Seeding domains & constellations…");
-      const domains = await insertReturningIds(
+
+      // ✅ FIX: domains must be idempotent (unique: user_id + name)
+      const domains = await upsertReturningIds(
         "domains",
         [
           { user_id: userId, name: "Family", emoji: "🏡", sort_order: 10 },
           { user_id: userId, name: "Money", emoji: "💸", sort_order: 20 },
           { user_id: userId, name: "Health", emoji: "🌿", sort_order: 30 },
         ],
-        "id"
+        "id,name",
+        "user_id,name"
       );
 
-      const familyDomainId = String(domains[0]?.id);
-      const moneyDomainId = String(domains[1]?.id);
+      // ✅ FIX: resolve IDs by name (order not guaranteed)
+      const familyDomainId = String((domains as any[]).find((d) => d?.name === "Family")?.id);
+      const moneyDomainId = String((domains as any[]).find((d) => d?.name === "Money")?.id);
+
+      // ✅ FIX: hard fail if we can't resolve (prevents silent "undefined" IDs)
+      if (!familyDomainId || familyDomainId === "undefined" || !moneyDomainId || moneyDomainId === "undefined") {
+        throw new Error("Seeding failed: could not resolve Family/Money domain IDs.");
+      }
 
       const constellations = await insertReturningIds(
         "constellations",
@@ -659,13 +666,20 @@ export default function SeedPage() {
       const homeConstId = String(constellations[0]?.id);
       const cashConstId = String(constellations[1]?.id);
 
-      // domain_constellations (no id): store domain ids for reset
+      // ✅ FIX: domain_constellations should be idempotent too (prevents abort before saving demo_seed_runs)
       {
-        const res = await (supabase as any).from("domain_constellations").insert([
-          { user_id: userId, domain_id: familyDomainId, constellation_id: homeConstId },
-          { user_id: userId, domain_id: moneyDomainId, constellation_id: cashConstId },
-        ]);
+        const res = await (supabase as any)
+          .from("domain_constellations")
+          .upsert(
+            [
+              { user_id: userId, domain_id: familyDomainId, constellation_id: homeConstId },
+              { user_id: userId, domain_id: moneyDomainId, constellation_id: cashConstId },
+            ],
+            { onConflict: "user_id,domain_id,constellation_id" }
+          );
         if (res?.error) throw res.error;
+
+        // Track by domain ids for reset (same as before)
         remember("domain_constellations:by_domain_id", [familyDomainId, moneyDomainId]);
       }
 
