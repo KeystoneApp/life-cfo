@@ -50,8 +50,10 @@ function todayDate() {
   return `${yyyy}-${mm}-${dd}`;
 }
 
-async function upsertSeedRun(userId: string, patch: Partial<SeedRunRow> & { created_ids?: Record<string, string[]> }) {
-  // 1 row per user
+async function upsertSeedRun(
+  userId: string,
+  patch: Partial<SeedRunRow> & { created_ids?: Record<string, string[]> }
+) {
   const base: Partial<SeedRunRow> = {
     user_id: userId,
     dataset_version: "v1",
@@ -70,7 +72,7 @@ async function upsertSeedRun(userId: string, patch: Partial<SeedRunRow> & { crea
         created_ids: base.created_ids ?? {},
         updated_at: new Date().toISOString(),
       },
-      { onConflict: "user_id" }
+      { onConflict: "user_id" } // ✅ demo_seed_runs PK is user_id
     )
     .select("*")
     .single();
@@ -81,7 +83,7 @@ async function upsertSeedRun(userId: string, patch: Partial<SeedRunRow> & { crea
 
 async function getSeedRun(userId: string) {
   const res = await (supabase as any).from("demo_seed_runs").select("*").eq("user_id", userId).single();
-  if (res?.error) return null; // ok if missing
+  if (res?.error) return null;
   return res.data as SeedRunRow;
 }
 
@@ -160,6 +162,65 @@ export default function SeedPage() {
     setSeedRun(sr);
   }
 
+  // ✅ Fallback cleanup if seed failed before demo_seed_runs was saved:
+  // Deletes only known demo rows by signature (name/title), NOT "everything for user".
+  async function cleanupKnownDemoRows(dbAny: any, uid: string) {
+    // Decisions graph + inbox (signature titles)
+    await dbAny.from("decision_links").delete().eq("user_id", uid);
+    await dbAny.from("decision_summaries").delete().eq("user_id", uid);
+    await dbAny.from("decision_notes").delete().eq("user_id", uid);
+    await dbAny.from("decision_domains").delete().eq("user_id", uid);
+    await dbAny.from("constellation_items").delete().eq("user_id", uid);
+    await dbAny.from("domain_constellations").delete().eq("user_id", uid);
+
+    await dbAny
+      .from("decisions")
+      .delete()
+      .eq("user_id", uid)
+      .in("title", ["Are we on track financially?", "Plan a small family getaway?", "Close out the old storage unit"]);
+
+    await dbAny
+      .from("decision_inbox")
+      .delete()
+      .eq("user_id", uid)
+      .in("title", [
+        "Are we actually on track financially?",
+        "Should we plan a small family getaway?",
+        "Review bills due soon",
+        "Look at your emergency buffer goal",
+      ]);
+
+    // Money (signature names)
+    await dbAny.from("money_goal_updates").delete().eq("user_id", uid);
+    await dbAny.from("money_goal_accounts").delete().eq("user_id", uid);
+    await dbAny.from("money_goals").delete().eq("user_id", uid).in("title", ["Emergency buffer", "Family getaway"]);
+
+    await dbAny.from("bill_payments").delete().eq("user_id", uid);
+    await dbAny.from("recurring_bills").delete().eq("user_id", uid).in("name", ["Internet", "Electricity", "Car rego"]);
+    await dbAny.from("recurring_income").delete().eq("user_id", uid).in("name", ["Ryan salary", "Side income"]);
+
+    await dbAny.from("transactions").delete().eq("user_id", uid);
+    await dbAny.from("investment_accounts").delete().eq("user_id", uid).in("name", ["Super", "Brokerage"]);
+    await dbAny.from("liabilities").delete().eq("user_id", uid).in("name", ["Car loan", "Credit card"]);
+    await dbAny.from("budget_items").delete().eq("user_id", uid).in("name", ["Groceries", "Fuel", "Kids", "Bills", "Savings"]);
+    await dbAny.from("categories").delete().eq("user_id", uid).in("name", ["Groceries", "Transport", "Bills", "Kids", "Income"]);
+
+    // Domains + constellations (signature names)
+    await dbAny.from("constellations").delete().eq("user_id", uid).in("name", ["Home & stability", "Cashflow"]);
+    await dbAny.from("domains").delete().eq("user_id", uid).in("name", ["Family", "Money", "Health"]);
+
+    // Family + pets (signature names)
+    await dbAny.from("pets").delete().eq("user_id", uid).in("name", ["Milo"]);
+    await dbAny.from("family_members").delete().eq("user_id", uid).in("name", ["Emily", "Ryan", "Simba", "Hannah"]);
+
+    // Accounts (signature names) last
+    await dbAny
+      .from("accounts")
+      .delete()
+      .eq("user_id", uid)
+      .in("name", ["Everyday Spending", "Bills Buffer", "Savings"]);
+  }
+
   async function runReset() {
     if (!userId) return;
     if (!resetAllowed) {
@@ -173,18 +234,22 @@ export default function SeedPage() {
     try {
       const sr = await getSeedRun(userId);
       const ids = sr?.created_ids ?? {};
-
       const trackedTotal = Object.values(ids).reduce((acc, arr) => acc + (Array.isArray(arr) ? arr.length : 0), 0);
+
+      const dbAny = supabase as any;
+
+      // If no tracked IDs (common when seed failed mid-way), do signature cleanup.
       if (!sr || trackedTotal === 0) {
+        setStatusLine("No seed run record — cleaning known demo rows…");
+        await cleanupKnownDemoRows(dbAny, userId);
+
         setConfirmText("");
         setStatus("done");
-        setStatusLine("Nothing to reset ✅");
-        notify({ title: "Nothing to reset", description: "No demo seed run found for your user." });
+        setStatusLine("Reset complete ✅");
+        notify({ title: "Reset complete", description: "Cleaned known demo rows (no seed run record)." });
         await refreshSeedRun();
         return;
       }
-
-      const dbAny = supabase as any;
 
       const delByIds = async (table: string, idField = "id") => {
         const arr = ids[table];
@@ -243,7 +308,11 @@ export default function SeedPage() {
       setStatusLine("Deleting constellation items…");
       const ciByDecision = ids["constellation_items:by_decision_id"];
       if (ciByDecision?.length) {
-        const res = await dbAny.from("constellation_items").delete().eq("user_id", userId).in("decision_id", ciByDecision);
+        const res = await dbAny
+          .from("constellation_items")
+          .delete()
+          .eq("user_id", userId)
+          .in("decision_id", ciByDecision);
         if (res?.error) throw res.error;
       }
 
@@ -331,65 +400,16 @@ export default function SeedPage() {
         return data;
       };
 
-      // ✅ NEW: idempotent ensure-by-name (no ON CONFLICT required)
-      const ensureByName = async (table: string, rows: any[], nameField = "name") => {
-        const names = rows.map((r) => String(r?.[nameField] ?? "")).filter(Boolean);
-        if (names.length === 0) return [];
-
-        // 1) fetch existing
-        const existingRes = await dbAny
-          .from(table)
-          .select(`id,${nameField}`)
-          .eq("user_id", userId)
-          .in(nameField, names);
-
-        if (existingRes?.error) throw existingRes.error;
-
-        const existingRows: any[] = existingRes?.data ?? [];
-        const existingByName = new Map(existingRows.map((r) => [String(r?.[nameField]), r]));
-
-        // 2) insert missing
-        const missing = rows.filter((r) => !existingByName.has(String(r?.[nameField])));
-        let inserted: any[] = [];
-        if (missing.length) {
-          const insertedRes = await dbAny.from(table).insert(missing).select(`id,${nameField}`);
-          if (insertedRes?.error) throw insertedRes.error;
-          inserted = insertedRes?.data ?? [];
-
-          // track only what we actually created (safe reset)
-          const newIds = inserted.map((r: any) => String(r?.id)).filter(Boolean);
-          if (newIds.length) remember(table, newIds);
-
-          for (const r of inserted) existingByName.set(String(r?.[nameField]), r);
-        }
-
-        // 3) return in the same order as requested rows
-        return rows.map((r) => existingByName.get(String(r?.[nameField]))).filter(Boolean);
-      };
-
-      // ✅ NEW: idempotent join insert for domain_constellations
-      const ensureDomainConstellations = async (pairs: { domain_id: string; constellation_id: string }[]) => {
-        if (!pairs.length) return;
-
-        const domainIds = Array.from(new Set(pairs.map((p) => p.domain_id))).filter(Boolean);
-        const constIds = Array.from(new Set(pairs.map((p) => p.constellation_id))).filter(Boolean);
-
-        const existingRes = await dbAny
-          .from("domain_constellations")
-          .select("domain_id,constellation_id")
-          .eq("user_id", userId)
-          .in("domain_id", domainIds)
-          .in("constellation_id", constIds);
-
-        if (existingRes?.error) throw existingRes.error;
-
-        const existing = new Set((existingRes?.data ?? []).map((r: any) => `${r.domain_id}::${r.constellation_id}`));
-        const missing = pairs.filter((p) => !existing.has(`${p.domain_id}::${p.constellation_id}`));
-
-        if (!missing.length) return;
-
-        const res = await dbAny.from("domain_constellations").insert(missing.map((m) => ({ user_id: userId, ...m })));
+      // ✅ Idempotent upsert helper for tables with UNIQUE constraints
+      const upsertReturningIds = async (table: string, rows: any[], selectCols: string, onConflict: string) => {
+        const q = dbAny.from(table).upsert(rows, { onConflict }).select(selectCols) as any;
+        const res = (await q) as any;
         if (res?.error) throw res.error;
+
+        const data = (res?.data ?? []) as any[];
+        const ids = data.map((r) => String(r?.id)).filter(Boolean);
+        remember(table, ids);
+        return data;
       };
 
       // 1) FAMILY
@@ -412,36 +432,9 @@ export default function SeedPage() {
       const accounts = await insertReturningIds(
         "accounts",
         [
-          {
-            user_id: userId,
-            name: "Everyday Spending",
-            provider: "manual",
-            type: "cash",
-            status: "active",
-            archived: false,
-            current_balance_cents: 1250_00,
-            currency: "AUD",
-          },
-          {
-            user_id: userId,
-            name: "Bills Buffer",
-            provider: "manual",
-            type: "cash",
-            status: "active",
-            archived: false,
-            current_balance_cents: 1800_00,
-            currency: "AUD",
-          },
-          {
-            user_id: userId,
-            name: "Savings",
-            provider: "manual",
-            type: "cash",
-            status: "active",
-            archived: false,
-            current_balance_cents: 6200_00,
-            currency: "AUD",
-          },
+          { user_id: userId, name: "Everyday Spending", provider: "manual", type: "cash", status: "active", archived: false, current_balance_cents: 1250_00, currency: "AUD" },
+          { user_id: userId, name: "Bills Buffer", provider: "manual", type: "cash", status: "active", archived: false, current_balance_cents: 1800_00, currency: "AUD" },
+          { user_id: userId, name: "Savings", provider: "manual", type: "cash", status: "active", archived: false, current_balance_cents: 6200_00, currency: "AUD" },
         ],
         "id"
       );
@@ -455,26 +448,8 @@ export default function SeedPage() {
       await insertReturningIds(
         "recurring_income",
         [
-          {
-            user_id: userId,
-            name: "Ryan salary",
-            amount_cents: 2400_00,
-            currency: "AUD",
-            cadence: "fortnightly",
-            next_pay_at: toIsoLocalPlusDays(3, 9, 0),
-            active: true,
-            notes: "Main household income (demo).",
-          },
-          {
-            user_id: userId,
-            name: "Side income",
-            amount_cents: 450_00,
-            currency: "AUD",
-            cadence: "monthly",
-            next_pay_at: toIsoLocalPlusDays(12, 9, 0),
-            active: true,
-            notes: "Small monthly income (demo).",
-          },
+          { user_id: userId, name: "Ryan salary", amount_cents: 2400_00, currency: "AUD", cadence: "fortnightly", next_pay_at: toIsoLocalPlusDays(3, 9, 0), active: true, notes: "Main household income (demo)." },
+          { user_id: userId, name: "Side income", amount_cents: 450_00, currency: "AUD", cadence: "monthly", next_pay_at: toIsoLocalPlusDays(12, 9, 0), active: true, notes: "Small monthly income (demo)." },
         ],
         "id"
       );
@@ -484,39 +459,9 @@ export default function SeedPage() {
       const recurringBills = await insertReturningIds(
         "recurring_bills",
         [
-          {
-            user_id: userId,
-            name: "Internet",
-            amount_cents: 89_00,
-            currency: "AUD",
-            cadence: "monthly",
-            next_due_at: toIsoLocalPlusDays(4, 9, 0),
-            autopay: true,
-            active: true,
-            notes: "Autopay (demo).",
-          },
-          {
-            user_id: userId,
-            name: "Electricity",
-            amount_cents: 210_00,
-            currency: "AUD",
-            cadence: "monthly",
-            next_due_at: toIsoLocalPlusDays(9, 9, 0),
-            autopay: false,
-            active: true,
-            notes: "Manual payment (demo).",
-          },
-          {
-            user_id: userId,
-            name: "Car rego",
-            amount_cents: 780_00,
-            currency: "AUD",
-            cadence: "yearly",
-            next_due_at: toIsoLocalPlusDays(20, 9, 0),
-            autopay: false,
-            active: true,
-            notes: "Annual bill (demo).",
-          },
+          { user_id: userId, name: "Internet", amount_cents: 89_00, currency: "AUD", cadence: "monthly", next_due_at: toIsoLocalPlusDays(4, 9, 0), autopay: true, active: true, notes: "Autopay (demo)." },
+          { user_id: userId, name: "Electricity", amount_cents: 210_00, currency: "AUD", cadence: "monthly", next_due_at: toIsoLocalPlusDays(9, 9, 0), autopay: false, active: true, notes: "Manual payment (demo)." },
+          { user_id: userId, name: "Car rego", amount_cents: 780_00, currency: "AUD", cadence: "yearly", next_due_at: toIsoLocalPlusDays(20, 9, 0), autopay: false, active: true, notes: "Annual bill (demo)." },
         ],
         "id"
       );
@@ -528,24 +473,8 @@ export default function SeedPage() {
       await insertReturningIds(
         "bill_payments",
         [
-          {
-            user_id: userId,
-            bill_id: internetBillId,
-            paid_at: toIsoLocalPlusDays(-10, 9, 0),
-            amount_cents: 89_00,
-            currency: "AUD",
-            note: "Paid (demo)",
-            source: "manual",
-          },
-          {
-            user_id: userId,
-            bill_id: electricityBillId,
-            paid_at: toIsoLocalPlusDays(-22, 9, 0),
-            amount_cents: 198_00,
-            currency: "AUD",
-            note: "Paid (demo)",
-            source: "manual",
-          },
+          { user_id: userId, bill_id: internetBillId, paid_at: toIsoLocalPlusDays(-10, 9, 0), amount_cents: 89_00, currency: "AUD", note: "Paid (demo)", source: "manual" },
+          { user_id: userId, bill_id: electricityBillId, paid_at: toIsoLocalPlusDays(-22, 9, 0), amount_cents: 198_00, currency: "AUD", note: "Paid (demo)", source: "manual" },
         ],
         "id"
       );
@@ -614,30 +543,8 @@ export default function SeedPage() {
       const goals = await insertReturningIds(
         "money_goals",
         [
-          {
-            user_id: userId,
-            title: "Emergency buffer",
-            currency: "AUD",
-            target_cents: 3000_00,
-            current_cents: 1800_00,
-            target_date: toDatePlusDays(90),
-            status: "active",
-            notes: "Primary goal (demo).",
-            is_primary: true,
-            sort_order: 10,
-          },
-          {
-            user_id: userId,
-            title: "Family getaway",
-            currency: "AUD",
-            target_cents: 2500_00,
-            current_cents: 600_00,
-            target_date: toDatePlusDays(160),
-            status: "active",
-            notes: "Secondary goal (demo).",
-            is_primary: false,
-            sort_order: 20,
-          },
+          { user_id: userId, title: "Emergency buffer", currency: "AUD", target_cents: 3000_00, current_cents: 1800_00, target_date: toDatePlusDays(90), status: "active", notes: "Primary goal (demo).", is_primary: true, sort_order: 10 },
+          { user_id: userId, title: "Family getaway", currency: "AUD", target_cents: 2500_00, current_cents: 600_00, target_date: toDatePlusDays(160), status: "active", notes: "Secondary goal (demo).", is_primary: false, sort_order: 20 },
         ],
         "id"
       );
@@ -666,112 +573,56 @@ export default function SeedPage() {
         "id"
       );
 
-      // 9) DOMAINS + CONSTELLATIONS (FIXED: NO upsert / ON CONFLICT)
+      // 9) DOMAINS + CONSTELLATIONS
       setStatusLine("Seeding domains & constellations…");
 
-      const domains = await ensureByName(
+      const domains = await upsertReturningIds(
         "domains",
         [
           { user_id: userId, name: "Family", emoji: "🏡", sort_order: 10 },
           { user_id: userId, name: "Money", emoji: "💸", sort_order: 20 },
           { user_id: userId, name: "Health", emoji: "🌿", sort_order: 30 },
         ],
-        "name"
+        "id,name",
+        "user_id,name"
       );
 
-      const familyDomainId = String((domains as any[]).find((d) => d?.name === "Family")?.id);
-      const moneyDomainId = String((domains as any[]).find((d) => d?.name === "Money")?.id);
+      const familyDomainId = String(domains.find((d: any) => d.name === "Family")?.id);
+      const moneyDomainId = String(domains.find((d: any) => d.name === "Money")?.id);
 
-      if (!familyDomainId || familyDomainId === "undefined" || !moneyDomainId || moneyDomainId === "undefined") {
-        throw new Error("Seeding failed: could not resolve domain IDs.");
-      }
-
-      const constellations = await ensureByName(
+      // ✅ FIX 1: constellations must be idempotent (UNIQUE user_id,name exists)
+      const constellations = await upsertReturningIds(
         "constellations",
         [
           { user_id: userId, name: "Home & stability", emoji: "🏠", sort_order: 10 },
           { user_id: userId, name: "Cashflow", emoji: "📈", sort_order: 20 },
         ],
-        "name"
+        "id,name",
+        "user_id,name"
       );
 
-      const homeConstId = String((constellations as any[]).find((c) => c?.name === "Home & stability")?.id);
-      const cashConstId = String((constellations as any[]).find((c) => c?.name === "Cashflow")?.id);
+      const homeConstId = String(constellations.find((c: any) => c.name === "Home & stability")?.id);
+      const cashConstId = String(constellations.find((c: any) => c.name === "Cashflow")?.id);
 
-      if (!homeConstId || homeConstId === "undefined" || !cashConstId || cashConstId === "undefined") {
-        throw new Error("Seeding failed: could not resolve constellation IDs.");
+      // domain_constellations (no id): store domain ids for reset
+      {
+        const res = await (supabase as any).from("domain_constellations").insert([
+          { user_id: userId, domain_id: familyDomainId, constellation_id: homeConstId },
+          { user_id: userId, domain_id: moneyDomainId, constellation_id: cashConstId },
+        ]);
+        if (res?.error) throw res.error;
+        remember("domain_constellations:by_domain_id", [familyDomainId, moneyDomainId]);
       }
-
-      // domain_constellations (no id) — idempotent insert
-      await ensureDomainConstellations([
-        { domain_id: familyDomainId, constellation_id: homeConstId },
-        { domain_id: moneyDomainId, constellation_id: cashConstId },
-      ]);
-
-      // track by domain ids for reset (unchanged)
-      remember("domain_constellations:by_domain_id", [familyDomainId, moneyDomainId]);
 
       // 10) CAPTURE / INBOX
       setStatusLine("Seeding captures & inbox…");
       const seedInboxRunId = safeUUID();
 
       const inboxRows = [
-        {
-          user_id: userId,
-          run_id: seedInboxRunId,
-          type: "capture",
-          title: "Are we actually on track financially?",
-          body: "I feel like we’re working hard but not moving forward. I want clarity.",
-          severity: 2,
-          status: "open",
-          snoozed_until: null,
-          dedupe_key: `seed:${seedInboxRunId}:cap:1`,
-          action_label: null,
-          action_href: null,
-          framed_decision_id: null,
-        },
-        {
-          user_id: userId,
-          run_id: seedInboxRunId,
-          type: "capture",
-          title: "Should we plan a small family getaway?",
-          body: "Not huge — just something to look forward to. But I don’t want money stress.",
-          severity: 1,
-          status: "open",
-          snoozed_until: null,
-          dedupe_key: `seed:${seedInboxRunId}:cap:2`,
-          action_label: null,
-          action_href: null,
-          framed_decision_id: null,
-        },
-        {
-          user_id: userId,
-          run_id: seedInboxRunId,
-          type: "manual",
-          title: "Review bills due soon",
-          body: "Quick check: autopay vs manual. Mark paid where needed.",
-          severity: 2,
-          status: "open",
-          snoozed_until: null,
-          dedupe_key: `seed:${seedInboxRunId}:manual:1`,
-          action_label: "Open Bills",
-          action_href: "/bills",
-          framed_decision_id: null,
-        },
-        {
-          user_id: userId,
-          run_id: seedInboxRunId,
-          type: "manual",
-          title: "Look at your emergency buffer goal",
-          body: "Is it moving forward each month?",
-          severity: 1,
-          status: "open",
-          snoozed_until: null,
-          dedupe_key: `seed:${seedInboxRunId}:manual:2`,
-          action_label: "Open Goals",
-          action_href: "/goals",
-          framed_decision_id: null,
-        },
+        { user_id: userId, run_id: seedInboxRunId, type: "capture", title: "Are we actually on track financially?", body: "I feel like we’re working hard but not moving forward. I want clarity.", severity: 2, status: "open", snoozed_until: null, dedupe_key: `seed:${seedInboxRunId}:cap:1`, action_label: null, action_href: null, framed_decision_id: null },
+        { user_id: userId, run_id: seedInboxRunId, type: "capture", title: "Should we plan a small family getaway?", body: "Not huge — just something to look forward to. But I don’t want money stress.", severity: 1, status: "open", snoozed_until: null, dedupe_key: `seed:${seedInboxRunId}:cap:2`, action_label: null, action_href: null, framed_decision_id: null },
+        { user_id: userId, run_id: seedInboxRunId, type: "manual", title: "Review bills due soon", body: "Quick check: autopay vs manual. Mark paid where needed.", severity: 2, status: "open", snoozed_until: null, dedupe_key: `seed:${seedInboxRunId}:manual:1`, action_label: "Open Bills", action_href: "/bills", framed_decision_id: null },
+        { user_id: userId, run_id: seedInboxRunId, type: "manual", title: "Look at your emergency buffer goal", body: "Is it moving forward each month?", severity: 1, status: "open", snoozed_until: null, dedupe_key: `seed:${seedInboxRunId}:manual:2`, action_label: "Open Goals", action_href: "/goals", framed_decision_id: null },
       ];
 
       const inboxCreated = await insertReturningIds("decision_inbox", inboxRows, "id");
@@ -783,44 +634,9 @@ export default function SeedPage() {
       const decisions = await insertReturningIds(
         "decisions",
         [
-          {
-            user_id: userId,
-            inbox_item_id: cap1InboxId,
-            title: "Are we on track financially?",
-            context: "Captured:\nI feel like we’re working hard but not moving forward. I want clarity.",
-            status: "draft",
-            origin: "capture",
-            framed_at: new Date().toISOString(),
-            decided_at: null,
-            review_at: toIsoLocalPlusDays(14, 9, 0),
-            pinned: true,
-          },
-          {
-            user_id: userId,
-            inbox_item_id: cap2InboxId,
-            title: "Plan a small family getaway?",
-            context: "Captured:\nNot huge — just something to look forward to. But I don’t want money stress.",
-            status: "decided",
-            origin: "capture",
-            framed_at: new Date().toISOString(),
-            decided_at: toIsoLocalPlusDays(-5, 9, 0),
-            review_at: toIsoLocalPlusDays(30, 9, 0),
-            pinned: false,
-            user_reasoning: "We’ll keep it small and use the getaway goal to prevent guilt/spend drift.",
-          },
-          {
-            user_id: userId,
-            inbox_item_id: null,
-            title: "Close out the old storage unit",
-            context: "Decision completed and released.",
-            status: "chapter",
-            origin: "manual",
-            framed_at: toIsoLocalPlusDays(-40, 9, 0),
-            decided_at: toIsoLocalPlusDays(-35, 9, 0),
-            review_at: null,
-            chaptered_at: toIsoLocalPlusDays(-1, 9, 0),
-            pinned: false,
-          },
+          { user_id: userId, inbox_item_id: cap1InboxId, title: "Are we on track financially?", context: "Captured:\nI feel like we’re working hard but not moving forward. I want clarity.", status: "draft", origin: "capture", framed_at: new Date().toISOString(), decided_at: null, review_at: toIsoLocalPlusDays(14, 9, 0), pinned: true },
+          { user_id: userId, inbox_item_id: cap2InboxId, title: "Plan a small family getaway?", context: "Captured:\nNot huge — just something to look forward to. But I don’t want money stress.", status: "decided", origin: "capture", framed_at: new Date().toISOString(), decided_at: toIsoLocalPlusDays(-5, 9, 0), review_at: toIsoLocalPlusDays(30, 9, 0), pinned: false, user_reasoning: "We’ll keep it small and use the getaway goal to prevent guilt/spend drift." },
+          { user_id: userId, inbox_item_id: null, title: "Close out the old storage unit", context: "Decision completed and released.", status: "chapter", origin: "manual", framed_at: toIsoLocalPlusDays(-40, 9, 0), decided_at: toIsoLocalPlusDays(-35, 9, 0), review_at: null, chaptered_at: toIsoLocalPlusDays(-1, 9, 0), pinned: false },
         ],
         "id"
       );
@@ -868,12 +684,13 @@ export default function SeedPage() {
         remember("constellation_items:by_decision_id", [d1, d2]);
       }
 
+      // ✅ FIX 2: decision_notes.kind must be 'framing' or 'thinking' (per your CHECK constraint)
       setStatusLine("Seeding decision notes & summaries…");
       await insertReturningIds(
         "decision_notes",
         [
-          { user_id: userId, decision_id: d1, kind: "note", body: "What would ‘on track’ mean for us? (demo note)" },
-          { user_id: userId, decision_id: d2, kind: "note", body: "Plan: small trip, off-peak, cap spend. (demo note)" },
+          { user_id: userId, decision_id: d1, kind: "thinking", body: "What would ‘on track’ mean for us? (demo note)" },
+          { user_id: userId, decision_id: d2, kind: "thinking", body: "Plan: small trip, off-peak, cap spend. (demo note)" },
         ],
         "id"
       );
@@ -960,6 +777,9 @@ export default function SeedPage() {
             <div className="font-semibold mb-2">Reset demo dataset (safe)</div>
             <div className="text-sm text-zinc-600">
               Deletes only rows created by the demo seed run (tracked IDs). Requires explicit typed confirmation.
+              <span className="block mt-1">
+                If the last seed failed before saving the run record, Reset will clean known demo rows by signature.
+              </span>
             </div>
 
             <div className="mt-3 grid gap-3">
