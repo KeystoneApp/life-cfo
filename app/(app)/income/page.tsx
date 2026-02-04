@@ -61,6 +61,14 @@ function sortIncome(rows: RecurringIncome[]) {
   });
 }
 
+function cadenceLabel(c: Cadence) {
+  if (c === "weekly") return "Weekly";
+  if (c === "fortnightly") return "Fortnightly";
+  if (c === "monthly") return "Monthly";
+  if (c === "yearly") return "Yearly";
+  return c;
+}
+
 /* ---------- page ---------- */
 
 export const dynamic = "force-dynamic";
@@ -262,7 +270,8 @@ export default function IncomePage() {
             <div className="font-semibold">Add income</div>
 
             <div className="grid gap-3 md:grid-cols-6">
-              <div className="md:col-span-2">
+              <div className="md:col-span-2 space-y-1">
+                <div className="text-xs text-zinc-500">Name</div>
                 <input
                   className="w-full rounded-md border px-3 py-2 bg-transparent"
                   placeholder="Wages, Centrelink, Rent…"
@@ -271,25 +280,32 @@ export default function IncomePage() {
                 />
               </div>
 
-              <input
-                className="rounded-md border px-3 py-2 bg-transparent"
-                placeholder="Amount"
-                value={amount}
-                onChange={(e) => setAmount(e.target.value)}
-              />
+              <div className="space-y-1">
+                <div className="text-xs text-zinc-500">Amount</div>
+                <input
+                  className="rounded-md border px-3 py-2 bg-transparent w-full"
+                  placeholder="Amount"
+                  value={amount}
+                  onChange={(e) => setAmount(e.target.value)}
+                />
+              </div>
 
-              <select
-                className="rounded-md border px-3 py-2 bg-transparent"
-                value={cadence}
-                onChange={(e) => setCadence(e.target.value as Cadence)}
-              >
-                <option value="weekly">Weekly</option>
-                <option value="fortnightly">Fortnightly</option>
-                <option value="monthly">Monthly</option>
-                <option value="yearly">Yearly</option>
-              </select>
+              <div className="space-y-1">
+                <div className="text-xs text-zinc-500">Interval</div>
+                <select
+                  className="rounded-md border px-3 py-2 bg-transparent w-full"
+                  value={cadence}
+                  onChange={(e) => setCadence(e.target.value as Cadence)}
+                >
+                  <option value="weekly">Weekly</option>
+                  <option value="fortnightly">Fortnightly</option>
+                  <option value="monthly">Monthly</option>
+                  <option value="yearly">Yearly</option>
+                </select>
+              </div>
 
-              <div className="md:col-span-2">
+              <div className="md:col-span-2 space-y-1">
+                <div className="text-xs text-zinc-500">Next pay</div>
                 <input
                   type="datetime-local"
                   className="w-full rounded-md border px-3 py-2 bg-transparent"
@@ -325,7 +341,7 @@ export default function IncomePage() {
                     <div className="font-semibold flex items-center gap-2">
                       {i.name}
                       {i.active ? <Badge>Active</Badge> : <Badge>Paused</Badge>}
-                      <Chip>{i.cadence}</Chip>
+                      <Chip>{cadenceLabel(i.cadence)}</Chip>
                     </div>
                     <div className="text-sm opacity-75">
                       {formatMoneyFromCents(i.amount_cents)} • Next {new Date(i.next_pay_at).toLocaleString()}
