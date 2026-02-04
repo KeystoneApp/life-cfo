@@ -439,9 +439,9 @@ export default function SeedPage() {
       const accounts = await insertReturningIds(
         "accounts",
         [
-          { user_id: userId, name: "Everyday Spending", provider: "manual", type: "cash", status: "active", archived: false, current_balance_cents: 1250_00, currency: "AUD" },
-          { user_id: userId, name: "Bills Buffer", provider: "manual", type: "cash", status: "active", archived: false, current_balance_cents: 1800_00, currency: "AUD" },
-          { user_id: userId, name: "Savings", provider: "manual", type: "cash", status: "active", archived: false, current_balance_cents: 6200_00, currency: "AUD" },
+          { user_id: userId, name: "Everyday Spending", provider: "manual", type: "cash", status: "active", archived: false, current_balance_cents: 4200_00, currency: "AUD" },
+          { user_id: userId, name: "Bills Buffer", provider: "manual", type: "cash", status: "active", archived: false, current_balance_cents: 7800_00, currency: "AUD" },
+          { user_id: userId, name: "Savings", provider: "manual", type: "cash", status: "active", archived: false, current_balance_cents: 15400_00, currency: "AUD" },
         ],
         "id"
       );
@@ -530,7 +530,8 @@ export default function SeedPage() {
       await insertReturningIds(
         "investment_accounts",
         [
-          { user_id: userId, name: "Super", kind: "super", institution: "Example Super", approx_value: 52000, currency: "AUD", notes: "Approx value (demo)." },
+          { user_id: userId, name: "Home mortgage", current_balance_cents: 800_000_00, currency: "AUD", notes: "Primary residence mortgage (demo).", archived: false},
+          { user_id: userId, name: "Super", kind: "super", institution: "Example Super", approx_value: 185000, currency: "AUD", notes: "Approx value combined household super (demo)." },
           { user_id: userId, name: "Brokerage", kind: "shares", institution: "Example Broker", approx_value: 8400, currency: "AUD", notes: "Approx value (demo)." },
         ],
         "id"
