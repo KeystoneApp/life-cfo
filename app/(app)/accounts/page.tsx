@@ -368,12 +368,20 @@ export default function AccountsPage() {
       ? "border border-rose-200 bg-rose-50 text-rose-700"
       : "border border-zinc-200 bg-zinc-50 text-zinc-700";
 
-  const liveChip = <Chip className={`ml-2 ${liveChipClass}`}>{live === "live" ? "Live" : live === "offline" ? "Offline" : "Connecting"}</Chip>;
+  const liveChip = (
+    <Chip className={`ml-2 ${liveChipClass}`}>{live === "live" ? "Live" : live === "offline" ? "Offline" : "Connecting"}</Chip>
+  );
 
   return (
     <Page
       title="Accounts"
-      subtitle={[email ? `Signed in as: ${email}` : null, `Total balance: ${formatMoney(totalBalanceCents, "AUD")}`, statusLine].filter(Boolean).join(" • ")}
+      subtitle={[
+        email ? `Signed in as: ${email}` : null,
+        `Total balance: ${formatMoney(totalBalanceCents, "AUD")}`,
+        statusLine,
+      ]
+        .filter(Boolean)
+        .join(" • ")}
       right={
         <div className="flex items-center gap-2">
           {liveChip}
@@ -443,17 +451,20 @@ export default function AccountsPage() {
         </Card>
 
         {/* List */}
-        <div className="grid gap-3">
-          {visibleRows.map((a) => {
+        <div className="grid gap-2">
+          {visibleRows.map((a, idx) => {
             const saving = !!savingRow[a.id];
             const deleting = !!deletingRow[a.id];
             const changed =
               (editName[a.id] ?? "").trim() !== a.name ||
               toCents((editBalance[a.id] ?? "").trim()) !== (a.current_balance_cents ?? 0);
 
+            // ✅ Zebra + tighter spacing (subtle, calm)
+            const zebraBg = idx % 2 === 0 ? "bg-white" : "bg-zinc-50";
+
             return (
-              <Card key={a.id}>
-                <CardContent>
+              <Card key={a.id} className={zebraBg}>
+                <CardContent className="py-4">
                   <div className="space-y-3">
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div className="space-y-1">
@@ -462,7 +473,6 @@ export default function AccountsPage() {
                           <Badge variant="muted">{formatMoney(a.current_balance_cents ?? 0, a.currency ?? "AUD")}</Badge>
                           {changed && <Badge variant="warning">Unsaved</Badge>}
                         </div>
-                        <div className="text-xs text-zinc-500">id: {a.id}</div>
                       </div>
 
                       <div className="flex flex-wrap gap-2">
