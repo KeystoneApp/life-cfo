@@ -19,6 +19,9 @@ export default function LoginClient({ nextPath }: { nextPath: string }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
+  // ✅ Step 2: confirm password on signup
+  const [confirmPassword, setConfirmPassword] = useState("");
+
   const [showPassword, setShowPassword] = useState(false);
 
   const [working, setWorking] = useState(false);
@@ -34,13 +37,26 @@ export default function LoginClient({ nextPath }: { nextPath: string }) {
     if (err) setStatus(decodeURIComponent(err));
   }, [searchParams]);
 
+  const passwordsMatch = useMemo(() => {
+    if (mode !== "signup") return true;
+    // Only validate when user has typed something
+    if (!confirmPassword) return false;
+    return password === confirmPassword;
+  }, [mode, password, confirmPassword]);
+
   const canSubmit = useMemo(() => {
     const e = email.trim();
     if (!e.includes("@")) return false;
     if (working) return false;
     if (mode === "reset") return true;
-    return password.length >= 6;
-  }, [email, password, mode, working]);
+
+    if (password.length < 6) return false;
+
+    // ✅ Signup requires confirm match
+    if (mode === "signup") return password === confirmPassword;
+
+    return true;
+  }, [email, password, confirmPassword, mode, working]);
 
   const goNext = () => {
     router.replace(nextPath || "/home");
@@ -95,6 +111,8 @@ export default function LoginClient({ nextPath }: { nextPath: string }) {
         setStatus("Account created ✅ Check your email to confirm, then come back and sign in.");
         setMode("signin");
         setShowPassword(false);
+        setPassword("");
+        setConfirmPassword("");
         return;
       }
 
@@ -199,30 +217,51 @@ export default function LoginClient({ nextPath }: { nextPath: string }) {
             </div>
 
             {mode !== "reset" ? (
-              <div>
-                <label className="block text-sm font-medium text-neutral-800">Password</label>
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-neutral-800">Password</label>
 
-                <div className="mt-1 relative">
-                  <input
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    type={showPassword ? "text" : "password"}
-                    className="w-full rounded-xl border border-neutral-300 px-3 py-2 pr-14 outline-none focus:ring-2 focus:ring-black/10 focus:border-neutral-400"
-                    autoComplete={mode === "signup" ? "new-password" : "current-password"}
-                  />
+                  <div className="mt-1 relative">
+                    <input
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      type={showPassword ? "text" : "password"}
+                      className="w-full rounded-xl border border-neutral-300 px-3 py-2 pr-14 outline-none focus:ring-2 focus:ring-black/10 focus:border-neutral-400"
+                      autoComplete={mode === "signup" ? "new-password" : "current-password"}
+                    />
 
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword((v) => !v)}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-600 hover:bg-neutral-50 transition focus:outline-none focus:ring-2 focus:ring-black/10"
-                    aria-label={showPassword ? "Hide password" : "Show password"}
-                    title={showPassword ? "Hide password" : "Show password"}
-                  >
-                    {showPassword ? "Hide" : "Show"}
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword((v) => !v)}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-600 hover:bg-neutral-50 transition focus:outline-none focus:ring-2 focus:ring-black/10"
+                      aria-label={showPassword ? "Hide password" : "Show password"}
+                      title={showPassword ? "Hide password" : "Show password"}
+                    >
+                      {showPassword ? "Hide" : "Show"}
+                    </button>
+                  </div>
+
+                  <div className="mt-1 text-xs text-neutral-500">Minimum 6 characters.</div>
                 </div>
 
-                <div className="mt-1 text-xs text-neutral-500">Minimum 6 characters.</div>
+                {/* ✅ Confirm password (signup only) */}
+                {mode === "signup" ? (
+                  <div>
+                    <label className="block text-sm font-medium text-neutral-800">Confirm password</label>
+                    <input
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      type={showPassword ? "text" : "password"}
+                      className="mt-1 w-full rounded-xl border border-neutral-300 px-3 py-2 outline-none focus:ring-2 focus:ring-black/10 focus:border-neutral-400"
+                      autoComplete="new-password"
+                    />
+
+                    {/* calm mismatch hint */}
+                    {confirmPassword.length > 0 && !passwordsMatch ? (
+                      <div className="mt-1 text-xs text-neutral-500">Passwords don’t match yet.</div>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
             ) : null}
 
@@ -247,6 +286,8 @@ export default function LoginClient({ nextPath }: { nextPath: string }) {
                       setMode("signup");
                       setStatus("");
                       setShowPassword(false);
+                      setPassword("");
+                      setConfirmPassword("");
                     }}
                     className="inline-flex items-center rounded-full border border-neutral-200 bg-white px-3 py-1 text-sm text-neutral-800 hover:bg-neutral-50 transition focus:outline-none focus:ring-2 focus:ring-black/10"
                   >
@@ -259,6 +300,8 @@ export default function LoginClient({ nextPath }: { nextPath: string }) {
                       setMode("signin");
                       setStatus("");
                       setShowPassword(false);
+                      setPassword("");
+                      setConfirmPassword("");
                     }}
                     className="inline-flex items-center rounded-full border border-neutral-200 bg-white px-3 py-1 text-sm text-neutral-800 hover:bg-neutral-50 transition focus:outline-none focus:ring-2 focus:ring-black/10"
                   >
@@ -272,11 +315,15 @@ export default function LoginClient({ nextPath }: { nextPath: string }) {
                     if (mode === "reset") {
                       setMode("signin");
                       setStatus("");
+                      setPassword("");
+                      setConfirmPassword("");
                       return;
                     }
                     setMode("reset");
                     setStatus("");
                     setShowPassword(false);
+                    setPassword("");
+                    setConfirmPassword("");
                   }}
                   className="inline-flex items-center rounded-full border border-neutral-200 bg-white px-3 py-1 text-sm text-neutral-800 hover:bg-neutral-50 transition focus:outline-none focus:ring-2 focus:ring-black/10"
                 >
