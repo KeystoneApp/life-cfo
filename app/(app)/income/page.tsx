@@ -31,6 +31,7 @@ function formatMoneyFromCents(cents: number, currency = "AUD") {
       style: "currency",
       currency,
       minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
     }).format(value);
   } catch {
     return `${currency} ${value.toFixed(2)}`;
@@ -42,6 +43,14 @@ function centsFromInput(input: string): number {
   if (!cleaned) return 0;
   const [whole, frac = ""] = cleaned.split(".");
   return parseInt(whole || "0", 10) * 100 + parseInt((frac + "00").slice(0, 2), 10);
+}
+
+// ✅ format as $12,345.67 (on blur)
+function formatMoneyInput(input: string, currency = "AUD") {
+  const raw = (input ?? "").trim();
+  if (!raw) return "";
+  const cents = centsFromInput(raw);
+  return formatMoneyFromCents(cents, currency);
 }
 
 function toLocalInputValue(iso: string) {
@@ -287,6 +296,8 @@ export default function IncomePage() {
                   placeholder="Amount"
                   value={amount}
                   onChange={(e) => setAmount(e.target.value)}
+                  onBlur={() => setAmount((v) => formatMoneyInput(v, "AUD"))}
+                  inputMode="decimal"
                 />
               </div>
 

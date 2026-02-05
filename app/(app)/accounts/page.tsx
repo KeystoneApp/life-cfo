@@ -1,4 +1,3 @@
-// app/(app)/accounts/page.tsx
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -20,19 +19,38 @@ type Account = {
   updated_at: string;
 };
 
+// ✅ Parse money input that may include $ and commas (and optional minus)
 function toCents(input: string) {
-  const n = Number.parseFloat(input);
-  if (Number.isNaN(n)) return null;
-  return Math.round(n * 100);
+  const raw = (input ?? "").trim();
+  if (!raw) return 0;
+
+  const negative = raw.includes("-") && raw.indexOf("-") < raw.indexOf(raw.replace(/[^0-9]/g, "")[0] ?? "");
+  const cleaned = raw.replace(/[^\d.]/g, "");
+  if (!cleaned) return 0;
+
+  const [whole, frac = ""] = cleaned.split(".");
+  const cents = parseInt(whole || "0", 10) * 100 + parseInt((frac + "00").slice(0, 2), 10);
+  if (!Number.isFinite(cents)) return null;
+
+  return negative ? -Math.abs(cents) : cents;
 }
 
 function formatMoney(cents: number, currency = "AUD") {
   const value = (cents ?? 0) / 100;
   try {
-    return new Intl.NumberFormat(undefined, { style: "currency", currency }).format(value);
+    return new Intl.NumberFormat("en-AU", { style: "currency", currency, minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value);
   } catch {
     return `${currency} ${value.toFixed(2)}`;
   }
+}
+
+// ✅ Format raw input to "$#,###.##" (on blur)
+function formatMoneyInput(input: string, currency = "AUD") {
+  const raw = (input ?? "").trim();
+  if (!raw) return "";
+  const cents = toCents(raw);
+  if (cents == null) return raw;
+  return formatMoney(cents, currency);
 }
 
 const LOAD_THROTTLE_MS = 1500;
@@ -138,7 +156,7 @@ export default function AccountsPage() {
     setEditBalance((prev) => {
       const next = { ...prev };
       for (const a of list) {
-        if (next[a.id] == null) next[a.id] = ((a.current_balance_cents ?? 0) / 100).toFixed(2);
+        if (next[a.id] == null) next[a.id] = formatMoney(a.current_balance_cents ?? 0, a.currency ?? "AUD");
       }
       return next;
     });
@@ -177,7 +195,7 @@ export default function AccountsPage() {
             });
             setEditName((prev) => (prev[row.id] == null ? { ...prev, [row.id]: row.name ?? "" } : prev));
             setEditBalance((prev) =>
-              prev[row.id] == null ? { ...prev, [row.id]: ((row.current_balance_cents ?? 0) / 100).toFixed(2) } : prev
+              prev[row.id] == null ? { ...prev, [row.id]: formatMoney(row.current_balance_cents ?? 0, row.currency ?? "AUD") } : prev
             );
             return;
           }
@@ -265,7 +283,7 @@ export default function AccountsPage() {
     setNewBalance("");
 
     setEditName((prev) => ({ ...prev, [inserted.id]: inserted.name }));
-    setEditBalance((prev) => ({ ...prev, [inserted.id]: (inserted.current_balance_cents / 100).toFixed(2) }));
+    setEditBalance((prev) => ({ ...prev, [inserted.id]: formatMoney(inserted.current_balance_cents ?? 0, inserted.currency ?? "AUD") }));
 
     setStatusLine("Created ✅");
   };
@@ -305,6 +323,7 @@ export default function AccountsPage() {
     }
 
     setRows((prev) => prev.map((x) => (x.id === a.id ? { ...x, name, current_balance_cents: cents } : x)));
+    setEditBalance((prev) => ({ ...prev, [a.id]: formatMoney(cents, a.currency ?? "AUD") }));
     setStatusLine("Saved ✅");
   };
 
@@ -375,11 +394,7 @@ export default function AccountsPage() {
   return (
     <Page
       title="Accounts"
-      subtitle={[
-        email ? `Signed in as: ${email}` : null,
-        `Total balance: ${formatMoney(totalBalanceCents, "AUD")}`,
-        statusLine,
-      ]
+      subtitle={[email ? `Signed in as: ${email}` : null, `Total balance: ${formatMoney(totalBalanceCents, "AUD")}`, statusLine]
         .filter(Boolean)
         .join(" • ")}
       right={
@@ -416,6 +431,7 @@ export default function AccountsPage() {
                 <input
                   value={newBalance}
                   onChange={(e) => setNewBalance(e.target.value)}
+                  onBlur={() => setNewBalance((v) => formatMoneyInput(v, "AUD"))}
                   placeholder="Balance (e.g. 1250.00)"
                   inputMode="decimal"
                   className="w-[220px] rounded-xl border border-zinc-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
@@ -455,6 +471,7 @@ export default function AccountsPage() {
           {visibleRows.map((a, idx) => {
             const saving = !!savingRow[a.id];
             const deleting = !!deletingRow[a.id];
+
             const changed =
               (editName[a.id] ?? "").trim() !== a.name ||
               toCents((editBalance[a.id] ?? "").trim()) !== (a.current_balance_cents ?? 0);
@@ -500,6 +517,7 @@ export default function AccountsPage() {
                         <input
                           value={editBalance[a.id] ?? ""}
                           onChange={(e) => setEditBalance((prev) => ({ ...prev, [a.id]: e.target.value }))}
+                          onBlur={() => setEditBalance((prev) => ({ ...prev, [a.id]: formatMoneyInput(prev[a.id] ?? "", a.currency ?? "AUD") }))}
                           inputMode="decimal"
                           className="w-full rounded-xl border border-zinc-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
                         />

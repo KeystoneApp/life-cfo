@@ -40,6 +40,8 @@ type BillPayment = {
   created_at: string;
 };
 
+/* -------------------- money formatting helpers -------------------- */
+
 function formatMoneyFromCents(cents: number, currency = "AUD") {
   const value = (cents || 0) / 100;
   try {
@@ -66,6 +68,26 @@ function centsFromInput(input: string): number {
   const cents = parseInt(whole, 10) * 100 + parseInt(fracPadded, 10);
   return Number.isFinite(cents) ? cents : 0;
 }
+
+/**
+ * Display-friendly currency input: "$12,345.67" as you type.
+ * Safe with centsFromInput() because it strips "$" and "," out.
+ */
+function formatCurrencyInput(input: string, currencySymbol = "$") {
+  const cleaned = (input || "").replace(/[^\d.]/g, "");
+  if (!cleaned) return "";
+
+  const [wholeRaw, fracRaw = ""] = cleaned.split(".");
+  const wholeDigits = (wholeRaw || "0").replace(/^0+(?=\d)/, "");
+  const whole = wholeDigits ? Number.parseInt(wholeDigits, 10).toString() : "0";
+  const frac = fracRaw.slice(0, 2);
+
+  const withCommas = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+
+  return `${currencySymbol}${withCommas}${cleaned.includes(".") ? `.${frac}` : ""}`;
+}
+
+/* -------------------- datetime helpers -------------------- */
 
 function toLocalInputValue(iso: string) {
   const d = new Date(iso);
@@ -97,7 +119,6 @@ function daysInMonth(year: number, month0: number) {
 }
 
 function addMonthsPreserveDay(date: Date, months: number) {
-  const y = date.getFullYear();
   const m = date.getMonth();
   const d = date.getDate();
 
@@ -360,7 +381,6 @@ export default function BillsPage() {
             const row = payload.new as RecurringBill;
             setBills((prev) => {
               if (prev.some((x) => x.id === row.id)) return prev;
-              // keep ordering calm: active desc + next due asc
               const merged = [...prev, row];
               merged.sort((a, b) => {
                 if (a.active !== b.active) return a.active ? -1 : 1;
@@ -404,7 +424,6 @@ export default function BillsPage() {
         }
       })
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "bill_payments", filter: `user_id=eq.${userId}` }, (payload) => {
-        // lightweight: prepend new payment
         try {
           const row = payload.new as BillPayment;
           setPayments((prev) => {
@@ -447,7 +466,7 @@ export default function BillsPage() {
   const lastPaymentByBillId = useMemo(() => {
     const map: Record<string, BillPayment> = {};
     for (const p of payments) {
-      if (!map[p.bill_id]) map[p.bill_id] = p; // payments already newest-first
+      if (!map[p.bill_id]) map[p.bill_id] = p;
     }
     return map;
   }, [payments]);
@@ -462,12 +481,9 @@ export default function BillsPage() {
 
   const VISIBLE_LIMIT = 5;
 
-const visibleBills = useMemo(
-  () => filteredBills.slice(0, VISIBLE_LIMIT),
-  [filteredBills]
-);
+  const visibleBills = useMemo(() => filteredBills.slice(0, VISIBLE_LIMIT), [filteredBills]);
 
-const hiddenBillsCount = Math.max(0, filteredBills.length - visibleBills.length);
+  const hiddenBillsCount = Math.max(0, filteredBills.length - visibleBills.length);
 
   async function addBill() {
     if (!userId) return;
@@ -515,7 +531,7 @@ const hiddenBillsCount = Math.max(0, filteredBills.length - visibleBills.length)
       ...prev,
       [b.id]: {
         ...b,
-        amount_input: ((b.amount_cents || 0) / 100).toFixed(2),
+        amount_input: formatCurrencyInput(((b.amount_cents || 0) / 100).toFixed(2)),
         next_due_local: toLocalInputValue(b.next_due_at),
       },
     }));
@@ -604,7 +620,6 @@ const hiddenBillsCount = Math.max(0, filteredBills.length - visibleBills.length)
     setBills((prev) => prev.map((x) => (x.id === b.id ? { ...x, next_due_at: nextDue } : x)));
 
     try {
-      // 1) insert receipt (append-only)
       const { data: paymentRow, error: payErr } = await supabase
         .from("bill_payments")
         .insert({
@@ -624,11 +639,9 @@ const hiddenBillsCount = Math.max(0, filteredBills.length - visibleBills.length)
       const paymentId = (paymentRow as any)?.id as string | undefined;
       if (!paymentId) throw new Error("Receipt inserted but missing id (unexpected).");
 
-      // 2) bump next due
       const { error: upErr } = await supabase.from("recurring_bills").update({ next_due_at: nextDue }).eq("id", b.id).eq("user_id", userId);
 
       if (upErr) {
-        // rollback receipt if the due-date update failed
         await supabase.from("bill_payments").delete().eq("id", paymentId).eq("user_id", userId);
         throw upErr;
       }
@@ -637,7 +650,6 @@ const hiddenBillsCount = Math.max(0, filteredBills.length - visibleBills.length)
         message: `"${b.name}" marked paid ✅`,
         undoLabel: "Undo",
         onUndo: async () => {
-          // optimistic revert
           setBills((prev) => prev.map((x) => (x.id === b.id ? { ...x, next_due_at: prevDue } : x)));
           setPayments((prev) => prev.filter((p) => p.id !== paymentId));
 
@@ -656,7 +668,6 @@ const hiddenBillsCount = Math.max(0, filteredBills.length - visibleBills.length)
 
       await Promise.all([loadBills(userId, { silent: true }), loadPayments(userId, { silent: true })]);
     } catch (e: any) {
-      // revert optimistic bump
       setBills((prev) => prev.map((x) => (x.id === b.id ? { ...x, next_due_at: prevDue } : x)));
       notify({ title: "Mark paid failed", description: e?.message ?? "Couldn’t mark paid." });
       await Promise.all([loadBills(userId, { silent: true }), loadPayments(userId, { silent: true })]);
@@ -713,7 +724,6 @@ const hiddenBillsCount = Math.max(0, filteredBills.length - visibleBills.length)
     setCadence(s.cadence);
     setAutopay(s.autopayDefault);
     setNextDueLocal(nextDueDefaultForCadence(s.cadence));
-    // keep amount empty (user knows it best)
     notify({ title: "Prefilled", description: s.label });
   }
 
@@ -721,8 +731,8 @@ const hiddenBillsCount = Math.max(0, filteredBills.length - visibleBills.length)
     live === "live"
       ? "border border-emerald-200 bg-emerald-50 text-emerald-700"
       : live === "offline"
-        ? "border border-rose-200 bg-rose-50 text-rose-700"
-        : "border border-zinc-200 bg-zinc-50 text-zinc-700";
+      ? "border border-rose-200 bg-rose-50 text-rose-700"
+      : "border border-zinc-200 bg-zinc-50 text-zinc-700";
 
   const filterLabel = useMemo(() => labelForBillsFilter(filter), [filter]);
 
@@ -753,11 +763,12 @@ const hiddenBillsCount = Math.max(0, filteredBills.length - visibleBills.length)
     <Page title="Bills" subtitle="Inputs only. Keystone doesn’t guess — it only reminds." right={right}>
       <div className="grid gap-4">
         {/* Search bills (escape hatch) */}
-<Card>
-  <CardContent>
-    <AssistedSearch scope="bills" placeholder="Search bills…" />
-  </CardContent>
-</Card>
+        <Card>
+          <CardContent>
+            <AssistedSearch scope="bills" placeholder="Search bills…" />
+          </CardContent>
+        </Card>
+
         {/* Summary + calm filters */}
         <Card>
           <CardContent>
@@ -841,9 +852,10 @@ const hiddenBillsCount = Math.max(0, filteredBills.length - visibleBills.length)
                 <div className="text-sm mb-1 opacity-70">Amount (AUD)</div>
                 <input
                   className="w-full rounded-md border px-3 py-2 bg-transparent"
-                  placeholder="e.g. 120.00"
+                  placeholder="e.g. $120.00"
                   value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
+                  onChange={(e) => setAmount(formatCurrencyInput(e.target.value))}
+                  inputMode="decimal"
                 />
               </div>
 
@@ -944,7 +956,13 @@ const hiddenBillsCount = Math.max(0, filteredBills.length - visibleBills.length)
                                 <input
                                   className="w-full rounded-md border px-3 py-2 bg-transparent"
                                   value={String(d?.amount_input ?? "")}
-                                  onChange={(e) => setDrafts((prev) => ({ ...prev, [b.id]: { ...prev[b.id], amount_input: e.target.value } }))}
+                                  onChange={(e) =>
+                                    setDrafts((prev) => ({
+                                      ...prev,
+                                      [b.id]: { ...prev[b.id], amount_input: formatCurrencyInput(e.target.value) },
+                                    }))
+                                  }
+                                  inputMode="decimal"
                                 />
                               </div>
 
@@ -1035,11 +1053,10 @@ const hiddenBillsCount = Math.max(0, filteredBills.length - visibleBills.length)
                 })
               )}
             </div>
-{hiddenBillsCount > 0 ? (
-  <div className="mt-2 text-xs text-zinc-500">
-    {hiddenBillsCount} more hidden — use search to find anything.
-  </div>
-) : null}
+
+            {hiddenBillsCount > 0 ? (
+              <div className="mt-2 text-xs text-zinc-500">{hiddenBillsCount} more hidden — use search to find anything.</div>
+            ) : null}
           </CardContent>
         </Card>
 
@@ -1082,4 +1099,3 @@ const hiddenBillsCount = Math.max(0, filteredBills.length - visibleBills.length)
     </Page>
   );
 }
-
