@@ -23,12 +23,13 @@ export default function FinePrintReadOnly({
 
   return (
     <div className="space-y-4">
-      {/* Receipt */}
       <Card className="border-zinc-200 bg-white">
         <CardContent>
           <div className="space-y-4">
             <div>
-              <div className="text-sm font-semibold text-zinc-900">Fine print accepted</div>
+              <div className="text-sm font-semibold text-zinc-900">
+                Fine print accepted
+              </div>
               <div className="text-sm text-zinc-700">
                 You’ve already reviewed and accepted Keystone’s boundaries.
               </div>
@@ -57,26 +58,28 @@ export default function FinePrintReadOnly({
         </CardContent>
       </Card>
 
-      {/* Full fine print text (read-only) */}
       <Card className="border-zinc-200 bg-white">
         <CardContent>
           <div className="space-y-6">
-            {/* What it is */}
             <div className="space-y-2">
               <div className="text-sm font-semibold text-zinc-900">
                 What Keystone is
               </div>
               <div className="text-sm text-zinc-700">
-                Keystone is a calm place to hold decisions and inputs so you can
-                see life more clearly and stop carrying mental loops.
+                Keystone is a calm decision system.
               </div>
               <div className="text-sm text-zinc-700">
-                It’s built for orientation and repeatable good decisions — not
-                dashboards, not hustle.
+                It brings together your information — decisions, money, notes,
+                and timing — with AI that helps you understand what’s going on,
+                answer questions about your life, and make informed choices.
+              </div>
+              <div className="text-sm text-zinc-700">
+                Keystone’s job is not to push you to act. It’s to make sure the
+                right information is available, connected, and understandable,
+                so decisions feel clearer and lighter.
               </div>
             </div>
 
-            {/* What it is not */}
             <div className="space-y-2">
               <div className="text-sm font-semibold text-zinc-900">
                 What Keystone is not
@@ -89,7 +92,6 @@ export default function FinePrintReadOnly({
               </ul>
             </div>
 
-            {/* AI boundaries */}
             <div className="space-y-2">
               <div className="text-sm font-semibold text-zinc-900">
                 AI boundaries
