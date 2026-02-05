@@ -96,9 +96,15 @@ export default function LoginClient({ nextPath }: { nextPath: string }) {
     setStatus("Creating account…");
 
     try {
+      // ✅ Ensure confirmation emails always land on /auth/callback (not "/")
+      const origin = window.location.origin;
+
       const { data, error } = await supabase.auth.signUp({
         email: email.trim(),
         password,
+        options: {
+          emailRedirectTo: `${origin}/auth/callback`,
+        },
       });
 
       if (error) {

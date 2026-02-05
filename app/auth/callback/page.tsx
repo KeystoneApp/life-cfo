@@ -3,13 +3,11 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { createServerClient } from "@supabase/ssr";
 
-const DEFAULT_AFTER_AUTH = "/fine-print?next=%2F";
-
 function safeNext(input: unknown) {
-  if (typeof input !== "string") return DEFAULT_AFTER_AUTH;
-  if (!input.startsWith("/")) return DEFAULT_AFTER_AUTH;
-  if (input.startsWith("//")) return DEFAULT_AFTER_AUTH;
-  if (input.includes("http://") || input.includes("https://")) return DEFAULT_AFTER_AUTH;
+  if (typeof input !== "string") return null;
+  if (!input.startsWith("/")) return null;
+  if (input.startsWith("//")) return null;
+  if (input.includes("http://") || input.includes("https://")) return null;
   return input;
 }
 
@@ -18,7 +16,9 @@ export default async function AuthCallbackPage({
 }: {
   searchParams: Record<string, string | string[] | undefined>;
 }) {
-  const cookieStore = await cookies();
+  // ✅ Fix TS in Next where cookies() is typed async in some versions
+  type CookieStore = Awaited<ReturnType<typeof cookies>>;
+  const cookieStore: CookieStore = await cookies();
 
   const code =
     typeof searchParams.code === "string"
@@ -41,16 +41,13 @@ export default async function AuthCallbackPage({
       ? searchParams.next[0]
       : undefined;
 
+  // ✅ Default: after a normal signup/login confirmation, go to Fine print.
+  // Fine print will send them onward using its `next` param after signing.
+  const defaultNext = "/fine-print?next=%2Fhome";
+
   // If this is a recovery link, ALWAYS go to /reset
-  // If this is a signup/magiclink and no next provided, go to Fine print first.
-  const nextPath =
-    type === "recovery"
-      ? "/reset"
-      : type === "signup" || type === "magiclink"
-      ? nextParam
-        ? safeNext(nextParam)
-        : DEFAULT_AFTER_AUTH
-      : safeNext(nextParam);
+  const safe = safeNext(nextParam);
+  const nextPath = type === "recovery" ? "/reset" : safe ?? defaultNext;
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -64,7 +61,7 @@ export default async function AuthCallbackPage({
           cookieStore.set({ name, value, ...options });
         },
         remove(name: string, options: any) {
-          cookieStore.set({ name, value: "", ...options, maxAge: 0 });
+          cookieStore.set({ name, value: "", ...options });
         },
       },
     }
