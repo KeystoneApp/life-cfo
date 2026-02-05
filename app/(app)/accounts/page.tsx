@@ -1,3 +1,4 @@
+// app/(app)/accounts/page.tsx
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -24,21 +25,25 @@ function toCents(input: string) {
   const raw = (input ?? "").trim();
   if (!raw) return 0;
 
-  const negative = raw.includes("-") && raw.indexOf("-") < raw.indexOf(raw.replace(/[^0-9]/g, "")[0] ?? "");
-  const cleaned = raw.replace(/[^\d.]/g, "");
+  // keep digits, dot, minus (commas/$/spaces stripped)
+  const cleaned = raw.replace(/[^\d.-]/g, "");
   if (!cleaned) return 0;
 
-  const [whole, frac = ""] = cleaned.split(".");
-  const cents = parseInt(whole || "0", 10) * 100 + parseInt((frac + "00").slice(0, 2), 10);
-  if (!Number.isFinite(cents)) return null;
+  const n = Number.parseFloat(cleaned);
+  if (Number.isNaN(n)) return null;
 
-  return negative ? -Math.abs(cents) : cents;
+  return Math.round(n * 100);
 }
 
 function formatMoney(cents: number, currency = "AUD") {
   const value = (cents ?? 0) / 100;
   try {
-    return new Intl.NumberFormat("en-AU", { style: "currency", currency, minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value);
+    return new Intl.NumberFormat("en-AU", {
+      style: "currency",
+      currency,
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(value);
   } catch {
     return `${currency} ${value.toFixed(2)}`;
   }
@@ -425,6 +430,8 @@ export default function AccountsPage() {
                   value={newName}
                   onChange={(e) => setNewName(e.target.value)}
                   placeholder="e.g. Everyday Spending"
+                  autoComplete="off"
+                  spellCheck={false}
                   className="min-w-[240px] flex-1 rounded-xl border border-zinc-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
                 />
 
@@ -434,6 +441,8 @@ export default function AccountsPage() {
                   onBlur={() => setNewBalance((v) => formatMoneyInput(v, "AUD"))}
                   placeholder="Balance (e.g. 1250.00)"
                   inputMode="decimal"
+                  autoComplete="off"
+                  spellCheck={false}
                   className="w-[220px] rounded-xl border border-zinc-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
                 />
 
@@ -473,8 +482,7 @@ export default function AccountsPage() {
             const deleting = !!deletingRow[a.id];
 
             const changed =
-              (editName[a.id] ?? "").trim() !== a.name ||
-              toCents((editBalance[a.id] ?? "").trim()) !== (a.current_balance_cents ?? 0);
+              (editName[a.id] ?? "").trim() !== a.name || toCents((editBalance[a.id] ?? "").trim()) !== (a.current_balance_cents ?? 0);
 
             // ✅ Zebra + tighter spacing (subtle, calm)
             const zebraBg = idx % 2 === 0 ? "bg-white" : "bg-zinc-50";
@@ -508,6 +516,8 @@ export default function AccountsPage() {
                         <input
                           value={editName[a.id] ?? ""}
                           onChange={(e) => setEditName((prev) => ({ ...prev, [a.id]: e.target.value }))}
+                          autoComplete="off"
+                          spellCheck={false}
                           className="w-full rounded-xl border border-zinc-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
                         />
                       </div>
@@ -517,8 +527,12 @@ export default function AccountsPage() {
                         <input
                           value={editBalance[a.id] ?? ""}
                           onChange={(e) => setEditBalance((prev) => ({ ...prev, [a.id]: e.target.value }))}
-                          onBlur={() => setEditBalance((prev) => ({ ...prev, [a.id]: formatMoneyInput(prev[a.id] ?? "", a.currency ?? "AUD") }))}
+                          onBlur={() =>
+                            setEditBalance((prev) => ({ ...prev, [a.id]: formatMoneyInput(prev[a.id] ?? "", a.currency ?? "AUD") }))
+                          }
                           inputMode="decimal"
+                          autoComplete="off"
+                          spellCheck={false}
                           className="w-full rounded-xl border border-zinc-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
                         />
                       </div>
