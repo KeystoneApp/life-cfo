@@ -1,107 +1,67 @@
-// app/(app)/lifecfo-home/page.tsx
+// app/(app)/lifecfo-home-v2/page.tsx
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { Page } from "@/components/Page";
-import { Card, CardContent, Chip } from "@/components/ui";
-import { useHomeUnload } from "@/lib/home/useHomeUnload";
-import { useRouter } from "next/navigation";
-import { maybeCrisisIntercept } from "@/lib/safety/guard";
+import { Card, CardContent, Chip, Button, useToast } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
 
-/* ---------- helpers ---------- */
+type AskState = "idle" | "asking" | "answered" | "error";
 
-function firstNameOf(full: string) {
-  const s = (full || "").trim();
-  if (!s) return "";
-  return s.split(/\s+/)[0] || "";
-}
-
-function isYesish(s: string) {
-  const t = s.trim().toLowerCase();
-  return ["y", "yes", "yep", "yeah", "sure", "ok", "okay"].includes(t);
-}
-
-/**
- * Life CFO intent rules (V1.5)
- * Default → ASK (unless clearly "hold")
- */
-function inferIntent(raw: string): "ask" | "hold" {
-  const s = raw.trim();
-  if (!s) return "hold";
-  const lower = s.toLowerCase();
-
-  // Explicit question cues → ASK
-  if (s.includes("?")) return "ask";
-  if (/^(what|when|why|how|can|should|do i|did i|am i|are we|are you)\b/i.test(lower)) return "ask";
-
-  // Help-request cues (even without "?") → ASK
-  if (/\b(help me|help us|we need to know|i need to know|best way|what should we do|how should we|can you help)\b/i.test(lower)) return "ask";
-
-  // Strong “hold/capture” cues → HOLD
-  if (/^(remember|note|save|hold|capture|remind me)\b/i.test(lower)) return "hold";
-
-  // Emotional unloading (no help cues) → HOLD
-  if (/^(i feel|i’m feeling|im feeling)\b/i.test(lower) && !/\b(help|how|what|should|can)\b/i.test(lower)) return "hold";
-
-  // Default → ASK
-  return "ask";
-}
-
-type CaptureSeed = {
-  title: string;
-  prompt: string;
-  notes: string[];
+type AskApiResponse = {
+  answer?: string;
+  action?: "open_bills" | "open_money" | "open_decisions" | "open_review" | "open_chapters" | "none";
+  suggested_next?: "none" | "create_capture" | "open_thinking";
+  capture_seed?: { title: string; prompt: string; notes: string[] } | null;
+  error?: string;
 };
 
-type AskState =
-  | { status: "idle" }
-  | { status: "loading"; question: string }
-  | {
-      status: "done";
-      question: string;
-      answer: string;
-      actionHref?: string | null;
-      suggestedNext?: "none" | "create_capture";
-      captureSeed?: CaptureSeed | null;
-    }
-  | { status: "error"; question: string; message: string };
+function safeStr(v: unknown) {
+  return typeof v === "string" ? v : "";
+}
 
-export default function LifeCFOHomePage() {
+function actionToHref(action: AskApiResponse["action"]): string | null {
+  switch (action) {
+    case "open_money":
+      return "/money";
+    case "open_bills":
+      return "/bills";
+    case "open_decisions":
+      return "/decisions";
+    case "open_review":
+      return "/revisit";
+    case "open_chapters":
+      return "/chapters";
+    default:
+      return null;
+  }
+}
+
+export default function LifeCfoHomeV2Page() {
   const router = useRouter();
+  const { toast } = useToast();
 
-  const [userId, setUserId] = useState<string | null>(null);
   const [authStatus, setAuthStatus] = useState<"loading" | "signed_out" | "signed_in">("loading");
-  const [preferredName, setPreferredName] = useState("");
+  const [userId, setUserId] = useState<string | null>(null);
 
   const [text, setText] = useState("");
-  const [affirmation, setAffirmation] = useState<"Saved." | "Held." | null>(null);
-  const [ask, setAsk] = useState<AskState>({ status: "idle" });
+  const [state, setState] = useState<AskState>("idle");
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  /** 🔑 staged hold (NOT saved yet) */
-  const [stagedHold, setStagedHold] = useState<string | null>(null);
+  const [resp, setResp] = useState<AskApiResponse | null>(null);
+  const lastAskedRef = useRef<string>("");
 
-  const inputRef = useRef<HTMLTextAreaElement | null>(null);
-  const answerRef = useRef<HTMLDivElement | null>(null);
-  const timerRef = useRef<number | null>(null);
-
-  /**
-   * ✅ Keep hook stable (can’t call conditionally).
-   * We only *use* unload.submit when authStatus==="signed_in" AND userId exists.
-   */
-  const unload = useHomeUnload({ userId: userId ?? "" });
-
-  /* ---------- auth ---------- */
-
+  // ---- Auth (minimal: userId only; no profile reads) ----
   useEffect(() => {
     let alive = true;
     (async () => {
       const { data, error } = await supabase.auth.getUser();
       if (!alive) return;
 
-      if (error || !data?.user) {
+      if (error || !data?.user?.id) {
         setUserId(null);
         setAuthStatus("signed_out");
         return;
@@ -116,287 +76,261 @@ export default function LifeCFOHomePage() {
     };
   }, []);
 
-  useEffect(() => {
-    if (!userId) return;
+  const canSubmit = useMemo(() => {
+    return authStatus === "signed_in" && !!userId && text.trim().length > 0 && state !== "asking";
+  }, [authStatus, userId, text, state]);
 
-    let alive = true;
-    (async () => {
-      const { data } = await supabase.from("profiles").select("fine_print_signed_name").eq("user_id", userId).maybeSingle();
-      if (!alive) return;
+  const actionHref = useMemo(() => actionToHref(resp?.action), [resp?.action]);
 
-      const full = typeof data?.fine_print_signed_name === "string" ? data.fine_print_signed_name : "";
-      setPreferredName(firstNameOf(full));
-    })();
+  async function ask() {
+    const q = text.trim();
+    if (!q) return;
 
-    return () => {
-      alive = false;
-    };
-  }, [userId]);
+    if (authStatus !== "signed_in" || !userId) {
+      setState("error");
+      setErrorMsg("Please sign in to ask Life CFO.");
+      return;
+    }
 
-  const flash = (v: "Saved." | "Held.") => {
-    setAffirmation(v);
-    if (timerRef.current) window.clearTimeout(timerRef.current);
-    timerRef.current = window.setTimeout(() => setAffirmation(null), 1200);
-  };
-
-  useEffect(() => {
-    return () => {
-      if (timerRef.current) window.clearTimeout(timerRef.current);
-      timerRef.current = null;
-    };
-  }, []);
-
-  const focusInput = () => window.setTimeout(() => inputRef.current?.focus(), 0);
-  const scrollToAnswer = () => window.setTimeout(() => answerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 40);
-
-  /* ---------- ask ---------- */
-
-  const askHome = async (question: string) => {
-    if (!userId) return;
-
-    setAsk({ status: "loading", question });
+    // Always answer first; never save; never infer hold.
+    setState("asking");
+    setErrorMsg(null);
+    setResp(null);
+    lastAskedRef.current = q;
 
     try {
       const res = await fetch("/api/home/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId, question }),
+        // Route requires userId + question
+        body: JSON.stringify({ userId, question: q, text: q }),
       });
 
-      const json = await res.json();
+      const json = (await res.json().catch(() => ({}))) as AskApiResponse;
 
       if (!res.ok) {
-        setAsk({ status: "error", question, message: "I couldn’t answer that right now." });
-        scrollToAnswer();
+        setState("error");
+        setErrorMsg(json?.error ? String(json.error) : "I couldn’t answer that right now.");
         return;
       }
 
-      const answer = typeof json?.answer === "string" ? json.answer : "";
+      setResp(json);
+      setState("answered");
+    } catch (e: any) {
+      setState("error");
+      setErrorMsg(e?.message ? String(e.message) : "I couldn’t answer that right now.");
+    }
+  }
 
-      const actionHref =
-        json?.action === "open_money"
-          ? "/money"
-          : json?.action === "open_bills"
-          ? "/bills"
-          : json?.action === "open_decisions"
-          ? "/decisions"
-          : json?.action === "open_review"
-          ? "/revisit"
-          : json?.action === "open_chapters"
-          ? "/chapters"
-          : null;
-
-      setAsk({
-        status: "done",
-        question,
-        answer,
-        actionHref,
-      });
-
-      scrollToAnswer();
+  async function copyToClipboard(v: string) {
+    const s = v.trim();
+    if (!s) return;
+    try {
+      await navigator.clipboard.writeText(s);
+      toast({ title: "Copied", description: "Paste it anywhere you like." });
     } catch {
-      setAsk({ status: "error", question, message: "I couldn’t answer that right now." });
-      scrollToAnswer();
+      toast({ title: "Couldn’t copy", description: "Your browser blocked clipboard access." });
     }
-  };
+  }
 
-  /* ---------- submit ---------- */
-
-  const submit = async () => {
-    const msg = text.trim();
-    if (!msg) return;
-
+  function clear() {
     setText("");
-    focusInput();
-
-    // new input cancels any staged hold UI
-    setStagedHold(null);
-
-    if (authStatus !== "signed_in" || !userId) {
-      flash("Held.");
-      return;
-    }
-
-    // Crisis intercept (no save, no AI)
-    const intercept = maybeCrisisIntercept(msg);
-    if (intercept) {
-      flash("Held.");
-      setAsk({ status: "done", question: msg, answer: intercept.content });
-      scrollToAnswer();
-      return;
-    }
-
-    // “yes” follow-up after an answer
-    if (isYesish(msg) && ask.status === "done") {
-      flash("Held.");
-      await askHome(`${ask.question}\n\nUser follow-up: yes.`);
-      return;
-    }
-
-    const intent = inferIntent(msg);
-
-    if (intent === "ask") {
-      flash("Held.");
-      await askHome(msg);
-      return;
-    }
-
-    /**
-     * 🔒 HOLD = stage only (NOT saved yet)
-     * We still show a small “Saved.” toast because it’s familiar,
-     * but the inline card makes it explicit that nothing was saved.
-     */
-    flash("Saved.");
-    setAsk({ status: "idle" });
-    setStagedHold(msg);
-  };
-
-  /* ---------- inline staged card ---------- */
-
-  const stagedInline = useMemo(() => {
-    if (!stagedHold) return null;
-
-    return (
-      <div className="mt-2 rounded-2xl border border-zinc-200 bg-white p-3">
-        <div className="text-xs font-semibold text-zinc-900">Held safely</div>
-        <div className="mt-1 text-xs text-zinc-700">Nothing has been saved yet.</div>
-
-        <div className="mt-2 flex flex-wrap gap-2">
-          <Chip
-            className="text-xs"
-            title="Save to Capture"
-            onClick={async () => {
-              if (!userId) return;
-
-              try {
-                await unload.submit(stagedHold);
-              } catch {
-                // Don’t throw UI errors here; keep calm.
-                return;
-              }
-
-              setStagedHold(null);
-              router.push("/capture");
-            }}
-          >
-            Save to Capture <span className="ml-1 opacity-70">→</span>
-          </Chip>
-
-          <Chip className="text-xs" title="Discard" onClick={() => setStagedHold(null)}>
-            Discard
-          </Chip>
-        </div>
-      </div>
-    );
-  }, [stagedHold, unload, router, userId]);
-
-  /* ---------- render ---------- */
-
-  const subtitle = preferredName ? `Good to see you, ${preferredName}.` : undefined;
+    setResp(null);
+    setErrorMsg(null);
+    setState("idle");
+    lastAskedRef.current = "";
+  }
 
   return (
-    <Page title="Home" subtitle={subtitle}>
-      <div className="mx-auto max-w-[760px] space-y-6">
-        <Card className="border-zinc-200 bg-white">
-          <CardContent>
+    <Page
+      title="Life CFO"
+      subtitle={<span className="text-sm">Ask anything. I’ll answer first. Saving is always optional.</span>}
+      right={
+        <div className="flex items-center gap-2">
+          <Chip onClick={() => router.push("/lifecfo-home")} title="Life CFO v1.5" className="text-xs">
+            v1.5
+          </Chip>
+          <Chip onClick={() => router.push("/home")} title="Keystone Home" className="text-xs">
+            Keystone
+          </Chip>
+        </div>
+      }
+    >
+      <div className="mx-auto max-w-[760px] space-y-4">
+        <Card>
+          <CardContent className="space-y-2">
+            <div className="text-sm font-medium">Status</div>
+            {authStatus === "loading" ? (
+              <div className="text-sm opacity-80">Checking sign-in…</div>
+            ) : authStatus === "signed_out" ? (
+              <div className="text-sm opacity-80">You’re signed out. Sign in to ask questions.</div>
+            ) : (
+              <div className="text-sm opacity-80">You’re signed in.</div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardContent className="space-y-3">
             <div className="space-y-2">
-              <div className="text-sm font-semibold text-zinc-900">Life CFO</div>
+              <div className="text-sm font-medium">What’s on your mind?</div>
+              <textarea
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                placeholder="e.g. ‘Husband and I need to know how to best manage our accounts…’"
+                className="min-h-[120px] w-full resize-y rounded-xl border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[var(--ring)]"
+                disabled={authStatus !== "signed_in"}
+                onKeyDown={(e) => {
+                  const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+                  const cmdOrCtrl = isMac ? e.metaKey : e.ctrlKey;
 
-              {authStatus === "signed_out" ? (
-                <div className="text-sm text-zinc-700">Sign in to use Home.</div>
-              ) : (
-                <div className="text-sm text-zinc-700">You don’t need to do anything right now.</div>
-              )}
+                  if (cmdOrCtrl && e.key === "Enter") {
+                    e.preventDefault();
+                    void ask();
+                    return;
+                  }
+
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    void ask();
+                  }
+                }}
+              />
+              <div className="text-xs opacity-70">Enter to ask • Shift+Enter for a new line • Cmd/Ctrl+Enter also works</div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <Button onClick={ask} disabled={!canSubmit}>
+                {state === "asking" ? "Asking…" : "Ask"}
+              </Button>
+
+              <Button
+                variant="ghost"
+                onClick={() => copyToClipboard(text)}
+                disabled={text.trim().length === 0}
+              >
+                Copy
+              </Button>
+
+              <Button variant="ghost" onClick={clear} disabled={state === "asking"}>
+                Clear
+              </Button>
+
+              <div className="ml-auto text-xs opacity-70">
+                {state === "idle" && "Ready"}
+                {state === "asking" && "Thinking…"}
+                {state === "answered" && "Answered"}
+                {state === "error" && "Couldn’t answer"}
+              </div>
             </div>
           </CardContent>
         </Card>
 
-        <Card className="border-zinc-200 bg-white">
-          <CardContent>
-            <textarea
-              ref={inputRef}
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              placeholder="What’s on your mind?"
-              className="w-full min-h-[140px] resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[15px] leading-relaxed text-zinc-800 placeholder:text-zinc-500 outline-none focus:ring-2 focus:ring-zinc-200"
-              disabled={authStatus !== "signed_in"}
-              onKeyDown={(e) => {
-                const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
-                const cmdOrCtrl = isMac ? e.metaKey : e.ctrlKey;
+        {state === "error" ? (
+          <Card>
+            <CardContent className="space-y-2">
+              <div className="text-sm font-medium">Couldn’t answer</div>
+              <div className="text-sm opacity-80">{errorMsg || "Unknown error."}</div>
+              <div className="flex flex-wrap gap-2 pt-2">
+                <Chip className="text-xs" title="Try again" onClick={() => void ask()}>
+                  Try again
+                </Chip>
+                <Chip className="text-xs" title="Focus input" onClick={() => (document.activeElement as any)?.blur?.()}>
+                  Done
+                </Chip>
+              </div>
+            </CardContent>
+          </Card>
+        ) : null}
 
-                if (cmdOrCtrl && e.key === "Enter") {
-                  e.preventDefault();
-                  void submit();
-                  return;
-                }
+        {state === "answered" && resp ? (
+          <Card>
+            <CardContent className="space-y-3">
+              <div className="space-y-1">
+                <div className="text-sm font-medium">Life CFO</div>
+                <div className="whitespace-pre-wrap text-sm leading-relaxed opacity-90">
+                  {safeStr(resp.answer) || "—"}
+                </div>
+              </div>
 
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  void submit();
-                }
-              }}
-            />
+              <div className="flex flex-wrap gap-2 pt-1">
+                {actionHref ? (
+                  <Chip className="text-xs" title="Open suggested page" onClick={() => router.push(actionHref)}>
+                    Open
+                  </Chip>
+                ) : null}
 
-            <div className="mt-2 flex justify-between text-xs text-zinc-500">
-              <span>Ask a question or put something down.</span>
-              {affirmation ? <span aria-live="polite">{affirmation}</span> : <span className="h-4" aria-hidden="true" />}
-            </div>
+                <Chip className="text-xs" title="Ask follow-up" onClick={() => toast({ title: "Ask a follow-up", description: "Type your next question above." })}>
+                  Ask follow-up
+                </Chip>
 
-            {stagedInline}
-          </CardContent>
-        </Card>
+                <Chip className="text-xs" title="Copy answer" onClick={() => copyToClipboard(safeStr(resp.answer))}>
+                  Copy answer
+                </Chip>
+              </div>
 
-        {ask.status !== "idle" ? (
-          <div ref={answerRef}>
-            <Card className="border-zinc-200 bg-white">
-              <CardContent>
-                {ask.status === "loading" ? (
-                  <div className="text-sm text-zinc-700">Thinking…</div>
-                ) : ask.status === "error" ? (
-                  <div className="space-y-2">
-                    <div className="text-sm font-semibold text-zinc-900">Life CFO</div>
-                    <div className="text-sm text-zinc-700">{ask.message}</div>
-                    <div className="text-xs text-zinc-500">
-                      <span className="font-medium text-zinc-600">You asked:</span> {ask.question}
-                    </div>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      <Chip className="text-xs" title="Try again" onClick={() => focusInput()}>
-                        Try again
-                      </Chip>
-                      <Chip className="text-xs" title="Done" onClick={() => setAsk({ status: "idle" })}>
-                        Done
-                      </Chip>
-                    </div>
-                  </div>
-                ) : (
-                  // ask.status === "done"
-                  <div className="space-y-2">
-                    <div className="text-sm font-semibold text-zinc-900">Life CFO</div>
-                    <div className="whitespace-pre-wrap text-[15px] leading-relaxed text-zinc-800">{ask.answer}</div>
-                    <div className="text-xs text-zinc-500">
-                      <span className="font-medium text-zinc-600">You asked:</span> {ask.question}
-                    </div>
+              {/* Explicit, optional next step — still no saving here */}
+              <div className="pt-2">
+                <div className="mb-2 text-xs font-medium opacity-70">Optional next step</div>
+                <div className="flex flex-wrap gap-2">
+                  <Chip
+                    className="text-xs"
+                    title="Create a Capture (you’ll paste it)"
+                    onClick={async () => {
+                      await copyToClipboard(lastAskedRef.current);
+                      router.push("/capture");
+                    }}
+                  >
+                    Create a capture →
+                  </Chip>
 
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      {ask.actionHref ? (
-                        <Chip className="text-xs" title="Open" onClick={() => router.push(ask.actionHref!)}>
-                          Open
-                        </Chip>
-                      ) : null}
+                  <Chip
+                    className="text-xs"
+                    title="Save as a Decision (you’ll paste it)"
+                    onClick={async () => {
+                      await copyToClipboard(lastAskedRef.current);
+                      router.push("/framing");
+                    }}
+                  >
+                    Save as a decision →
+                  </Chip>
 
-                      <Chip className="text-xs" title="Ask follow-up" onClick={() => focusInput()}>
-                        Ask follow-up
-                      </Chip>
+                  {resp.suggested_next === "create_capture" && resp.capture_seed ? (
+                    <Chip
+                      className="text-xs"
+                      title="Copy capture seed (title + notes)"
+                      onClick={async () => {
+                        const seed = resp.capture_seed;
+                        const payload = [
+                          seed?.title ? `Title: ${seed.title}` : "",
+                          seed?.prompt ? `Prompt: ${seed.prompt}` : "",
+                          Array.isArray(seed?.notes) && seed.notes.length ? `Notes:\n- ${seed.notes.join("\n- ")}` : "",
+                        ]
+                          .filter(Boolean)
+                          .join("\n\n");
+                        await copyToClipboard(payload);
+                      }}
+                    >
+                      Copy capture seed
+                    </Chip>
+                  ) : null}
 
-                      <Chip className="text-xs" title="Done" onClick={() => setAsk({ status: "idle" })}>
-                        Done
-                      </Chip>
-                    </div>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </div>
+                  <Chip
+                    className="text-xs"
+                    title="Nothing saves automatically"
+                    onClick={() =>
+                      toast({
+                        title: "Nothing saved automatically",
+                        description: "This page answers first. Saving only happens if you choose a next step.",
+                      })
+                    }
+                  >
+                    Why didn’t it save?
+                  </Chip>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
         ) : null}
       </div>
     </Page>
