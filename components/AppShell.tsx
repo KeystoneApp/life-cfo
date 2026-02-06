@@ -67,7 +67,6 @@ function Menu({
         <div
           role="menu"
           className={[
-            // ✅ hug contents, no forced width
             "absolute z-50 mt-2 w-max max-w-[240px] overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm",
             align === "right" ? "right-0" : "left-0",
           ].join(" ")}
@@ -84,7 +83,6 @@ function Menu({
                     onNavigate?.();
                   }}
                 >
-                  {/* ✅ prevent wrapping-induced wide boxes + keep tight */}
                   <div className="whitespace-nowrap rounded-lg px-2 py-1 text-sm leading-tight text-zinc-800 hover:bg-zinc-50">
                     {it.label}
                   </div>
@@ -102,8 +100,11 @@ export function AppShell({ children }: AppShellProps) {
   const pathname = usePathname();
   const router = useRouter();
 
+  const isLifeCFO = (pathname ?? "").startsWith("/lifecfo-");
+
   const isActive = (href: string) => pathname === href || (href !== "/" && pathname?.startsWith(href));
 
+  // --- V1 nav ---
   const home: NavItem = { href: "/home", label: "Home" };
   const family: NavItem = { href: "/family", label: "Family" };
 
@@ -123,10 +124,7 @@ export function AppShell({ children }: AppShellProps) {
     { href: "/accounts", label: "Accounts" },
     { href: "/net-worth", label: "Net Worth" },
     { href: "/liabilities", label: "Liabilities" },
-
-    // ✅ NEW — Goals (Money → Goals)
     { href: "/money/goals", label: "Goals" },
-
     { href: "/bills", label: "Bills" },
     { href: "/income", label: "Income" },
     { href: "/investments", label: "Investments" },
@@ -138,6 +136,11 @@ export function AppShell({ children }: AppShellProps) {
   const reviewActive = useMemo(() => reviewItems.some((i) => isActive(i.href)), [pathname]); // eslint-disable-line react-hooks/exhaustive-deps
   const moneyActive = useMemo(() => moneyItems.some((i) => isActive(i.href)), [pathname]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // --- Life CFO minimal nav ---
+  const lifecfoHome: NavItem = { href: "/lifecfo-home", label: "Home" };
+  const lifecfoMoney: NavItem = { href: "/money", label: "Money" };
+  const lifecfoSettings: NavItem = { href: "/settings", label: "Settings" };
+
   const navKey = pathname ?? "";
 
   const signOut = async () => {
@@ -146,35 +149,62 @@ export function AppShell({ children }: AppShellProps) {
     router.refresh();
   };
 
+  const brandHref = isLifeCFO ? "/lifecfo-home" : "/home";
+  const brandLabel = isLifeCFO ? "Life CFO" : "Keystone";
+
   return (
     <div className="min-h-screen">
       <header className="sticky top-0 z-20 border-b border-zinc-200 bg-white/80 backdrop-blur">
         <div className="mx-auto flex max-w-[900px] items-center justify-between gap-3 p-4">
-          <Link href="/home" className="text-sm font-semibold tracking-tight text-zinc-900 no-underline">
-            Keystone
+          <Link href={brandHref} className="text-sm font-semibold tracking-tight text-zinc-900 no-underline">
+            {brandLabel}
           </Link>
 
           <nav key={navKey} className="flex items-center gap-2" aria-label="Primary navigation">
-            <Link href={home.href} className="no-underline">
-              <Chip active={isActive(home.href)} aria-current={isActive(home.href) ? "page" : undefined}>
-                {home.label}
-              </Chip>
-            </Link>
+            {isLifeCFO ? (
+              <>
+                <Link href={lifecfoHome.href} className="no-underline">
+                  <Chip active={isActive(lifecfoHome.href)} aria-current={isActive(lifecfoHome.href) ? "page" : undefined}>
+                    {lifecfoHome.label}
+                  </Chip>
+                </Link>
 
-            <Menu label="Decide" active={decideActive} items={decideItems} />
-            <Menu label="Review" active={reviewActive} items={reviewItems} />
+                <Link href={lifecfoMoney.href} className="no-underline">
+                  <Chip active={isActive(lifecfoMoney.href)} aria-current={isActive(lifecfoMoney.href) ? "page" : undefined}>
+                    {lifecfoMoney.label}
+                  </Chip>
+                </Link>
 
-            <Link href={family.href} className="no-underline">
-              <Chip active={isActive(family.href)} aria-current={isActive(family.href) ? "page" : undefined}>
-                {family.label}
-              </Chip>
-            </Link>
+                <Link href={lifecfoSettings.href} className="no-underline">
+                  <Chip active={isActive(lifecfoSettings.href)} aria-current={isActive(lifecfoSettings.href) ? "page" : undefined}>
+                    {lifecfoSettings.label}
+                  </Chip>
+                </Link>
+              </>
+            ) : (
+              <>
+                <Link href={home.href} className="no-underline">
+                  <Chip active={isActive(home.href)} aria-current={isActive(home.href) ? "page" : undefined}>
+                    {home.label}
+                  </Chip>
+                </Link>
 
-            <Menu label="Money" active={moneyActive} items={moneyItems} />
+                <Menu label="Decide" active={decideActive} items={decideItems} />
+                <Menu label="Review" active={reviewActive} items={reviewItems} />
+
+                <Link href={family.href} className="no-underline">
+                  <Chip active={isActive(family.href)} aria-current={isActive(family.href) ? "page" : undefined}>
+                    {family.label}
+                  </Chip>
+                </Link>
+
+                <Menu label="Money" active={moneyActive} items={moneyItems} />
+              </>
+            )}
           </nav>
 
           <div className="flex items-center gap-2">
-            <AccountMenu onSignOut={signOut} />
+            <AccountMenu onSignOut={signOut} isLifeCFO={isLifeCFO} />
           </div>
         </div>
       </header>
@@ -184,7 +214,7 @@ export function AppShell({ children }: AppShellProps) {
   );
 }
 
-function AccountMenu({ onSignOut }: { onSignOut: () => void }) {
+function AccountMenu({ onSignOut, isLifeCFO }: { onSignOut: () => void; isLifeCFO: boolean }) {
   const pathname = usePathname();
   const ref = useRef<HTMLDivElement | null>(null);
   const [open, setOpen] = useState(false);
@@ -208,29 +238,53 @@ function AccountMenu({ onSignOut }: { onSignOut: () => void }) {
         <div role="menu" className="absolute right-0 z-50 mt-2 w-max max-w-[260px] overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm">
           <div className="p-1">
             <div className="space-y-0.5">
-              <Link href="/settings" className="block no-underline" onClick={() => setOpen(false)}>
-                <div className="whitespace-nowrap rounded-lg px-2 py-1 text-sm leading-tight text-zinc-800 hover:bg-zinc-50">Settings</div>
-              </Link>
+              {isLifeCFO ? (
+                <>
+                  <Link href="/settings" className="block no-underline" onClick={() => setOpen(false)}>
+                    <div className="whitespace-nowrap rounded-lg px-2 py-1 text-sm leading-tight text-zinc-800 hover:bg-zinc-50">Settings</div>
+                  </Link>
 
-              <Link href="/how-keystone-works" className="block no-underline" onClick={() => setOpen(false)}>
-                <div className="whitespace-nowrap rounded-lg px-2 py-1 text-sm leading-tight text-zinc-800 hover:bg-zinc-50">How it works</div>
-              </Link>
+                  <Link href="/how-keystone-works" className="block no-underline" onClick={() => setOpen(false)}>
+                    <div className="whitespace-nowrap rounded-lg px-2 py-1 text-sm leading-tight text-zinc-800 hover:bg-zinc-50">How it works</div>
+                  </Link>
 
-              <Link href="/planned-upgrades" className="block no-underline" onClick={() => setOpen(false)}>
-                <div className="whitespace-nowrap rounded-lg px-2 py-1 text-sm leading-tight text-zinc-800 hover:bg-zinc-50">Planned upgrades</div>
-              </Link>
+                  <Link href="/fine-print" className="block no-underline" onClick={() => setOpen(false)}>
+                    <div className="whitespace-nowrap rounded-lg px-2 py-1 text-sm leading-tight text-zinc-800 hover:bg-zinc-50">Fine print</div>
+                  </Link>
 
-              <Link href="/feedback" className="block no-underline" onClick={() => setOpen(false)}>
-                <div className="whitespace-nowrap rounded-lg px-2 py-1 text-sm leading-tight text-zinc-800 hover:bg-zinc-50">Feedback</div>
-              </Link>
+                  <div className="my-1 h-px bg-zinc-100" />
 
-              <Link href="/demo" className="block no-underline" onClick={() => setOpen(false)}>
-                <div className="whitespace-nowrap rounded-lg px-2 py-1 text-sm leading-tight text-zinc-800 hover:bg-zinc-50">Demo</div>
-              </Link>
+                  <Link href="/home" className="block no-underline" onClick={() => setOpen(false)}>
+                    <div className="whitespace-nowrap rounded-lg px-2 py-1 text-sm leading-tight text-zinc-800 hover:bg-zinc-50">Keystone (full)</div>
+                  </Link>
+                </>
+              ) : (
+                <>
+                  <Link href="/settings" className="block no-underline" onClick={() => setOpen(false)}>
+                    <div className="whitespace-nowrap rounded-lg px-2 py-1 text-sm leading-tight text-zinc-800 hover:bg-zinc-50">Settings</div>
+                  </Link>
 
-              <Link href="/fine-print" className="block no-underline" onClick={() => setOpen(false)}>
-                <div className="whitespace-nowrap rounded-lg px-2 py-1 text-sm leading-tight text-zinc-800 hover:bg-zinc-50">Fine print</div>
-              </Link>
+                  <Link href="/how-keystone-works" className="block no-underline" onClick={() => setOpen(false)}>
+                    <div className="whitespace-nowrap rounded-lg px-2 py-1 text-sm leading-tight text-zinc-800 hover:bg-zinc-50">How it works</div>
+                  </Link>
+
+                  <Link href="/planned-upgrades" className="block no-underline" onClick={() => setOpen(false)}>
+                    <div className="whitespace-nowrap rounded-lg px-2 py-1 text-sm leading-tight text-zinc-800 hover:bg-zinc-50">Planned upgrades</div>
+                  </Link>
+
+                  <Link href="/feedback" className="block no-underline" onClick={() => setOpen(false)}>
+                    <div className="whitespace-nowrap rounded-lg px-2 py-1 text-sm leading-tight text-zinc-800 hover:bg-zinc-50">Feedback</div>
+                  </Link>
+
+                  <Link href="/demo" className="block no-underline" onClick={() => setOpen(false)}>
+                    <div className="whitespace-nowrap rounded-lg px-2 py-1 text-sm leading-tight text-zinc-800 hover:bg-zinc-50">Demo</div>
+                  </Link>
+
+                  <Link href="/fine-print" className="block no-underline" onClick={() => setOpen(false)}>
+                    <div className="whitespace-nowrap rounded-lg px-2 py-1 text-sm leading-tight text-zinc-800 hover:bg-zinc-50">Fine print</div>
+                  </Link>
+                </>
+              )}
 
               <div className="my-1 h-px bg-zinc-100" />
 
