@@ -1,4 +1,4 @@
-// app/(app)/lifecfo-home-v2/page.tsx
+// app/(app)/lifecfo-home/page.tsx
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -40,7 +40,15 @@ function actionToHref(action: AskApiResponse["action"]): string | null {
   }
 }
 
-export default function LifeCfoHomeV2Page() {
+function pretty(v: unknown) {
+  try {
+    return JSON.stringify(v, null, 2);
+  } catch {
+    return String(v);
+  }
+}
+
+export default function LifeCFOHomePage() {
   const router = useRouter();
   const { toast } = useToast();
 
@@ -54,7 +62,10 @@ export default function LifeCfoHomeV2Page() {
   const [resp, setResp] = useState<AskApiResponse | null>(null);
   const lastAskedRef = useRef<string>("");
 
-  // ---- Auth (minimal: userId only; no profile reads) ----
+  // Debug outputs
+  const [debugEcho, setDebugEcho] = useState<any>(null);
+  const [debugAsk, setDebugAsk] = useState<any>(null);
+
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -92,21 +103,24 @@ export default function LifeCfoHomeV2Page() {
       return;
     }
 
-    // Always answer first; never save; never infer hold.
     setState("asking");
     setErrorMsg(null);
     setResp(null);
     lastAskedRef.current = q;
 
+    const payload = { userId, question: q };
+    console.log("[LifeCFO] submit payload -> /api/home/ask", payload);
+
     try {
       const res = await fetch("/api/home/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        // Route requires userId + question
-        body: JSON.stringify({ userId, question: q, text: q }),
+        body: JSON.stringify(payload),
       });
 
       const json = (await res.json().catch(() => ({}))) as AskApiResponse;
+      console.log("[LifeCFO] /api/home/ask status", res.status, "json:", json);
+      setDebugAsk({ when: new Date().toISOString(), status: res.status, json });
 
       if (!res.ok) {
         setState("error");
@@ -117,8 +131,35 @@ export default function LifeCfoHomeV2Page() {
       setResp(json);
       setState("answered");
     } catch (e: any) {
+      console.log("[LifeCFO] /api/home/ask fetch error", e);
+      setDebugAsk({ when: new Date().toISOString(), status: "fetch_error", error: String(e?.message ?? e) });
       setState("error");
       setErrorMsg(e?.message ? String(e.message) : "I couldn’t answer that right now.");
+    }
+  }
+
+  async function probeServerEcho() {
+    const q = (text.trim() || "probe: hello").trim();
+    const payload = { userId: userId ?? "", question: q, _probe: true };
+
+    console.log("[LifeCFO] probe payload -> /api/_debug/home-ask", payload);
+
+    try {
+      const res = await fetch("/api/_debug/home-ask", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      const json = await res.json().catch(() => ({}));
+      console.log("[LifeCFO] /api/_debug/home-ask status", res.status, "json:", json);
+      setDebugEcho({ when: new Date().toISOString(), status: res.status, json });
+
+      toast({ title: "Probe complete", description: `Server status: ${res.status}` });
+    } catch (e: any) {
+      console.log("[LifeCFO] probe fetch error", e);
+      setDebugEcho({ when: new Date().toISOString(), status: "fetch_error", error: String(e?.message ?? e) });
+      toast({ title: "Probe failed", description: "See console + debug panel." });
     }
   }
 
@@ -147,9 +188,6 @@ export default function LifeCfoHomeV2Page() {
       subtitle={<span className="text-sm">Ask anything. I’ll answer first. Saving is always optional.</span>}
       right={
         <div className="flex items-center gap-2">
-          <Chip onClick={() => router.push("/lifecfo-home")} title="Life CFO v1.5" className="text-xs">
-            v1.5
-          </Chip>
           <Chip onClick={() => router.push("/home")} title="Keystone Home" className="text-xs">
             Keystone
           </Chip>
@@ -167,6 +205,7 @@ export default function LifeCfoHomeV2Page() {
             ) : (
               <div className="text-sm opacity-80">You’re signed in.</div>
             )}
+            <div className="text-xs opacity-70">userId: {userId ? `${userId.slice(0, 8)}…${userId.slice(-4)}` : "—"}</div>
           </CardContent>
         </Card>
 
@@ -204,11 +243,7 @@ export default function LifeCfoHomeV2Page() {
                 {state === "asking" ? "Asking…" : "Ask"}
               </Button>
 
-              <Button
-                variant="ghost"
-                onClick={() => copyToClipboard(text)}
-                disabled={text.trim().length === 0}
-              >
+              <Button variant="ghost" onClick={() => copyToClipboard(text)} disabled={text.trim().length === 0}>
                 Copy
               </Button>
 
@@ -235,8 +270,8 @@ export default function LifeCfoHomeV2Page() {
                 <Chip className="text-xs" title="Try again" onClick={() => void ask()}>
                   Try again
                 </Chip>
-                <Chip className="text-xs" title="Focus input" onClick={() => (document.activeElement as any)?.blur?.()}>
-                  Done
+                <Chip className="text-xs" title="Clear" onClick={clear}>
+                  Clear
                 </Chip>
               </div>
             </CardContent>
@@ -248,90 +283,66 @@ export default function LifeCfoHomeV2Page() {
             <CardContent className="space-y-3">
               <div className="space-y-1">
                 <div className="text-sm font-medium">Life CFO</div>
-                <div className="whitespace-pre-wrap text-sm leading-relaxed opacity-90">
-                  {safeStr(resp.answer) || "—"}
+                <div className="whitespace-pre-wrap text-sm leading-relaxed opacity-90">{safeStr(resp.answer) || "—"}</div>
+                <div className="text-xs opacity-70">
+                  <span className="font-medium">You asked:</span> {lastAskedRef.current}
                 </div>
               </div>
 
               <div className="flex flex-wrap gap-2 pt-1">
-                {actionHref ? (
-                  <Chip className="text-xs" title="Open suggested page" onClick={() => router.push(actionHref)}>
+                {actionToHref(resp.action) ? (
+                  <Chip className="text-xs" title="Open suggested page" onClick={() => router.push(actionToHref(resp.action)!)}>
                     Open
                   </Chip>
                 ) : null}
-
-                <Chip className="text-xs" title="Ask follow-up" onClick={() => toast({ title: "Ask a follow-up", description: "Type your next question above." })}>
-                  Ask follow-up
-                </Chip>
 
                 <Chip className="text-xs" title="Copy answer" onClick={() => copyToClipboard(safeStr(resp.answer))}>
                   Copy answer
                 </Chip>
               </div>
-
-              {/* Explicit, optional next step — still no saving here */}
-              <div className="pt-2">
-                <div className="mb-2 text-xs font-medium opacity-70">Optional next step</div>
-                <div className="flex flex-wrap gap-2">
-                  <Chip
-                    className="text-xs"
-                    title="Create a Capture (you’ll paste it)"
-                    onClick={async () => {
-                      await copyToClipboard(lastAskedRef.current);
-                      router.push("/capture");
-                    }}
-                  >
-                    Create a capture →
-                  </Chip>
-
-                  <Chip
-                    className="text-xs"
-                    title="Save as a Decision (you’ll paste it)"
-                    onClick={async () => {
-                      await copyToClipboard(lastAskedRef.current);
-                      router.push("/framing");
-                    }}
-                  >
-                    Save as a decision →
-                  </Chip>
-
-                  {resp.suggested_next === "create_capture" && resp.capture_seed ? (
-                    <Chip
-                      className="text-xs"
-                      title="Copy capture seed (title + notes)"
-                      onClick={async () => {
-                        const seed = resp.capture_seed;
-                        const payload = [
-                          seed?.title ? `Title: ${seed.title}` : "",
-                          seed?.prompt ? `Prompt: ${seed.prompt}` : "",
-                          Array.isArray(seed?.notes) && seed.notes.length ? `Notes:\n- ${seed.notes.join("\n- ")}` : "",
-                        ]
-                          .filter(Boolean)
-                          .join("\n\n");
-                        await copyToClipboard(payload);
-                      }}
-                    >
-                      Copy capture seed
-                    </Chip>
-                  ) : null}
-
-                  <Chip
-                    className="text-xs"
-                    title="Nothing saves automatically"
-                    onClick={() =>
-                      toast({
-                        title: "Nothing saved automatically",
-                        description: "This page answers first. Saving only happens if you choose a next step.",
-                      })
-                    }
-                  >
-                    Why didn’t it save?
-                  </Chip>
-                </div>
-              </div>
             </CardContent>
           </Card>
         ) : null}
+
+        {/* ---------------- DEBUG PANEL ---------------- */}
+        <Card>
+          <CardContent className="space-y-3">
+            <div className="text-sm font-medium">Debug</div>
+            <div className="text-xs opacity-70">
+              Goal: prove whether the server receives your payload and what /api/home/ask returns.
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <Button variant="ghost" onClick={probeServerEcho} disabled={authStatus === "loading"}>
+                Probe server echo
+              </Button>
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  console.log("[LifeCFO] debugEcho", debugEcho);
+                  console.log("[LifeCFO] debugAsk", debugAsk);
+                  toast({ title: "Logged to console", description: "Open DevTools → Console." });
+                }}
+              >
+                Log to console
+              </Button>
+            </div>
+
+            <div className="space-y-2">
+              <div className="text-xs font-medium opacity-70">Echo route result</div>
+              <pre className="max-h-[240px] overflow-auto rounded-xl border border-[var(--border)] bg-[var(--card)] p-3 text-[11px] leading-snug">
+                {debugEcho ? pretty(debugEcho) : "—"}
+              </pre>
+            </div>
+
+            <div className="space-y-2">
+              <div className="text-xs font-medium opacity-70">/api/home/ask result</div>
+              <pre className="max-h-[240px] overflow-auto rounded-xl border border-[var(--border)] bg-[var(--card)] p-3 text-[11px] leading-snug">
+                {debugAsk ? pretty(debugAsk) : "—"}
+              </pre>
+            </div>
+          </CardContent>
+        </Card>
       </div>
     </Page>
   );
