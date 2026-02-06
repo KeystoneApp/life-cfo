@@ -27,9 +27,24 @@ function inferIntent(raw: string): "ask" | "hold" {
   if (!s) return "hold";
 
   const lower = s.toLowerCase();
+
+  // Explicit question cues
   if (s.includes("?")) return "ask";
   if (/^(what|when|why|how|can|should|do i|did i|am i|are we)\b/i.test(lower)) return "ask";
-  if (/\b(bill|bills|due|total|this month|month|next|days|afford|balance|spend|spent)\b/i.test(lower)) return "ask";
+
+  // ✅ Help-request cues (Life CFO should answer even without a "?")
+  // Examples: "we need to know...", "help us...", "best way...", "how should we..."
+  if (
+    /\b(we need to know|i need to know|help me|help us|best way|how should we|what should we do|can you help|i want help|we want help)\b/i.test(
+      lower
+    )
+  ) {
+    return "ask";
+  }
+
+  // Money-ish cues (includes accounts)
+  if (/\b(bill|bills|due|total|this month|month|next|days|afford|balance|spend|spent|account|accounts)\b/i.test(lower)) return "ask";
+
   return "hold";
 }
 
@@ -149,6 +164,9 @@ export default function LifeCFOHomePage() {
 
   const [ask, setAsk] = useState<AskState>({ status: "idle" });
   const [showExamplesPanel, setShowExamplesPanel] = useState(false);
+
+  // ✅ Never silently “eat” a capture — show what happened + where it went
+  const [lastSaved, setLastSaved] = useState<{ kind: "capture"; text: string; href: string } | null>(null);
 
   const affirmationTimerRef = useRef<number | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -412,6 +430,7 @@ export default function LifeCFOHomePage() {
     const intercept = maybeCrisisIntercept(msg);
     if (intercept) {
       flashAffirmation("Held.");
+      setLastSaved(null);
       setAsk({
         status: "done",
         question: msg,
@@ -428,6 +447,7 @@ export default function LifeCFOHomePage() {
       const q = ask.question;
       const followUp = `${q}\n\nUser follow-up: yes.`;
       flashAffirmation("Held.");
+      setLastSaved(null);
       await askHome(userId, followUp);
       return;
     }
@@ -438,6 +458,7 @@ export default function LifeCFOHomePage() {
     const billsWindow = billsWindowFromQuestion(msg);
     if (intent === "ask" && billsWindow) {
       flashAffirmation("Held.");
+      setLastSaved(null);
       const fb = await localBillsAnswer(userId, billsWindow);
       setAsk({ status: "done", question: msg, answer: fb.answer, actionHref: "/bills", suggestedNext: "none", captureSeed: null });
       return;
@@ -445,13 +466,15 @@ export default function LifeCFOHomePage() {
 
     if (intent === "ask") {
       flashAffirmation("Held.");
+      setLastSaved(null);
       await askHome(userId, msg);
       return;
     }
 
-    // HOLD: save quietly (explicit dual-use)
+    // HOLD: save quietly (explicit dual-use) — but never silently
     flashAffirmation("Saved.");
     setAsk({ status: "idle" });
+    setLastSaved({ kind: "capture", text: msg, href: "/capture" });
     await unload.submit(msg);
   };
 
@@ -589,9 +612,7 @@ export default function LifeCFOHomePage() {
               </div>
 
               <div className="flex items-center justify-between gap-3">
-                <div className="text-xs text-zinc-600">
-                  Write anything that’s on your mind. Ask a question if you want help thinking it through.
-                </div>
+                <div className="text-xs text-zinc-600">Write anything that’s on your mind. Ask a question if you want help thinking it through.</div>
 
                 {affirmation ? (
                   <div className="text-xs text-zinc-500" aria-live="polite">
@@ -660,6 +681,29 @@ export default function LifeCFOHomePage() {
             </div>
           </CardContent>
         </Card>
+
+        {/* ✅ Saved confirmation (never silent) */}
+        {lastSaved ? (
+          <Card className="border-zinc-200 bg-white">
+            <CardContent>
+              <div className="space-y-2">
+                <div className="text-sm font-semibold text-zinc-900">Saved</div>
+                <div className="text-sm leading-relaxed text-zinc-700">
+                  This was saved to Capture so you can come back to it when you’re ready.
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <Chip onClick={() => router.push(lastSaved.href)} title="View in Capture" className="text-xs">
+                    View in Capture <span className="ml-1 opacity-70">→</span>
+                  </Chip>
+                  <Chip onClick={() => setLastSaved(null)} title="Done" className="text-xs">
+                    Done
+                  </Chip>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        ) : null}
 
         {/* Ask answer (memo-like) */}
         {ask.status !== "idle" ? (
