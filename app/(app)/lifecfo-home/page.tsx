@@ -1,7 +1,7 @@
 // app/(app)/lifecfo-home/page.tsx
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { Page } from "@/components/Page";
 import { Card, CardContent, Chip } from "@/components/ui";
@@ -32,10 +32,15 @@ function inferIntent(raw: string): "ask" | "hold" {
   if (s.includes("?")) return "ask";
   if (/^(what|when|why|how|can|should|do i|did i|am i|are we)\b/i.test(lower)) return "ask";
 
-  // ✅ Help-request cues (Life CFO should answer even without a "?")
-  // Examples: "we need to know...", "help us...", "best way...", "how should we..."
+  // ✅ Life CFO: guidance / help requests should be treated as ASK even without "?"
+  // Examples:
+  // - "we need to know..."
+  // - "help us..."
+  // - "best way to..."
+  // - "how do we manage..."
+  // - "what should we do..."
   if (
-    /\b(we need to know|i need to know|help me|help us|best way|how should we|what should we do|can you help|i want help|we want help)\b/i.test(
+    /\b(need to know|help me|help us|can you help|best way|best approach|what's the best|how do we|how should we|what should we|what should we do|figure out|work out|manage our|set up|structure|plan)\b/i.test(
       lower
     )
   ) {
@@ -43,7 +48,7 @@ function inferIntent(raw: string): "ask" | "hold" {
   }
 
   // Money-ish cues (includes accounts)
-  if (/\b(bill|bills|due|total|this month|month|next|days|afford|balance|spend|spent|account|accounts)\b/i.test(lower)) return "ask";
+  if (/\b(bill|bills|due|total|this month|month|next|days|afford|balance|spend|spent|account|accounts|bank)\b/i.test(lower)) return "ask";
 
   return "hold";
 }
@@ -494,6 +499,11 @@ export default function LifeCFOHomePage() {
     </button>
   );
 
+  const memoLine = useMemo(() => {
+    if (authStatus !== "signed_in") return null;
+    return "You’re okay right now. You don’t need to do anything right now.";
+  }, [authStatus]);
+
   return (
     <Page title="Home" subtitle={subtitle} right={<div className="flex items-center gap-2"></div>}>
       <div className="mx-auto w-full max-w-[760px] space-y-6">
@@ -545,8 +555,7 @@ export default function LifeCFOHomePage() {
                 <div className="text-[15px] leading-relaxed text-zinc-800">Sign in to see your Life CFO check-in.</div>
               ) : (
                 <>
-                  <div className="text-[15px] leading-relaxed text-zinc-800">You’re okay right now.</div>
-                  <div className="text-[15px] leading-relaxed text-zinc-700">You don’t need to do anything right now.</div>
+                  <div className="text-[15px] leading-relaxed text-zinc-800">{memoLine}</div>
                   <div className="text-xs text-zinc-600">Life CFO is keeping an eye on bills and decisions.</div>
                 </>
               )}
@@ -688,9 +697,7 @@ export default function LifeCFOHomePage() {
             <CardContent>
               <div className="space-y-2">
                 <div className="text-sm font-semibold text-zinc-900">Saved</div>
-                <div className="text-sm leading-relaxed text-zinc-700">
-                  This was saved to Capture so you can come back to it when you’re ready.
-                </div>
+                <div className="text-sm leading-relaxed text-zinc-700">This was saved to Capture so you can come back to it when you’re ready.</div>
 
                 <div className="flex flex-wrap items-center gap-2 pt-1">
                   <Chip onClick={() => router.push(lastSaved.href)} title="View in Capture" className="text-xs">
