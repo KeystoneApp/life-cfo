@@ -110,7 +110,6 @@ function formatMoneyFromCents(cents: number, currency: string) {
 }
 
 function formatDateShort(d: Date) {
-  // Example: Tue 27 Feb 2026
   return d.toLocaleDateString(undefined, { weekday: "short", day: "2-digit", month: "short", year: "numeric" });
 }
 
@@ -137,6 +136,10 @@ function coerceSeed(raw: any): CaptureSeed | null {
 export default function LifeCFOHomePage() {
   const router = useRouter();
 
+  // Trust routes you already have
+  const HOW_IT_WORKS_HREF = "/how-keystone-works";
+  const BEHIND_SCENES_HREF = "/fine-print"; // best “boundaries & trust” you have today
+
   const [userId, setUserId] = useState<string | null>(null);
   const [authStatus, setAuthStatus] = useState<"loading" | "signed_out" | "signed_in">("loading");
   const [preferredName, setPreferredName] = useState<string>("");
@@ -145,27 +148,20 @@ export default function LifeCFOHomePage() {
   const [affirmation, setAffirmation] = useState<"Saved." | "Held." | null>(null);
 
   const [ask, setAsk] = useState<AskState>({ status: "idle" });
-
   const [showExamplesPanel, setShowExamplesPanel] = useState(false);
 
   const affirmationTimerRef = useRef<number | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
 
-  // --- One-time welcome nudge (Home) ---
-  // per-user, so new signups see it again
+  // One-time welcome (per user)
   const WELCOME_KEY_PREFIX = "lifecfo_welcome_seen_v1_5:";
   const [showWelcome, setShowWelcome] = useState(false);
-
-  // Trust pages (adjust if your routes differ)
-  const HOW_IT_WORKS_HREF = "/how-life-cfo-works";
-  const BEHIND_SCENES_HREF = "/behind-the-scenes";
 
   useEffect(() => {
     if (authStatus !== "signed_in" || !userId) {
       setShowWelcome(false);
       return;
     }
-
     try {
       const key = `${WELCOME_KEY_PREFIX}${userId}`;
       const seen = typeof window !== "undefined" ? window.localStorage.getItem(key) : "1";
@@ -186,7 +182,7 @@ export default function LifeCFOHomePage() {
     setShowWelcome(false);
   };
 
-  // --- Auth (quiet) ---
+  // Auth (quiet)
   useEffect(() => {
     let mounted = true;
 
@@ -209,7 +205,7 @@ export default function LifeCFOHomePage() {
     };
   }, []);
 
-  // --- Load name ---
+  // Load name
   useEffect(() => {
     if (!userId) {
       setPreferredName("");
@@ -251,7 +247,11 @@ export default function LifeCFOHomePage() {
     };
   }, []);
 
-  // ✅ Deterministic bills answer (recurring_bills only)
+  const focusInput = () => {
+    window.setTimeout(() => inputRef.current?.focus(), 0);
+  };
+
+  // Deterministic bills answer (recurring_bills only)
   const localBillsAnswer = async (uid: string, window: { kind: "month" } | { kind: "days"; days: number }) => {
     const now = new Date();
     const { start: monthStart, end: monthEnd } = monthBoundsLocal();
@@ -371,8 +371,26 @@ export default function LifeCFOHomePage() {
     }
   };
 
-  const focusInput = () => {
-    window.setTimeout(() => inputRef.current?.focus(), 0);
+  const canCreateCapture =
+    ask.status === "done" && ask.suggestedNext === "create_capture" && !!ask.captureSeed && authStatus === "signed_in" && !!userId;
+
+  const [creatingCapture, setCreatingCapture] = useState(false);
+
+  const onCreateCapture = async () => {
+    if (!canCreateCapture || !userId || !ask.captureSeed) return;
+    if (creatingCapture) return;
+
+    setCreatingCapture(true);
+    try {
+      const r = await createCaptureFromSeed(userId, ask.captureSeed);
+      if (!r.ok) {
+        setAsk({ status: "error", question: ask.question, message: r.message });
+        return;
+      }
+      router.push(`/capture?open=${encodeURIComponent(r.inboxId)}`);
+    } finally {
+      setCreatingCapture(false);
+    }
   };
 
   const submit = async () => {
@@ -390,7 +408,7 @@ export default function LifeCFOHomePage() {
       return;
     }
 
-    // 🔒 CRISIS / EMERGENCY INTERCEPT (prevents capture + prevents answering)
+    // CRISIS / EMERGENCY INTERCEPT (prevents capture + prevents answering)
     const intercept = maybeCrisisIntercept(msg);
     if (intercept) {
       flashAffirmation("Held.");
@@ -416,7 +434,7 @@ export default function LifeCFOHomePage() {
 
     const intent = inferIntent(msg);
 
-    // ✅ Bills questions: deterministic + richer (month or next X days)
+    // Bills questions: deterministic + richer (month or next X days)
     const billsWindow = billsWindowFromQuestion(msg);
     if (intent === "ask" && billsWindow) {
       flashAffirmation("Held.");
@@ -438,30 +456,7 @@ export default function LifeCFOHomePage() {
   };
 
   const canSend = authStatus === "signed_in" && text.trim().length > 0;
-
   const subtitle = preferredName ? `Good to see you, ${preferredName}.` : undefined;
-
-  const canCreateCapture =
-    ask.status === "done" && ask.suggestedNext === "create_capture" && !!ask.captureSeed && authStatus === "signed_in" && !!userId;
-
-  const [creatingCapture, setCreatingCapture] = useState(false);
-
-  const onCreateCapture = async () => {
-    if (!canCreateCapture || !userId || !ask.captureSeed) return;
-    if (creatingCapture) return;
-
-    setCreatingCapture(true);
-    try {
-      const r = await createCaptureFromSeed(userId, ask.captureSeed);
-      if (!r.ok) {
-        setAsk({ status: "error", question: ask.question, message: r.message });
-        return;
-      }
-      router.push(`/capture?open=${encodeURIComponent(r.inboxId)}`);
-    } finally {
-      setCreatingCapture(false);
-    }
-  };
 
   const ExampleButton = ({ text: ex }: { text: string }) => (
     <button
@@ -479,7 +474,7 @@ export default function LifeCFOHomePage() {
   return (
     <Page title="Home" subtitle={subtitle} right={<div className="flex items-center gap-2"></div>}>
       <div className="mx-auto w-full max-w-[760px] space-y-6">
-        {/* ✅ One-time welcome (trust-first) */}
+        {/* One-time welcome (trust-first) */}
         {showWelcome ? (
           <Card className="border-zinc-200 bg-white">
             <CardContent>
@@ -491,8 +486,8 @@ export default function LifeCFOHomePage() {
                   </div>
 
                   <div className="mt-3 flex flex-wrap items-center gap-2">
-                    <Chip onClick={() => router.push(HOW_IT_WORKS_HREF)} title="How Life CFO works" className="text-xs">
-                      How Life CFO works <span className="ml-1 opacity-70">→</span>
+                    <Chip onClick={() => router.push(HOW_IT_WORKS_HREF)} title="How it works" className="text-xs">
+                      How it works <span className="ml-1 opacity-70">→</span>
                     </Chip>
                     <Chip onClick={() => router.push(BEHIND_SCENES_HREF)} title="Behind the scenes" className="text-xs">
                       Behind the scenes <span className="ml-1 opacity-70">→</span>
@@ -517,7 +512,7 @@ export default function LifeCFOHomePage() {
           </Card>
         ) : null}
 
-        {/* ✅ Life CFO Memo (arrived) */}
+        {/* Life CFO Memo (arrived) */}
         <Card className="border-zinc-200 bg-white">
           <CardContent>
             <div className="space-y-2">
@@ -534,19 +529,13 @@ export default function LifeCFOHomePage() {
               )}
 
               <div className="flex flex-wrap items-center gap-2 pt-2">
-                <Chip onClick={() => router.push(HOW_IT_WORKS_HREF)} title="How Life CFO works" className="text-xs">
-                  How Life CFO works <span className="ml-1 opacity-70">→</span>
+                <Chip onClick={() => router.push(HOW_IT_WORKS_HREF)} title="How it works" className="text-xs">
+                  How it works <span className="ml-1 opacity-70">→</span>
                 </Chip>
                 <Chip onClick={() => router.push(BEHIND_SCENES_HREF)} title="Behind the scenes" className="text-xs">
                   Behind the scenes <span className="ml-1 opacity-70">→</span>
                 </Chip>
-                <Chip
-                  onClick={() => {
-                    focusInput();
-                  }}
-                  title="Ask a question"
-                  className="text-xs"
-                >
+                <Chip onClick={() => focusInput()} title="Ask a question" className="text-xs">
                   Ask a question <span className="ml-1 opacity-70">→</span>
                 </Chip>
               </div>
@@ -554,7 +543,7 @@ export default function LifeCFOHomePage() {
           </CardContent>
         </Card>
 
-        {/* ✅ Input (explicit dual-use) */}
+        {/* Input (explicit dual-use) */}
         <Card className="border-zinc-200 bg-white">
           <CardContent>
             <div className="space-y-3">
@@ -613,7 +602,7 @@ export default function LifeCFOHomePage() {
                 )}
               </div>
 
-              {/* ✅ “Try a question” */}
+              {/* “Try a question” */}
               {text.trim().length === 0 ? (
                 <div className="space-y-3">
                   <div className="flex items-center gap-2">
@@ -672,7 +661,7 @@ export default function LifeCFOHomePage() {
           </CardContent>
         </Card>
 
-        {/* ✅ Ask answer (memo-like) */}
+        {/* Ask answer (memo-like) */}
         {ask.status !== "idle" ? (
           <Card className="border-zinc-200 bg-white">
             <CardContent>
