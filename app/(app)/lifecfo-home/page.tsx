@@ -40,14 +40,6 @@ function actionToHref(action: AskApiResponse["action"]): string | null {
   }
 }
 
-function pretty(v: unknown) {
-  try {
-    return JSON.stringify(v, null, 2);
-  } catch {
-    return String(v);
-  }
-}
-
 export default function LifeCFOHomePage() {
   const router = useRouter();
   const { toast } = useToast();
@@ -62,10 +54,7 @@ export default function LifeCFOHomePage() {
   const [resp, setResp] = useState<AskApiResponse | null>(null);
   const lastAskedRef = useRef<string>("");
 
-  // Debug outputs
-  const [debugEcho, setDebugEcho] = useState<any>(null);
-  const [debugAsk, setDebugAsk] = useState<any>(null);
-
+  // minimal auth: userId only
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -108,19 +97,14 @@ export default function LifeCFOHomePage() {
     setResp(null);
     lastAskedRef.current = q;
 
-    const payload = { userId, question: q };
-    console.log("[LifeCFO] submit payload -> /api/home/ask", payload);
-
     try {
       const res = await fetch("/api/home/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ userId, question: q }),
       });
 
       const json = (await res.json().catch(() => ({}))) as AskApiResponse;
-      console.log("[LifeCFO] /api/home/ask status", res.status, "json:", json);
-      setDebugAsk({ when: new Date().toISOString(), status: res.status, json });
 
       if (!res.ok) {
         setState("error");
@@ -131,35 +115,8 @@ export default function LifeCFOHomePage() {
       setResp(json);
       setState("answered");
     } catch (e: any) {
-      console.log("[LifeCFO] /api/home/ask fetch error", e);
-      setDebugAsk({ when: new Date().toISOString(), status: "fetch_error", error: String(e?.message ?? e) });
       setState("error");
       setErrorMsg(e?.message ? String(e.message) : "I couldn’t answer that right now.");
-    }
-  }
-
-  async function probeServerEcho() {
-    const q = (text.trim() || "probe: hello").trim();
-    const payload = { userId: userId ?? "", question: q, _probe: true };
-
-    console.log("[LifeCFO] probe payload -> /api/_debug/home-ask", payload);
-
-    try {
-      const res = await fetch("/api/_debug/home-ask", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-
-      const json = await res.json().catch(() => ({}));
-      console.log("[LifeCFO] /api/_debug/home-ask status", res.status, "json:", json);
-      setDebugEcho({ when: new Date().toISOString(), status: res.status, json });
-
-      toast({ title: "Probe complete", description: `Server status: ${res.status}` });
-    } catch (e: any) {
-      console.log("[LifeCFO] probe fetch error", e);
-      setDebugEcho({ when: new Date().toISOString(), status: "fetch_error", error: String(e?.message ?? e) });
-      toast({ title: "Probe failed", description: "See console + debug panel." });
     }
   }
 
@@ -188,13 +145,21 @@ export default function LifeCFOHomePage() {
       subtitle={<span className="text-sm">Ask anything. I’ll answer first. Saving is always optional.</span>}
       right={
         <div className="flex items-center gap-2">
-          <Chip onClick={() => router.push("/home")} title="Keystone Home" className="text-xs">
+          <Chip onClick={() => router.push("/lifecfo-home-v2")} className="text-xs" title="Open v2 route">
+            v2 route
+          </Chip>
+          <Chip onClick={() => router.push("/home")} className="text-xs" title="Keystone Home">
             Keystone
           </Chip>
         </div>
       }
     >
       <div className="mx-auto max-w-[760px] space-y-4">
+        {/* 🔴 BUILD STAMP: if you don't see this, you're not running this file */}
+        <div className="rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-xs text-zinc-600">
+          BUILD STAMP: LIFECFO_HOME_ANSWER_FIRST__2026-02-06__A
+        </div>
+
         <Card>
           <CardContent className="space-y-2">
             <div className="text-sm font-medium">Status</div>
@@ -205,7 +170,6 @@ export default function LifeCFOHomePage() {
             ) : (
               <div className="text-sm opacity-80">You’re signed in.</div>
             )}
-            <div className="text-xs opacity-70">userId: {userId ? `${userId.slice(0, 8)}…${userId.slice(-4)}` : "—"}</div>
           </CardContent>
         </Card>
 
@@ -290,8 +254,8 @@ export default function LifeCFOHomePage() {
               </div>
 
               <div className="flex flex-wrap gap-2 pt-1">
-                {actionToHref(resp.action) ? (
-                  <Chip className="text-xs" title="Open suggested page" onClick={() => router.push(actionToHref(resp.action)!)}>
+                {actionHref ? (
+                  <Chip className="text-xs" title="Open suggested page" onClick={() => router.push(actionHref)}>
                     Open
                   </Chip>
                 ) : null}
@@ -300,49 +264,36 @@ export default function LifeCFOHomePage() {
                   Copy answer
                 </Chip>
               </div>
+
+              <div className="pt-2">
+                <div className="mb-2 text-xs font-medium opacity-70">Optional next step</div>
+                <div className="flex flex-wrap gap-2">
+                  <Chip
+                    className="text-xs"
+                    title="Create a Capture (you’ll paste it)"
+                    onClick={async () => {
+                      await copyToClipboard(lastAskedRef.current);
+                      router.push("/capture");
+                    }}
+                  >
+                    Create a capture →
+                  </Chip>
+
+                  <Chip
+                    className="text-xs"
+                    title="Save as a Decision (you’ll paste it)"
+                    onClick={async () => {
+                      await copyToClipboard(lastAskedRef.current);
+                      router.push("/framing");
+                    }}
+                  >
+                    Save as a decision →
+                  </Chip>
+                </div>
+              </div>
             </CardContent>
           </Card>
         ) : null}
-
-        {/* ---------------- DEBUG PANEL ---------------- */}
-        <Card>
-          <CardContent className="space-y-3">
-            <div className="text-sm font-medium">Debug</div>
-            <div className="text-xs opacity-70">
-              Goal: prove whether the server receives your payload and what /api/home/ask returns.
-            </div>
-
-            <div className="flex flex-wrap gap-2">
-              <Button variant="ghost" onClick={probeServerEcho} disabled={authStatus === "loading"}>
-                Probe server echo
-              </Button>
-              <Button
-                variant="ghost"
-                onClick={() => {
-                  console.log("[LifeCFO] debugEcho", debugEcho);
-                  console.log("[LifeCFO] debugAsk", debugAsk);
-                  toast({ title: "Logged to console", description: "Open DevTools → Console." });
-                }}
-              >
-                Log to console
-              </Button>
-            </div>
-
-            <div className="space-y-2">
-              <div className="text-xs font-medium opacity-70">Echo route result</div>
-              <pre className="max-h-[240px] overflow-auto rounded-xl border border-[var(--border)] bg-[var(--card)] p-3 text-[11px] leading-snug">
-                {debugEcho ? pretty(debugEcho) : "—"}
-              </pre>
-            </div>
-
-            <div className="space-y-2">
-              <div className="text-xs font-medium opacity-70">/api/home/ask result</div>
-              <pre className="max-h-[240px] overflow-auto rounded-xl border border-[var(--border)] bg-[var(--card)] p-3 text-[11px] leading-snug">
-                {debugAsk ? pretty(debugAsk) : "—"}
-              </pre>
-            </div>
-          </CardContent>
-        </Card>
       </div>
     </Page>
   );
