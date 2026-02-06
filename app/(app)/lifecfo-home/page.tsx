@@ -1,7 +1,7 @@
 // app/(app)/lifecfo-home/page.tsx
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { Page } from "@/components/Page";
 import { Card, CardContent, Chip } from "@/components/ui";
@@ -22,10 +22,51 @@ function isYesish(s: string) {
   return t === "y" || t === "yes" || t === "yep" || t === "yeah" || t === "sure" || t === "ok" || t === "okay";
 }
 
-// Treat these as “bills window” questions:
-// - “this month”
-// - “next 30 days” / “next 2 weeks” / “in the next 10 days”
-// - “upcoming bills” / “bills due soon”
+/**
+ * Life CFO intent rules (V1.5)
+ * - Default to ASK unless it is clearly a “hold/capture” statement.
+ * - This prevents “help me…” messages from silently becoming Captures.
+ */
+function inferIntent(raw: string): "ask" | "hold" {
+  const s = raw.trim();
+  if (!s) return "hold";
+
+  const lower = s.toLowerCase();
+
+  // Explicit question cues → ASK
+  if (s.includes("?")) return "ask";
+  if (/^(what|when|why|how|can|should|do i|did i|am i|are we|are you)\b/i.test(lower)) return "ask";
+
+  // Help-request cues (even without "?") → ASK
+  if (
+    /\b(we need to know|i need to know|help me|help us|best way|how should we|what should we do|can you help|i want help|we want help)\b/i.test(
+      lower
+    )
+  ) {
+    return "ask";
+  }
+
+  // Strong “hold/capture” cues → HOLD
+  // (These are statement-style and should never be answered as if they were questions)
+  if (
+    /^(remember\b|note\b|note:\b|save\b|save:\b|hold\b|hold:\b|capture\b|capture:\b|reminder\b|remind me\b)/i.test(lower)
+  ) {
+    return "hold";
+  }
+
+  // If it's clearly emotional unloading (not asking for help) → HOLD
+  if (/^(i feel\b|i’m feeling\b|im feeling\b|feeling\b)/i.test(lower) && !/\b(help|how|what|should|can)\b/i.test(lower)) {
+    return "hold";
+  }
+
+  // Money-ish cues can still be ASK (Life CFO is helpful by default)
+  if (/\b(bill|bills|due|total|this month|month|next|days|afford|balance|spend|spent|account|accounts)\b/i.test(lower)) return "ask";
+
+  // Default → ASK (key change)
+  return "ask";
+}
+
+// Treat these as “bills window” questions
 function billsWindowFromQuestion(q: string): { kind: "month" } | { kind: "days"; days: number } | null {
   const s = q.trim().toLowerCase();
   if (!s) return null;
@@ -36,7 +77,6 @@ function billsWindowFromQuestion(q: string): { kind: "month" } | { kind: "days";
 
   if (s.includes("this month") || (hasBillsWord && s.includes("month"))) return { kind: "month" };
 
-  // match “next 30 days”, “in the next 30 days”, “next 2 weeks”
   const mDays = s.match(/(?:in\s+the\s+)?next\s+(\d{1,3})\s*day/);
   if (mDays) {
     const n = Number(mDays[1]);
@@ -49,12 +89,10 @@ function billsWindowFromQuestion(q: string): { kind: "month" } | { kind: "days";
     if (Number.isFinite(n) && n >= 1 && n <= 52) return { kind: "days", days: n * 7 };
   }
 
-  // Common shorthand
   if (s.includes("next 30")) return { kind: "days", days: 30 };
   if (s.includes("next month")) return { kind: "days", days: 30 };
   if (s.includes("due soon") || s.includes("upcoming bills") || s.includes("coming up")) return { kind: "days", days: 30 };
 
-  // If they said “bills due” but no window, default to 30 days (safe + helpful)
   if (hasBillsWord && (s.includes("due") || s.includes("upcoming") || s.includes("coming up"))) return { kind: "days", days: 30 };
 
   return null;
@@ -125,9 +163,8 @@ function coerceSeed(raw: any): CaptureSeed | null {
 export default function LifeCFOHomePage() {
   const router = useRouter();
 
-  // Trust routes you already have
   const HOW_IT_WORKS_HREF = "/how-keystone-works";
-  const BEHIND_SCENES_HREF = "/fine-print"; // best “boundaries & trust” you have today
+  const BEHIND_SCENES_HREF = "/fine-print";
 
   const [userId, setUserId] = useState<string | null>(null);
   const [authStatus, setAuthStatus] = useState<"loading" | "signed_out" | "signed_in">("loading");
@@ -139,13 +176,13 @@ export default function LifeCFOHomePage() {
   const [ask, setAsk] = useState<AskState>({ status: "idle" });
   const [showExamplesPanel, setShowExamplesPanel] = useState(false);
 
-  // Never silently “eat” a capture — show what happened + where it went
-  const [lastSaved, setLastSaved] = useState<{ kind: "capture"; text: string; href: string } | null>(null);
+  // ✅ Inline “Saved to Capture” notice (always visible, never below the fold)
+  const [lastSaved, setLastSaved] = useState<{ text: string } | null>(null);
 
   const affirmationTimerRef = useRef<number | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const answerRef = useRef<HTMLDivElement | null>(null);
 
-  // One-time welcome (per user)
   const WELCOME_KEY_PREFIX = "lifecfo_welcome_seen_v1_5:";
   const [showWelcome, setShowWelcome] = useState(false);
 
@@ -174,7 +211,7 @@ export default function LifeCFOHomePage() {
     setShowWelcome(false);
   };
 
-  // Auth (quiet)
+  // Auth
   useEffect(() => {
     let mounted = true;
 
@@ -243,13 +280,19 @@ export default function LifeCFOHomePage() {
     window.setTimeout(() => inputRef.current?.focus(), 0);
   };
 
-  // Deterministic bills answer (recurring_bills only)
-  const localBillsAnswer = async (uid: string, window: { kind: "month" } | { kind: "days"; days: number }) => {
+  const scrollToAnswer = () => {
+    window.setTimeout(() => {
+      answerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 50);
+  };
+
+  // Deterministic bills answer
+  const localBillsAnswer = async (uid: string, windowSpec: { kind: "month" } | { kind: "days"; days: number }) => {
     const now = new Date();
     const { start: monthStart, end: monthEnd } = monthBoundsLocal();
 
-    const start = window.kind === "month" ? monthStart : now;
-    const end = window.kind === "month" ? monthEnd : new Date(now.getTime() + window.days * 24 * 60 * 60 * 1000);
+    const start = windowSpec.kind === "month" ? monthStart : now;
+    const end = windowSpec.kind === "month" ? monthEnd : new Date(now.getTime() + windowSpec.days * 24 * 60 * 60 * 1000);
 
     const { data, error } = await supabase
       .from("recurring_bills")
@@ -265,7 +308,7 @@ export default function LifeCFOHomePage() {
 
     const rows = (data ?? []) as RecurringBillRow[];
     if (rows.length === 0) {
-      const range = window.kind === "month" ? "this month" : `in the next ${window.days} days (until ${formatDateShort(end)})`;
+      const range = windowSpec.kind === "month" ? "this month" : `in the next ${windowSpec.days} days (until ${formatDateShort(end)})`;
       return { ok: true as const, answer: `There are no bills due ${range} (from what I can see).` };
     }
 
@@ -285,7 +328,7 @@ export default function LifeCFOHomePage() {
     });
 
     const rangeHeader =
-      window.kind === "month" ? `This month (until ${formatDateShort(end)})` : `In the next ${window.days} days (until ${formatDateShort(end)})`;
+      windowSpec.kind === "month" ? `This month (until ${formatDateShort(end)})` : `In the next ${windowSpec.days} days (until ${formatDateShort(end)})`;
 
     let totalLine = "";
     if (singleCurrency) {
@@ -302,24 +345,7 @@ export default function LifeCFOHomePage() {
     return { ok: true as const, answer: `${rangeHeader}\n\n${lines.join("\n")}${totalLine}` };
   };
 
-  // Create Capture (server route) — only on explicit user action
-  const createCaptureFromSeed = async (uid: string, seed: CaptureSeed) => {
-    const res = await fetch("/api/home/create-capture", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId: uid, seed }),
-    });
-
-    const json = await res.json();
-    if (!res.ok) return { ok: false as const, message: "I couldn’t create that capture item." };
-
-    const inboxId = typeof json?.inbox_id === "string" ? json.inbox_id : "";
-    if (!inboxId) return { ok: false as const, message: "I couldn’t create that capture item." };
-
-    return { ok: true as const, inboxId };
-  };
-
-  // Real AI call (server route)
+  // AI call
   const askHome = async (uid: string, question: string) => {
     setAsk({ status: "loading", question });
 
@@ -334,6 +360,7 @@ export default function LifeCFOHomePage() {
 
       if (!res.ok) {
         setAsk({ status: "error", question, message: "I couldn’t answer that just now." });
+        scrollToAnswer();
         return;
       }
 
@@ -358,30 +385,10 @@ export default function LifeCFOHomePage() {
         suggestedNext: suggestedNext === "create_capture" ? "create_capture" : "none",
         captureSeed: suggestedNext === "create_capture" ? captureSeed : null,
       });
+      scrollToAnswer();
     } catch {
       setAsk({ status: "error", question, message: "I couldn’t answer that just now." });
-    }
-  };
-
-  const canCreateCapture =
-    ask.status === "done" && ask.suggestedNext === "create_capture" && !!ask.captureSeed && authStatus === "signed_in" && !!userId;
-
-  const [creatingCapture, setCreatingCapture] = useState(false);
-
-  const onCreateCapture = async () => {
-    if (!canCreateCapture || !userId || !ask.captureSeed) return;
-    if (creatingCapture) return;
-
-    setCreatingCapture(true);
-    try {
-      const r = await createCaptureFromSeed(userId, ask.captureSeed);
-      if (!r.ok) {
-        setAsk({ status: "error", question: ask.question, message: r.message });
-        return;
-      }
-      router.push(`/capture?open=${encodeURIComponent(r.inboxId)}`);
-    } finally {
-      setCreatingCapture(false);
+      scrollToAnswer();
     }
   };
 
@@ -391,7 +398,6 @@ export default function LifeCFOHomePage() {
 
     const msg = raw;
 
-    // Clear UI immediately (feels fast), but route intent correctly below
     setText("");
     setShowExamplesPanel(false);
     focusInput();
@@ -401,11 +407,13 @@ export default function LifeCFOHomePage() {
       return;
     }
 
-    // CRISIS / EMERGENCY INTERCEPT (prevents capture + prevents answering)
+    // Reset inline saved notice on new send
+    setLastSaved(null);
+
+    // Crisis intercept
     const intercept = maybeCrisisIntercept(msg);
     if (intercept) {
       flashAffirmation("Held.");
-      setLastSaved(null);
       setAsk({
         status: "done",
         question: msg,
@@ -414,6 +422,7 @@ export default function LifeCFOHomePage() {
         suggestedNext: "none",
         captureSeed: null,
       });
+      scrollToAnswer();
       return;
     }
 
@@ -422,37 +431,32 @@ export default function LifeCFOHomePage() {
       const q = ask.question;
       const followUp = `${q}\n\nUser follow-up: yes.`;
       flashAffirmation("Held.");
-      setLastSaved(null);
       await askHome(userId, followUp);
       return;
     }
 
-    // ✅ Life CFO intent rule:
-    // Default to answering, unless the user is explicitly making a note to save.
-    const isExplicitHold = (/^\s*(remember|note|save|log)\b/i.test(msg) || msg.toLowerCase().startsWith("remind me")) && !msg.includes("?");
+    const intent = inferIntent(msg);
 
-    // Bills questions: deterministic + richer (month or next X days)
+    // Bills deterministic
     const billsWindow = billsWindowFromQuestion(msg);
-    if (billsWindow) {
+    if (intent === "ask" && billsWindow) {
       flashAffirmation("Held.");
-      setLastSaved(null);
       const fb = await localBillsAnswer(userId, billsWindow);
       setAsk({ status: "done", question: msg, answer: fb.answer, actionHref: "/bills", suggestedNext: "none", captureSeed: null });
+      scrollToAnswer();
       return;
     }
 
-    // ASK (default)
-    if (!isExplicitHold) {
+    if (intent === "ask") {
       flashAffirmation("Held.");
-      setLastSaved(null);
       await askHome(userId, msg);
       return;
     }
 
-    // HOLD (explicit notes only) — never silent
+    // HOLD → save, and show it *inline* so it can’t be missed
     flashAffirmation("Saved.");
     setAsk({ status: "idle" });
-    setLastSaved({ kind: "capture", text: msg, href: "/capture" });
+    setLastSaved({ text: msg });
     await unload.submit(msg);
   };
 
@@ -472,10 +476,27 @@ export default function LifeCFOHomePage() {
     </button>
   );
 
+  const savedInline = useMemo(() => {
+    if (!lastSaved) return null;
+    return (
+      <div className="mt-2 rounded-2xl border border-zinc-200 bg-white p-3">
+        <div className="text-xs font-semibold text-zinc-900">Saved to Capture</div>
+        <div className="mt-1 text-xs leading-relaxed text-zinc-700">You can come back to this when you’re ready.</div>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <Chip onClick={() => router.push("/capture")} className="text-xs" title="View in Capture">
+            View in Capture <span className="ml-1 opacity-70">→</span>
+          </Chip>
+          <Chip onClick={() => setLastSaved(null)} className="text-xs" title="Done">
+            Done
+          </Chip>
+        </div>
+      </div>
+    );
+  }, [lastSaved, router]);
+
   return (
     <Page title="Home" subtitle={subtitle} right={<div className="flex items-center gap-2"></div>}>
       <div className="mx-auto w-full max-w-[760px] space-y-6">
-        {/* One-time welcome (trust-first) */}
         {showWelcome ? (
           <Card className="border-zinc-200 bg-white">
             <CardContent>
@@ -513,7 +534,6 @@ export default function LifeCFOHomePage() {
           </Card>
         ) : null}
 
-        {/* Life CFO Memo (arrived) */}
         <Card className="border-zinc-200 bg-white">
           <CardContent>
             <div className="space-y-2">
@@ -544,7 +564,6 @@ export default function LifeCFOHomePage() {
           </CardContent>
         </Card>
 
-        {/* Input (explicit dual-use) */}
         <Card className="border-zinc-200 bg-white">
           <CardContent>
             <div className="space-y-3">
@@ -601,7 +620,9 @@ export default function LifeCFOHomePage() {
                 )}
               </div>
 
-              {/* “Try a question” */}
+              {/* ✅ Inline saved notice */}
+              {savedInline}
+
               {text.trim().length === 0 ? (
                 <div className="space-y-3">
                   <div className="flex items-center gap-2">
@@ -660,72 +681,45 @@ export default function LifeCFOHomePage() {
           </CardContent>
         </Card>
 
-        {/* Saved confirmation (never silent) */}
-        {lastSaved ? (
-          <Card className="border-zinc-200 bg-white">
-            <CardContent>
-              <div className="space-y-2">
-                <div className="text-sm font-semibold text-zinc-900">Saved</div>
-                <div className="text-sm leading-relaxed text-zinc-700">This was saved to Capture so you can come back to it when you’re ready.</div>
-
-                <div className="flex flex-wrap items-center gap-2 pt-1">
-                  <Chip onClick={() => router.push(lastSaved.href)} title="View in Capture" className="text-xs">
-                    View in Capture <span className="ml-1 opacity-70">→</span>
-                  </Chip>
-                  <Chip onClick={() => setLastSaved(null)} title="Done" className="text-xs">
-                    Done
-                  </Chip>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        ) : null}
-
-        {/* Ask answer (memo-like) */}
+        {/* Ask answer */}
         {ask.status !== "idle" ? (
-          <Card className="border-zinc-200 bg-white">
-            <CardContent>
-              <div className="space-y-3">
-                {ask.status === "loading" ? (
-                  <div className="text-[15px] leading-relaxed text-zinc-800">Thinking…</div>
-                ) : ask.status === "error" ? (
-                  <div className="text-[15px] leading-relaxed text-zinc-800">{ask.message}</div>
-                ) : (
-                  <>
-                    <div className="text-sm font-semibold text-zinc-900">Life CFO</div>
+          <div ref={answerRef}>
+            <Card className="border-zinc-200 bg-white">
+              <CardContent>
+                <div className="space-y-3">
+                  {ask.status === "loading" ? (
+                    <div className="text-[15px] leading-relaxed text-zinc-800">Thinking…</div>
+                  ) : ask.status === "error" ? (
+                    <div className="text-[15px] leading-relaxed text-zinc-800">{ask.message}</div>
+                  ) : (
+                    <>
+                      <div className="text-sm font-semibold text-zinc-900">Life CFO</div>
+                      <div className="whitespace-pre-wrap text-[15px] leading-relaxed text-zinc-800">{ask.answer}</div>
+                      <div className="text-xs text-zinc-500">
+                        <span className="font-medium text-zinc-600">You asked:</span> {ask.question}
+                      </div>
 
-                    <div className="whitespace-pre-wrap text-[15px] leading-relaxed text-zinc-800">{ask.answer}</div>
+                      <div className="flex flex-wrap items-center gap-2 pt-1">
+                        {ask.actionHref ? (
+                          <Chip onClick={() => router.push(ask.actionHref!)} title="Open" className="text-xs">
+                            Open
+                          </Chip>
+                        ) : null}
 
-                    <div className="text-xs text-zinc-500">
-                      <span className="font-medium text-zinc-600">You asked:</span> {ask.question}
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-2 pt-1">
-                      {ask.actionHref && ask.suggestedNext !== "create_capture" ? (
-                        <Chip onClick={() => router.push(ask.actionHref!)} title="Open" className="text-xs">
-                          Open
+                        <Chip onClick={() => focusInput()} title="Ask a follow-up" className="text-xs">
+                          Ask a follow-up
                         </Chip>
-                      ) : null}
 
-                      {canCreateCapture ? (
-                        <Chip onClick={() => void onCreateCapture()} title="Create a Capture item" className="text-xs">
-                          {creatingCapture ? "Creating…" : "Create Capture"}
+                        <Chip onClick={() => setAsk({ status: "idle" })} title="Done" className="text-xs">
+                          Done
                         </Chip>
-                      ) : null}
-
-                      <Chip onClick={() => focusInput()} title="Ask a follow-up" className="text-xs">
-                        Ask a follow-up
-                      </Chip>
-
-                      <Chip onClick={() => setAsk({ status: "idle" })} title="Done" className="text-xs">
-                        Done
-                      </Chip>
-                    </div>
-                  </>
-                )}
-              </div>
-            </CardContent>
-          </Card>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          </div>
         ) : null}
       </div>
     </Page>
