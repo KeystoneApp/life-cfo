@@ -232,12 +232,22 @@ export default function LifeCFOHomePage() {
 
   const [statusMemo, setStatusMemo] = useState<StatusState>({ status: "idle" });
 
+  // follow-up (inline, keeps context on-screen)
+  const [followUpOpen, setFollowUpOpen] = useState(false);
+  const [followUpText, setFollowUpText] = useState("");
+  const [followUpSending, setFollowUpSending] = useState(false);
+
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const answerRef = useRef<HTMLDivElement | null>(null);
+  const followUpRef = useRef<HTMLDivElement | null>(null);
+  const followUpInputRef = useRef<HTMLTextAreaElement | null>(null);
 
   const focusInput = () => window.setTimeout(() => inputRef.current?.focus(), 0);
   const scrollToAnswer = () =>
     window.setTimeout(() => answerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 40);
+  const scrollToFollowUp = () =>
+    window.setTimeout(() => followUpRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }), 40);
+  const focusFollowUp = () => window.setTimeout(() => followUpInputRef.current?.focus(), 0);
 
   /* ---------- auth ---------- */
 
@@ -341,6 +351,9 @@ export default function LifeCFOHomePage() {
     setShowWhy(false);
     setShowAssumptions(false);
 
+    // close follow-up composer when a new answer begins
+    setFollowUpOpen(false);
+
     try {
       const res = await fetch("/api/home/ask", {
         method: "POST",
@@ -407,6 +420,52 @@ export default function LifeCFOHomePage() {
     }
 
     await askHome(msg);
+  };
+
+  /* ---------- follow-up (inline, keeps context) ---------- */
+
+  const submitFollowUp = async () => {
+    const fu = followUpText.trim();
+    if (!fu) return;
+
+    if (followUpSending) return;
+
+    if (authStatus !== "signed_in" || !userId) {
+      toast({ title: "Sign in", description: "Sign in to ask a follow-up." });
+      return;
+    }
+
+    setFollowUpSending(true);
+
+    try {
+      const intercept = maybeCrisisIntercept(fu);
+      if (intercept) {
+        setAsk({ status: "done", question: fu, answer: intercept.content, actionHref: null, suggestedNext: "none", captureSeed: null });
+        setFollowUpOpen(false);
+        setFollowUpText("");
+        scrollToAnswer();
+        return;
+      }
+
+      // stitch context safely (no storage; only for this request)
+      const parentQ = ask.status === "done" ? ask.question : "";
+      const parentA = ask.status === "done" ? cleanAnswer(ask.answer || "") : "";
+      const stitched =
+        ask.status === "done"
+          ? `Context:
+- Previous question: ${parentQ}
+- Previous answer (summary): ${parentA}
+
+Follow-up question: ${fu}`
+          : fu;
+
+      setFollowUpText("");
+      setFollowUpOpen(false);
+
+      await askHome(stitched);
+    } finally {
+      setFollowUpSending(false);
+    }
   };
 
   /* ---------- memo view model (Q&A) ---------- */
@@ -481,7 +540,6 @@ export default function LifeCFOHomePage() {
                           Check now
                         </Chip>
 
-                        {/* gentle “open details” shortcuts (optional depth) */}
                         <Chip className="text-xs" title="Open Money" onClick={() => router.push("/money")}>
                           Open Money
                         </Chip>
@@ -622,7 +680,15 @@ export default function LifeCFOHomePage() {
 
                     {/* Controls */}
                     <div className="flex flex-wrap gap-2">
-                      <Chip className="text-xs" title="Ask follow-up" onClick={focusInput}>
+                      <Chip
+                        className="text-xs"
+                        title="Ask follow-up"
+                        onClick={() => {
+                          setFollowUpOpen(true);
+                          scrollToFollowUp();
+                          focusFollowUp();
+                        }}
+                      >
                         Ask follow-up
                       </Chip>
 
@@ -647,9 +713,76 @@ export default function LifeCFOHomePage() {
                         </Chip>
                       ) : null}
 
+                      <Chip
+                        className="text-xs"
+                        title="Ask something else"
+                        onClick={() => {
+                          focusInput();
+                          window.setTimeout(() => inputRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }), 40);
+                        }}
+                      >
+                        Ask something else
+                      </Chip>
+
                       <Chip className="text-xs" title="Done" onClick={() => setAsk({ status: "idle" })}>
                         Done
                       </Chip>
+                    </div>
+
+                    {/* Inline follow-up composer (keeps context visible) */}
+                    <div ref={followUpRef}>
+                      {followUpOpen ? (
+                        <div className="rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3">
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="text-xs font-medium text-zinc-700">Follow-up</div>
+                            <Chip
+                              className="text-xs"
+                              title="Close"
+                              onClick={() => {
+                                setFollowUpOpen(false);
+                                setFollowUpText("");
+                              }}
+                            >
+                              Close
+                            </Chip>
+                          </div>
+
+                          <textarea
+                            ref={followUpInputRef}
+                            value={followUpText}
+                            onChange={(e) => setFollowUpText(e.target.value)}
+                            placeholder="Ask a follow-up…"
+                            className="mt-2 w-full min-h-[90px] resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[14px] leading-relaxed text-zinc-800 placeholder:text-zinc-500 outline-none focus:ring-2 focus:ring-zinc-200"
+                            onKeyDown={(e) => {
+                              const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+                              const cmdOrCtrl = isMac ? e.metaKey : e.ctrlKey;
+
+                              if (cmdOrCtrl && e.key === "Enter") {
+                                e.preventDefault();
+                                void submitFollowUp();
+                                return;
+                              }
+
+                              if (e.key === "Enter" && !e.shiftKey) {
+                                e.preventDefault();
+                                void submitFollowUp();
+                              }
+                            }}
+                          />
+
+                          <div className="mt-2 flex items-center justify-between">
+                            <div className="text-xs text-zinc-500">This uses the current answer as context.</div>
+                            <div className="flex gap-2">
+                              <Chip className="text-xs" title="Clear" onClick={() => setFollowUpText("")} disabled={!followUpText.trim() || followUpSending}>
+                                Clear
+                              </Chip>
+                              <Button onClick={() => void submitFollowUp()} disabled={!followUpText.trim() || followUpSending} className="rounded-2xl">
+                                {followUpSending ? "Sending…" : "Send"}
+                              </Button>
+                            </div>
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
 
                     {/* Optional depth */}
@@ -749,7 +882,7 @@ export default function LifeCFOHomePage() {
                         </Chip>
                       </div>
 
-                      {ask.suggestedNext === "create_capture" ? (
+                      {"suggestedNext" in ask && ask.suggestedNext === "create_capture" ? (
                         <div className="mt-2 text-xs text-zinc-500">If you’d like, we can save this so it doesn’t stay in your head.</div>
                       ) : null}
                     </div>
