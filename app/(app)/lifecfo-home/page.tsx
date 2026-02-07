@@ -153,6 +153,23 @@ function calmAssumptions(): string[] {
   return ["Bills and due dates are up to date", "Account balances are current", "No large untracked expenses are pending"];
 }
 
+/* ---------- status presentation (top check-in) ---------- */
+
+type StatusRunStatus = StatusRun["status"]; // (forward reference is fine in TS, but we redefine below after type)
+function statusBorderClass(status: "all_clear" | "tight" | "attention" | "unknown") {
+  if (status === "attention") return "border-l-4 border-l-red-300";
+  if (status === "tight") return "border-l-4 border-l-amber-300";
+  if (status === "unknown") return "border-l-4 border-l-zinc-200";
+  return "border-l-4 border-l-transparent";
+}
+
+function statusOpeningLine(status: "all_clear" | "tight" | "attention" | "unknown") {
+  if (status === "attention") return "One thing needs attention right now.";
+  if (status === "tight") return "Things are mostly fine, but worth keeping an eye on.";
+  if (status === "unknown") return "Not enough data yet to be confident.";
+  return "Nothing needs attention right now.";
+}
+
 /* ---------- types ---------- */
 
 type CaptureSeed = {
@@ -202,13 +219,6 @@ function actionToHref(action: ApiAction | undefined): string | null {
   if (action === "open_review") return "/revisit";
   if (action === "open_chapters") return "/chapters";
   return null;
-}
-
-function statusPill(s: StatusRun["status"]) {
-  if (s === "attention") return { label: "Needs attention", className: "bg-zinc-900 text-white" };
-  if (s === "tight") return { label: "A bit tight", className: "bg-zinc-100 text-zinc-800 border border-zinc-200" };
-  if (s === "unknown") return { label: "Not enough data", className: "bg-zinc-50 text-zinc-700 border border-zinc-200" };
-  return { label: "All clear", className: "bg-zinc-50 text-zinc-700 border border-zinc-200" };
 }
 
 /* ---------- page ---------- */
@@ -378,9 +388,10 @@ export default function LifeCFOHomePage() {
         answer,
         actionHref,
         suggestedNext: (typeof json?.suggested_next === "string" ? (json.suggested_next as SuggestedNext) : "none") as SuggestedNext,
-        captureSeed: (json?.capture_seed && typeof json.capture_seed === "object" ? (json.capture_seed as CaptureSeed) : null) as
-          | CaptureSeed
-          | null,
+        captureSeed:
+          (json?.capture_seed && typeof json.capture_seed === "object" ? (json.capture_seed as CaptureSeed) : null) as
+            | CaptureSeed
+            | null,
       });
 
       scrollToAnswer();
@@ -485,7 +496,9 @@ Follow-up question: ${fu}`
     <Page title="Home" subtitle={subtitle}>
       <div className="mx-auto max-w-[760px] space-y-6">
         {/* TOP: Always-on CFO check-in memo */}
-        <Card className="border-zinc-200 bg-white">
+        <Card
+          className={`border-zinc-200 bg-white ${statusMemo.status === "ready" ? statusBorderClass(statusMemo.run.status) : ""}`}
+        >
           <CardContent>
             <div className="space-y-3">
               <div className="flex items-center justify-between gap-3">
@@ -525,14 +538,16 @@ Follow-up question: ${fu}`
                             <span>Last checked: {formatCheckedAt(statusMemo.run.checked_at)}</span>
                           </div>
                         </div>
-
-                        <div className={"rounded-full px-3 py-1 text-xs font-medium " + statusPill(statusMemo.run.status).className}>
-                          {statusPill(statusMemo.run.status).label}
-                        </div>
                       </div>
 
-                      <div className="whitespace-pre-wrap text-[15px] leading-relaxed text-zinc-800">
-                        {cleanAnswer(statusMemo.run.memo_text || "") || "No memo text available yet."}
+                      <div className="space-y-2">
+                        <div className="text-[15px] font-medium leading-relaxed text-zinc-900">
+                          {statusOpeningLine(statusMemo.run.status)}
+                        </div>
+
+                        <div className="whitespace-pre-wrap text-[15px] leading-relaxed text-zinc-800">
+                          {cleanAnswer(statusMemo.run.memo_text || "") || ""}
+                        </div>
                       </div>
 
                       <div className="flex flex-wrap gap-2">
