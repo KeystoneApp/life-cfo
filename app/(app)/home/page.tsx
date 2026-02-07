@@ -1,16 +1,16 @@
-// app/(app)/home/page.tsx
+// app/(app)/lifecfo-home/page.tsx
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { Page } from "@/components/Page";
-import { Card, CardContent, Chip } from "@/components/ui";
-import { useHomeUnload } from "@/lib/home/useHomeUnload";
-import { useHomeOrientation } from "@/lib/home/useHomeOrientation";
+import { Card, CardContent, Chip, Button, useToast } from "@/components/ui";
 import { useRouter } from "next/navigation";
 import { maybeCrisisIntercept } from "@/lib/safety/guard";
 
 export const dynamic = "force-dynamic";
+
+/* ---------- helpers ---------- */
 
 function firstNameOf(full: string) {
   const s = (full || "").trim();
@@ -20,63 +20,120 @@ function firstNameOf(full: string) {
 
 function isYesish(s: string) {
   const t = s.trim().toLowerCase();
-  return t === "y" || t === "yes" || t === "yep" || t === "yeah" || t === "sure" || t === "ok" || t === "okay";
+  return ["y", "yes", "yep", "yeah", "sure", "ok", "okay"].includes(t);
 }
 
-function inferIntent(raw: string): "ask" | "hold" {
-  const s = raw.trim();
-  if (!s) return "hold";
+function cleanAnswer(raw: string) {
+  let t = (raw || "").trim();
+  if (!t) return "";
 
-  const lower = s.toLowerCase();
-  if (s.includes("?")) return "ask";
-  if (/^(what|when|why|how|can|should|do i|did i|am i|are we)\b/i.test(lower)) return "ask";
-  if (/\b(bill|bills|due|total|this month|month|next|days|afford|balance|spend|spent)\b/i.test(lower)) return "ask";
-  return "hold";
+  t = t.replace(/\r\n/g, "\n");
+  t = t.replace(/\*\*(.+?)\*\*/g, "$1");
+  t = t.replace(/^\s*-\s+/gm, "• ");
+  t = t.replace(/\n{3,}/g, "\n\n");
+
+  return t.trim();
 }
 
-// Treat these as “bills window” questions:
-// - “this month”
-// - “next 30 days” / “next 2 weeks” / “in the next 10 days”
-// - “upcoming bills” / “bills due soon”
-function billsWindowFromQuestion(q: string): { kind: "month" } | { kind: "days"; days: number } | null {
-  const s = q.trim().toLowerCase();
-  if (!s) return null;
+function formatCheckedAt(iso: string) {
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return iso;
+  return new Date(ms).toLocaleString(undefined, {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
 
-  const hasBillsWord = s.includes("bill") || s.includes("bills");
-  const hasDueCue = s.includes("due") || s.includes("upcoming") || s.includes("coming up") || s.includes("next");
-  if (!hasBillsWord && !hasDueCue) return null;
+/* ---------- CFO memo shaping (Q&A memo) ---------- */
 
-  if (s.includes("this month") || (hasBillsWord && s.includes("month"))) return { kind: "month" };
+type MemoTone = "ok" | "tight" | "attention";
 
-  // match “next 30 days”, “in the next 30 days”, “next 2 weeks”
-  const mDays = s.match(/(?:in\s+the\s+)?next\s+(\d{1,3})\s*day/);
-  if (mDays) {
-    const n = Number(mDays[1]);
-    if (Number.isFinite(n) && n >= 1 && n <= 365) return { kind: "days", days: n };
+function inferTone(text: string): MemoTone {
+  const t = (text || "").toLowerCase();
+
+  if (/(insufficient|overdue|past due|urgent|immediately|cannot|can’t|risk|at risk|missed|late fee|failed|error|shortfall|negative)/i.test(t)) {
+    return "attention";
+  }
+  if (/(tight|close|careful|reduce|cut back|watch|monitor|buffer|low|smaller margin|limited)/i.test(t)) {
+    return "tight";
+  }
+  return "ok";
+}
+
+function splitHeadlineAndBody(answer: string): { headline: string; body: string } {
+  const a = (answer || "").trim();
+  if (!a) return { headline: "", body: "" };
+
+  const lines = a.split("\n").map((s) => s.trim()).filter(Boolean);
+  if (lines.length === 0) return { headline: "", body: "" };
+
+  const first = lines[0];
+  const looksBullet = first.startsWith("•") || first.startsWith("-") || first.startsWith("*");
+  const looksTooShort = first.length < 24;
+
+  if (looksBullet || looksTooShort) {
+    const firstSentence = a.split(/(?<=[.!?])\s+/)[0]?.trim() || first;
+    const rest = a.slice(firstSentence.length).trim();
+    return { headline: firstSentence, body: rest };
   }
 
-  const mWeeks = s.match(/(?:in\s+the\s+)?next\s+(\d{1,2})\s*week/);
-  if (mWeeks) {
-    const n = Number(mWeeks[1]);
-    if (Number.isFinite(n) && n >= 1 && n <= 52) return { kind: "days", days: n * 7 };
+  const body = lines.slice(1).join("\n").trim();
+  return { headline: first, body };
+}
+
+function extractBullets(text: string): string[] {
+  const lines = (text || "").split("\n").map((s) => s.trim());
+  const bullets = lines
+    .filter((l) => l.startsWith("• "))
+    .map((l) => l.replace(/^•\s+/, "").trim())
+    .filter(Boolean);
+
+  if (bullets.length === 0) {
+    const paras = (text || "")
+      .split("\n")
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .filter((l) => !l.toLowerCase().startsWith("you asked:"));
+
+    return paras.slice(0, 3);
   }
 
-  // Common shorthand
-  if (s.includes("next 30")) return { kind: "days", days: 30 };
-  if (s.includes("next month")) return { kind: "days", days: 30 };
-  if (s.includes("due soon") || s.includes("upcoming bills") || s.includes("coming up")) return { kind: "days", days: 30 };
-
-  // If they said “bills due” but no window, default to 30 days (safe + helpful)
-  if (hasBillsWord && (s.includes("due") || s.includes("upcoming") || s.includes("coming up"))) return { kind: "days", days: 30 };
-
-  return null;
+  return bullets.slice(0, 5);
 }
+
+function tonePill(tone: MemoTone) {
+  if (tone === "attention") return { label: "Needs attention", className: "bg-zinc-900 text-white" };
+  if (tone === "tight") return { label: "A bit tight", className: "bg-zinc-100 text-zinc-800 border border-zinc-200" };
+  return { label: "All clear", className: "bg-zinc-50 text-zinc-700 border border-zinc-200" };
+}
+
+function calmWhatWouldChange(tone: MemoTone): string[] {
+  if (tone === "attention") {
+    return ["If income lands later than expected", "If a bill date is earlier than listed", "If current balances are lower than recorded"];
+  }
+  if (tone === "tight") {
+    return ["If one extra cost appears this week", "If a bill is higher than usual", "If income timing shifts"];
+  }
+  return ["If a new bill is added", "If income timing changes", "If a large one-off expense appears"];
+}
+
+function calmAssumptions(): string[] {
+  return ["Bills and due dates are up to date", "Account balances are current", "No large untracked expenses are pending"];
+}
+
+/* ---------- types ---------- */
 
 type CaptureSeed = {
   title: string;
   prompt: string;
   notes: string[];
 };
+
+type ApiAction = "open_bills" | "open_money" | "open_decisions" | "open_review" | "open_chapters" | "none";
+type SuggestedNext = "none" | "create_capture" | "open_thinking";
 
 type AskState =
   | { status: "idle" }
@@ -86,111 +143,80 @@ type AskState =
       question: string;
       answer: string;
       actionHref?: string | null;
-      suggestedNext?: "none" | "create_capture";
+      suggestedNext?: SuggestedNext;
       captureSeed?: CaptureSeed | null;
     }
   | { status: "error"; question: string; message: string };
 
-type RecurringBillRow = {
+type StatusRun = {
   id: string;
   user_id: string;
-  name: string;
-  amount_cents: number | null;
-  currency: string | null;
-  cadence: string | null;
-  next_due_at: string | null;
-  autopay: boolean | null;
-  active: boolean | null;
-  notes: string | null;
-  created_at: string | null;
-  updated_at: string | null;
+  status: "all_clear" | "tight" | "attention" | "unknown";
+  reasons: any;
+  facts_snapshot: any;
+  memo_text: string | null;
+  checked_at: string;
 };
 
-function formatMoneyFromCents(cents: number, currency: string) {
-  return new Intl.NumberFormat(undefined, { style: "currency", currency }).format(cents / 100);
+type StatusState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "ready"; run: StatusRun }
+  | { status: "error"; message: string };
+
+/* ---------- routing helpers ---------- */
+
+function actionToHref(action: ApiAction | undefined): string | null {
+  if (action === "open_money") return "/money";
+  if (action === "open_bills") return "/bills";
+  if (action === "open_decisions") return "/decisions";
+  if (action === "open_review") return "/revisit";
+  if (action === "open_chapters") return "/chapters";
+  return null;
 }
 
-function formatDateShort(d: Date) {
-  // Example: Tue 27 Feb 2026
-  return d.toLocaleDateString(undefined, { weekday: "short", day: "2-digit", month: "short", year: "numeric" });
+function statusPill(s: StatusRun["status"]) {
+  if (s === "attention") return { label: "Needs attention", className: "bg-zinc-900 text-white" };
+  if (s === "tight") return { label: "A bit tight", className: "bg-zinc-100 text-zinc-800 border border-zinc-200" };
+  if (s === "unknown") return { label: "Not enough data", className: "bg-zinc-50 text-zinc-700 border border-zinc-200" };
+  return { label: "All clear", className: "bg-zinc-50 text-zinc-700 border border-zinc-200" };
 }
 
-function monthBoundsLocal() {
-  const now = new Date();
-  const start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
-  const end = new Date(now.getFullYear(), now.getMonth() + 1, 1, 0, 0, 0, 0);
-  return { start, end };
-}
+/* ---------- page ---------- */
 
-function coerceSeed(raw: any): CaptureSeed | null {
-  if (!raw || typeof raw !== "object") return null;
-  const title = typeof raw.title === "string" ? raw.title.trim() : "";
-  const prompt = typeof raw.prompt === "string" ? raw.prompt.trim() : "";
-  const notes = Array.isArray(raw.notes) ? raw.notes.map((x: unknown) => String(x)).filter(Boolean).slice(0, 10) : [];
-  if (!title && !prompt) return null;
-  return {
-    title: (title || "Capture").slice(0, 120),
-    prompt: prompt.slice(0, 2000),
-    notes,
-  };
-}
-
-export default function HomePage() {
+export default function LifeCFOHomePage() {
   const router = useRouter();
+  const { toast } = useToast();
+
+  const buildStamp = process.env.NEXT_PUBLIC_BUILD_STAMP || "";
 
   const [userId, setUserId] = useState<string | null>(null);
   const [authStatus, setAuthStatus] = useState<"loading" | "signed_out" | "signed_in">("loading");
-  const [preferredName, setPreferredName] = useState<string>("");
+  const [preferredName, setPreferredName] = useState("");
 
   const [text, setText] = useState("");
-  const [affirmation, setAffirmation] = useState<"Saved." | "Held." | null>(null);
-
   const [ask, setAsk] = useState<AskState>({ status: "idle" });
 
-  const [showExamplesPanel, setShowExamplesPanel] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
+  const [showWhy, setShowWhy] = useState(false);
+  const [showAssumptions, setShowAssumptions] = useState(false);
 
-  const affirmationTimerRef = useRef<number | null>(null);
+  const [statusMemo, setStatusMemo] = useState<StatusState>({ status: "idle" });
+
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const answerRef = useRef<HTMLDivElement | null>(null);
 
-  // --- One-time onboarding nudge (Home) ---
-  // ✅ make it per-user so new signups see it again
-  const ONBOARDING_KEY_PREFIX = "keystone_onboarding_seen_v1:";
-  const [showOnboarding, setShowOnboarding] = useState(false);
+  const focusInput = () => window.setTimeout(() => inputRef.current?.focus(), 0);
+  const scrollToAnswer = () =>
+    window.setTimeout(() => answerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 40);
+
+  /* ---------- auth ---------- */
 
   useEffect(() => {
-    // Wait until we know who the user is. If signed out, don’t show.
-    if (authStatus !== "signed_in" || !userId) {
-      setShowOnboarding(false);
-      return;
-    }
-
-    try {
-      const key = `${ONBOARDING_KEY_PREFIX}${userId}`;
-      const seen = typeof window !== "undefined" ? window.localStorage.getItem(key) : "1";
-      setShowOnboarding(!seen);
-    } catch {
-      setShowOnboarding(false);
-    }
-  }, [authStatus, userId]);
-
-  const dismissOnboarding = () => {
-    if (!userId) {
-      setShowOnboarding(false);
-      return;
-    }
-    try {
-      window.localStorage.setItem(`${ONBOARDING_KEY_PREFIX}${userId}`, "1");
-    } catch {}
-    setShowOnboarding(false);
-  };
-
-  // --- Auth (quiet) ---
-  useEffect(() => {
-    let mounted = true;
-
+    let alive = true;
     (async () => {
       const { data, error } = await supabase.auth.getUser();
-      if (!mounted) return;
+      if (!alive) return;
 
       if (error || !data?.user) {
         setUserId(null);
@@ -203,27 +229,17 @@ export default function HomePage() {
     })();
 
     return () => {
-      mounted = false;
+      alive = false;
     };
   }, []);
 
-  // --- Load name ---
   useEffect(() => {
-    if (!userId) {
-      setPreferredName("");
-      return;
-    }
+    if (!userId) return;
 
     let alive = true;
-
     (async () => {
-      const { data, error } = await supabase.from("profiles").select("fine_print_signed_name").eq("user_id", userId).maybeSingle();
+      const { data } = await supabase.from("profiles").select("fine_print_signed_name").eq("user_id", userId).maybeSingle();
       if (!alive) return;
-
-      if (error) {
-        setPreferredName("");
-        return;
-      }
 
       const full = typeof data?.fine_print_signed_name === "string" ? data.fine_print_signed_name : "";
       setPreferredName(firstNameOf(full));
@@ -234,498 +250,494 @@ export default function HomePage() {
     };
   }, [userId]);
 
-  const unload = useHomeUnload({ userId });
-  const orientation = useHomeOrientation({ userId });
+  /* ---------- status memo (always-on CFO check-in) ---------- */
 
-  const flashAffirmation = (v: "Saved." | "Held.") => {
-    setAffirmation(v);
-    if (affirmationTimerRef.current) window.clearTimeout(affirmationTimerRef.current);
-    affirmationTimerRef.current = window.setTimeout(() => setAffirmation(null), 1300);
-  };
-
-  useEffect(() => {
-    return () => {
-      if (affirmationTimerRef.current) window.clearTimeout(affirmationTimerRef.current);
-      affirmationTimerRef.current = null;
-    };
-  }, []);
-
-  const openHref = (href?: string | null) => {
-    if (!href) return;
-    router.push(href);
-  };
-
-  // ✅ Deterministic bills answer (recurring_bills only)
-  const localBillsAnswer = async (uid: string, window: { kind: "month" } | { kind: "days"; days: number }) => {
-    const now = new Date();
-    const { start: monthStart, end: monthEnd } = monthBoundsLocal();
-
-    const start = window.kind === "month" ? monthStart : now;
-    const end = window.kind === "month" ? monthEnd : new Date(now.getTime() + window.days * 24 * 60 * 60 * 1000);
-
+  async function fetchLatestStatus(u: string) {
     const { data, error } = await supabase
-      .from("recurring_bills")
-      .select("id,user_id,name,amount_cents,currency,cadence,next_due_at,autopay,active,notes,created_at,updated_at")
-      .eq("user_id", uid)
-      .eq("active", true)
-      .gte("next_due_at", start.toISOString())
-      .lt("next_due_at", end.toISOString())
-      .order("next_due_at", { ascending: true })
-      .limit(200);
+      .from("home_status_latest")
+      .select("id,user_id,status,reasons,facts_snapshot,memo_text,checked_at")
+      .eq("user_id", u)
+      .maybeSingle();
 
-    if (error) return { ok: false as const, answer: "I couldn’t load bills right now." };
+    if (error) return { ok: false as const, error: error.message };
+    if (!data) return { ok: true as const, run: null as StatusRun | null };
 
-    const rows = (data ?? []) as RecurringBillRow[];
-    if (rows.length === 0) {
-      const range = window.kind === "month" ? "this month" : `in the next ${window.days} days (until ${formatDateShort(end)})`;
-      return { ok: true as const, answer: `There are no bills due ${range} (from what I can see).` };
+    return { ok: true as const, run: data as unknown as StatusRun };
+  }
+
+  async function runStatusCheck(opts?: { force?: boolean }) {
+    if (!userId) return;
+
+    setStatusMemo((s) => (s.status === "ready" ? s : { status: "loading" }));
+
+    try {
+      // stale-aware runner (server decides whether it actually runs)
+      await fetch("/api/home/status/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId, force: opts?.force === true }),
+      });
+
+      const latest = await fetchLatestStatus(userId);
+      if (!latest.ok) {
+        setStatusMemo({ status: "error", message: "I couldn’t load your latest check-in." });
+        return;
+      }
+
+      if (!latest.run) {
+        setStatusMemo({ status: "error", message: "No check-in yet. Run a check when you’re ready." });
+        return;
+      }
+
+      setStatusMemo({ status: "ready", run: latest.run });
+    } catch {
+      setStatusMemo({ status: "error", message: "I couldn’t run the check-in right now." });
     }
+  }
 
-    // Currency: if mixed, we don’t fake a single total currency
-    const currencies = Array.from(new Set(rows.map((r) => (r.currency || "AUD").toUpperCase())));
-    const singleCurrency = currencies.length === 1 ? currencies[0] : null;
+  // Auto-run status check after sign-in (quietly; server skips if not stale)
+  useEffect(() => {
+    if (authStatus !== "signed_in" || !userId) return;
+    void runStatusCheck({ force: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authStatus, userId]);
 
-    const lines = rows.map((b) => {
-      const name = (b.name || "Bill").trim();
-      const due = b.next_due_at ? new Date(b.next_due_at).toLocaleDateString() : "—";
+  /* ---------- ask ---------- */
 
-      const cur = (b.currency || "AUD").toUpperCase();
-      const cents = typeof b.amount_cents === "number" ? b.amount_cents : b.amount_cents == null ? null : Number(b.amount_cents);
-      const amt = typeof cents === "number" && Number.isFinite(cents) ? formatMoneyFromCents(cents, cur) : "—";
+  const askHome = async (question: string) => {
+    if (!userId) return;
 
-      const ap = b.autopay ? "Autopay" : "Not Autopay";
-      return `• ${name} — ${due} — ${amt} (${ap})`;
-    });
-
-    const rangeHeader =
-      window.kind === "month" ? `This month (until ${formatDateShort(end)})` : `In the next ${window.days} days (until ${formatDateShort(end)})`;
-
-    let totalLine = "";
-    if (singleCurrency) {
-      const totalCents = rows.reduce((sum, b) => {
-        const n = typeof b.amount_cents === "number" ? b.amount_cents : b.amount_cents == null ? null : Number(b.amount_cents);
-        if (typeof n !== "number" || !Number.isFinite(n)) return sum;
-        return sum + n;
-      }, 0);
-      totalLine = `\n\nEstimated total: ${formatMoneyFromCents(totalCents, singleCurrency)}`;
-    } else {
-      totalLine = `\n\nEstimated total: (multiple currencies)`;
-    }
-
-    return { ok: true as const, answer: `${rangeHeader}\n\n${lines.join("\n")}${totalLine}` };
-  };
-
-  // Create Capture (server route) — only on explicit user action
-  const createCaptureFromSeed = async (uid: string, seed: CaptureSeed) => {
-    const res = await fetch("/api/home/create-capture", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId: uid, seed }),
-    });
-
-    const json = await res.json();
-    if (!res.ok) return { ok: false as const, message: "I couldn’t create that capture item." };
-
-    const inboxId = typeof json?.inbox_id === "string" ? json.inbox_id : "";
-    if (!inboxId) return { ok: false as const, message: "I couldn’t create that capture item." };
-
-    return { ok: true as const, inboxId };
-  };
-
-  // Real AI call (server route)
-  const askHome = async (uid: string, question: string) => {
     setAsk({ status: "loading", question });
+    setShowDetails(false);
+    setShowWhy(false);
+    setShowAssumptions(false);
 
     try {
       const res = await fetch("/api/home/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: uid, question }),
+        body: JSON.stringify({ userId, question }),
       });
 
-      const json = await res.json();
+      const json = (await res.json().catch(() => ({}))) as any;
 
       if (!res.ok) {
-        setAsk({ status: "error", question, message: "I couldn’t answer that just now." });
+        setAsk({ status: "error", question, message: "I couldn’t answer that right now." });
+        scrollToAnswer();
         return;
       }
 
-      const answer = typeof json?.answer === "string" ? json.answer : "";
-      const action = typeof json?.action === "string" ? json.action : "none";
-      const suggestedNext = typeof json?.suggested_next === "string" ? json.suggested_next : "none";
-      const captureSeed = coerceSeed(json?.capture_seed);
-
-      let actionHref: string | null = null;
-      if (action === "open_bills") actionHref = "/bills";
-      if (action === "open_money") actionHref = "/money";
-      if (action === "open_goals") actionHref = "/money/goals";
-      if (action === "open_review") actionHref = "/revisit";
-      if (action === "open_decisions") actionHref = "/decisions";
-      if (action === "open_chapters") actionHref = "/chapters";
+      const answer = cleanAnswer(typeof json?.answer === "string" ? json.answer : "");
+      const actionHref = actionToHref(json?.action as ApiAction);
 
       setAsk({
         status: "done",
         question,
         answer,
         actionHref,
-        suggestedNext: suggestedNext === "create_capture" ? "create_capture" : "none",
-        captureSeed: suggestedNext === "create_capture" ? captureSeed : null,
+        suggestedNext: (typeof json?.suggested_next === "string" ? (json.suggested_next as SuggestedNext) : "none") as SuggestedNext,
+        captureSeed: (json?.capture_seed && typeof json.capture_seed === "object" ? (json.capture_seed as CaptureSeed) : null) as
+          | CaptureSeed
+          | null,
       });
+
+      scrollToAnswer();
     } catch {
-      setAsk({ status: "error", question, message: "I couldn’t answer that just now." });
+      setAsk({ status: "error", question, message: "I couldn’t answer that right now." });
+      scrollToAnswer();
     }
   };
+
+  /* ---------- submit (ANSWER-FIRST, always) ---------- */
 
   const submit = async () => {
-    const raw = text.trim();
-    if (!raw) return;
-
-    const msg = raw;
+    const msg = text.trim();
+    if (!msg) return;
 
     setText("");
-    setShowExamplesPanel(false);
-    window.setTimeout(() => inputRef.current?.focus(), 0);
+    focusInput();
 
     if (authStatus !== "signed_in" || !userId) {
-      flashAffirmation("Held.");
+      setAsk({ status: "error", question: msg, message: "Sign in to ask Life CFO." });
+      scrollToAnswer();
       return;
     }
 
-    // 🔒 CRISIS / EMERGENCY INTERCEPT (prevents capture + prevents answering)
+    // Crisis intercept (no save, no AI)
     const intercept = maybeCrisisIntercept(msg);
     if (intercept) {
-      // No saving. No routing. Calm output only.
-      flashAffirmation("Held.");
-      setAsk({
-        status: "done",
-        question: msg,
-        answer: intercept.content,
-        actionHref: null,
-        suggestedNext: "none",
-        captureSeed: null,
-      });
+      setAsk({ status: "done", question: msg, answer: intercept.content, actionHref: null, suggestedNext: "none", captureSeed: null });
+      scrollToAnswer();
       return;
     }
 
-    if (isYesish(msg) && (ask.status === "done" || ask.status === "error")) {
-      const q = ask.question;
-      const followUp = `${q}\n\nUser follow-up: yes.`;
-      flashAffirmation("Held.");
-      await askHome(userId, followUp);
+    // “yes” follow-up after an answer (simple affordance)
+    if (isYesish(msg) && ask.status === "done") {
+      await askHome(`${ask.question}\n\nUser follow-up: yes.`);
       return;
     }
 
-    const intent = inferIntent(msg);
-
-    // ✅ Bills questions: deterministic + richer (month or next X days)
-    const billsWindow = billsWindowFromQuestion(msg);
-    if (intent === "ask" && billsWindow) {
-      flashAffirmation("Held.");
-      const fb = await localBillsAnswer(userId, billsWindow);
-      setAsk({ status: "done", question: msg, answer: fb.answer, actionHref: "/bills", suggestedNext: "none", captureSeed: null });
-      return;
-    }
-
-    if (intent === "ask") {
-      flashAffirmation("Held.");
-      await askHome(userId, msg);
-      return;
-    }
-
-    flashAffirmation("Saved.");
-    setAsk({ status: "idle" });
-    await unload.submit(msg);
+    await askHome(msg);
   };
 
-  const canSend = authStatus === "signed_in" && text.trim().length > 0;
+  /* ---------- memo view model (Q&A) ---------- */
+
+  const memo = useMemo(() => {
+    if (ask.status !== "done") return null;
+    const tone = inferTone(ask.answer || "");
+    const { headline, body } = splitHeadlineAndBody(ask.answer || "");
+    const bullets = extractBullets(body || "");
+    return { tone, headline, body, bullets };
+  }, [ask]);
 
   const subtitle = preferredName ? `Good to see you, ${preferredName}.` : undefined;
-
-  const notesVisible = orientation.loading || orientation.items.length > 0;
-
-  const canCreateCapture =
-    ask.status === "done" && ask.suggestedNext === "create_capture" && !!ask.captureSeed && authStatus === "signed_in" && !!userId;
-
-  const [creatingCapture, setCreatingCapture] = useState(false);
-
-  const onCreateCapture = async () => {
-    if (!canCreateCapture || !userId || !ask.captureSeed) return;
-    if (creatingCapture) return;
-
-    setCreatingCapture(true);
-    try {
-      const r = await createCaptureFromSeed(userId, ask.captureSeed);
-      if (!r.ok) {
-        setAsk({ status: "error", question: ask.question, message: r.message });
-        return;
-      }
-
-      // Take them straight into Capture, focused on that new item
-      router.push(`/capture?open=${encodeURIComponent(r.inboxId)}`);
-    } finally {
-      setCreatingCapture(false);
-    }
-  };
-
-  const ExampleButton = ({ text: ex }: { text: string }) => (
-    <button
-      type="button"
-      onClick={() => {
-        setText(ex);
-        window.setTimeout(() => inputRef.current?.focus(), 0);
-      }}
-      className="rounded-xl border border-zinc-200 bg-white px-3 py-2 text-left text-xs text-zinc-700 hover:bg-zinc-50"
-    >
-      {ex}
-    </button>
-  );
-
-  const GhostChip = ({ children, onClick, title }: { children: React.ReactNode; onClick?: () => void; title?: string }) => (
-    <Chip onClick={onClick} title={title} className="text-xs px-2 py-1 border-zinc-200 bg-transparent text-zinc-700 hover:bg-zinc-50">
-      {children}
-    </Chip>
-  );
+  const canType = authStatus === "signed_in";
 
   return (
-    <Page title="Home" subtitle={subtitle} right={<div className="flex items-center gap-2"></div>}>
-      <div className="mx-auto w-full max-w-[760px] space-y-6">
-        {/* ✅ One-time onboarding nudge */}
-        {showOnboarding ? (
-          <Card className="border-zinc-200 bg-white">
-            <CardContent>
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-sm font-semibold text-zinc-900">New here?</div>
-                  <div className="mt-1 text-sm leading-relaxed text-zinc-700">If you want a quick sense of how Keystone works, start here.</div>
-
-                  <div className="mt-3 flex flex-wrap items-center gap-2">
-                    <Chip onClick={() => router.push("/how-keystone-works")} title="How Keystone works" className="text-xs">
-                      How Keystone works <span className="ml-1 opacity-70">→</span>
-                    </Chip>
-                    <Chip onClick={dismissOnboarding} title="Dismiss" className="text-xs">
-                      Dismiss
-                    </Chip>
-                  </div>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={dismissOnboarding}
-                  className="rounded-full border border-zinc-200 bg-white px-2 py-1 text-xs text-zinc-600 hover:border-zinc-300"
-                  aria-label="Dismiss onboarding"
-                  title="Dismiss"
-                >
-                  ×
-                </button>
-              </div>
-            </CardContent>
-          </Card>
-        ) : null}
-
+    <Page title="Home" subtitle={subtitle}>
+      <div className="mx-auto max-w-[760px] space-y-6">
+        {/* TOP: Always-on CFO check-in memo */}
         <Card className="border-zinc-200 bg-white">
           <CardContent>
             <div className="space-y-3">
-              {/* ✅ Section title */}
-              <div className="text-sm font-semibold text-zinc-900">Thinking something through? Start here.</div>
-
-              <div className="relative">
-                <textarea
-                  ref={inputRef}
-                  value={text}
-                  onChange={(e) => setText(e.target.value)}
-                  placeholder="What’s on your mind?"
-                  className="w-full min-h-[150px] resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 pr-14 text-[15px] leading-relaxed text-zinc-800 placeholder:text-zinc-500 outline-none focus:ring-2 focus:ring-zinc-200"
-                  onKeyDown={(e) => {
-                    const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
-                    const cmdOrCtrl = isMac ? e.metaKey : e.ctrlKey;
-
-                    if (cmdOrCtrl && e.key === "Enter") {
-                      e.preventDefault();
-                      void submit();
-                      return;
-                    }
-
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault();
-                      void submit();
-                    }
-                  }}
-                  aria-label="What’s on your mind?"
-                  disabled={authStatus !== "signed_in"}
-                />
-
-                {canSend ? (
-                  <button
-                    type="button"
-                    onClick={() => void submit()}
-                    className="absolute bottom-3 right-3 inline-flex h-10 w-10 items-center justify-center rounded-full border border-zinc-200 bg-white text-zinc-800 hover:bg-zinc-50 focus:outline-none focus:ring-2 focus:ring-zinc-200"
-                    aria-label="Send"
-                    title="Send (Enter)"
-                  >
-                    →
-                  </button>
-                ) : null}
-              </div>
-
               <div className="flex items-center justify-between gap-3">
-                <div className="text-xs text-zinc-600">Unload it here. Ask if you want help.</div>
-
-                {affirmation ? (
-                  <div className="text-xs text-zinc-500" aria-live="polite">
-                    {affirmation}
-                  </div>
-                ) : (
-                  <div className="h-4" aria-hidden="true" />
-                )}
+                <div className="text-sm font-semibold text-zinc-900">Life CFO</div>
+                <div className="flex items-center gap-2">
+                  <Chip className="text-xs" title="How it works" onClick={() => router.push("/how-life-cfo-works")}>
+                    How it works
+                  </Chip>
+                </div>
               </div>
 
-              {/* ✅ One “Examples” chip + grouped examples */}
-              {text.trim().length === 0 ? (
-                <div className="space-y-3">
-                  <div className="flex items-center gap-2">
-                    <Chip
-                      onClick={() => setShowExamplesPanel((v) => !v)}
-                      title="Examples"
-                      className="border-zinc-200 bg-white text-xs text-zinc-700 hover:bg-zinc-50"
-                    >
-                      {showExamplesPanel ? "Hide examples" : "Examples"}
-                    </Chip>
-                  </div>
-
-                  {showExamplesPanel ? (
-                    <div className="grid gap-4 rounded-2xl border border-zinc-200 bg-white p-3">
-                      <div className="grid gap-2">
-                        <div className="text-xs font-semibold text-zinc-900">Money</div>
-                        <div className="grid gap-2 sm:grid-cols-2">
-                          <ExampleButton text="What bills are due this month?" />
-                          <ExampleButton text="What bills do we have in the next 30 days?" />
-                          <ExampleButton text="Can we afford this right now?" />
-                          <ExampleButton text="What goals do we have?" />
-                        </div>
-                      </div>
-
-                      <div className="grid gap-2">
-                        <div className="text-xs font-semibold text-zinc-900">Decisions</div>
-                        <div className="grid gap-2 sm:grid-cols-2">
-                          <ExampleButton text="Do I have any open decisions?" />
-                          <ExampleButton text="What am I still deciding on?" />
-                        </div>
-                      </div>
-
-                      <div className="grid gap-2">
-                        <div className="text-xs font-semibold text-zinc-900">Review & check-ins</div>
-                        <div className="grid gap-2 sm:grid-cols-2">
-                          <ExampleButton text="What do I need to review?" />
-                          <ExampleButton text="What’s coming up for review?" />
-                          <ExampleButton text="Check-in list" />
-                        </div>
-                      </div>
-
-                      <div className="grid gap-2">
-                        <div className="text-xs font-semibold text-zinc-900">Family</div>
-                        <div className="grid gap-2 sm:grid-cols-2">
-                          <ExampleButton text="Who is in our family?" />
-                          <ExampleButton text="Do we have any pets?" />
-                        </div>
+              {authStatus === "signed_out" ? (
+                <div className="text-sm text-zinc-700">Sign in to get a household check-in and ask a question.</div>
+              ) : (
+                <>
+                  {statusMemo.status === "idle" || statusMemo.status === "loading" ? (
+                    <div className="space-y-2">
+                      <div className="text-sm text-zinc-700">Checking in…</div>
+                      <div className="text-xs text-zinc-500">This is a calm status snapshot. Nothing saves unless you choose.</div>
+                    </div>
+                  ) : statusMemo.status === "error" ? (
+                    <div className="space-y-2">
+                      <div className="text-sm text-zinc-700">{statusMemo.message}</div>
+                      <div className="flex flex-wrap gap-2">
+                        <Chip className="text-xs" title="Run check now" onClick={() => void runStatusCheck({ force: true })}>
+                          Run check now
+                        </Chip>
                       </div>
                     </div>
-                  ) : null}
-                </div>
-              ) : null}
+                  ) : (
+                    <div className="space-y-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="space-y-1">
+                          <div className="text-xs text-zinc-500">
+                            <span className="font-medium text-zinc-600">Status memo</span>{" "}
+                            <span className="text-zinc-400">•</span>{" "}
+                            <span>Last checked: {formatCheckedAt(statusMemo.run.checked_at)}</span>
+                          </div>
+                        </div>
 
-              {authStatus === "signed_out" ? <div className="text-[15px] leading-relaxed text-zinc-800">Sign in to use Home.</div> : null}
+                        <div className={"rounded-full px-3 py-1 text-xs font-medium " + statusPill(statusMemo.run.status).className}>
+                          {statusPill(statusMemo.run.status).label}
+                        </div>
+                      </div>
+
+                      <div className="whitespace-pre-wrap text-[15px] leading-relaxed text-zinc-800">
+                        {statusMemo.run.memo_text || "No memo text available yet."}
+                      </div>
+
+                      <div className="flex flex-wrap gap-2">
+                        <Chip className="text-xs" title="Check now" onClick={() => void runStatusCheck({ force: true })}>
+                          Check now
+                        </Chip>
+
+                        {/* gentle “open details” shortcuts (optional depth) */}
+                        <Chip className="text-xs" title="Open Money" onClick={() => router.push("/money")}>
+                          Open Money
+                        </Chip>
+                        <Chip className="text-xs" title="Open Bills" onClick={() => router.push("/bills")}>
+                          Open Bills
+                        </Chip>
+
+                        {buildStamp ? (
+                          <span className="ml-auto text-[11px] text-zinc-400">Build {buildStamp}</span>
+                        ) : null}
+                      </div>
+
+                      <div className="text-xs text-zinc-500">
+                        One place. One question. One answer. <span className="text-zinc-400">Save only if you choose.</span>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {authStatus !== "signed_out" && buildStamp && statusMemo.status !== "ready" ? (
+                <div className="text-[11px] text-zinc-400">Build {buildStamp}</div>
+              ) : null}
             </div>
           </CardContent>
         </Card>
 
+        {/* Input card */}
+        <Card className="border-zinc-200 bg-white">
+          <CardContent>
+            <textarea
+              ref={inputRef}
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              placeholder="Ask Life CFO… (or just unload what’s in your head)"
+              className="w-full min-h-[140px] resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[15px] leading-relaxed text-zinc-800 placeholder:text-zinc-500 outline-none focus:ring-2 focus:ring-zinc-200"
+              disabled={!canType}
+              onKeyDown={(e) => {
+                const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+                const cmdOrCtrl = isMac ? e.metaKey : e.ctrlKey;
+
+                if (cmdOrCtrl && e.key === "Enter") {
+                  e.preventDefault();
+                  void submit();
+                  return;
+                }
+
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  void submit();
+                }
+              }}
+            />
+
+            <div className="mt-2 flex justify-between text-xs text-zinc-500">
+              <span>Ask anything. Save only if you want to.</span>
+              {ask.status === "loading" ? <span aria-live="polite">Thinking…</span> : <span className="h-4" aria-hidden="true" />}
+            </div>
+
+            <div className="mt-3 flex gap-2">
+              <Button onClick={() => void submit()} disabled={!canType || !text.trim() || ask.status === "loading"} className="rounded-2xl">
+                Get answer
+              </Button>
+              <Chip className="text-xs" title="Clear" onClick={() => setText("")} disabled={!text.trim() || ask.status === "loading"}>
+                Clear
+              </Chip>
+            </div>
+
+            <div className="mt-3 flex flex-wrap gap-2">
+              {["Are we okay this month?", "What bills are due soon?", "What changed recently?", "Can we afford $___?"].map((ex) => (
+                <Chip
+                  key={ex}
+                  className="text-xs"
+                  title={ex}
+                  disabled={!canType || ask.status === "loading"}
+                  onClick={() => setText(ex)}
+                >
+                  {ex}
+                </Chip>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Q&A CFO Memo card */}
         {ask.status !== "idle" ? (
-          <Card className="border-zinc-200 bg-white">
-            <CardContent>
-              <div className="space-y-3">
+          <div ref={answerRef}>
+            <Card className="border-zinc-200 bg-white">
+              <CardContent>
                 {ask.status === "loading" ? (
-                  <div className="text-[15px] leading-relaxed text-zinc-800">Thinking…</div>
+                  <div className="text-sm text-zinc-700">Thinking…</div>
                 ) : ask.status === "error" ? (
-                  <div className="text-[15px] leading-relaxed text-zinc-800">{ask.message}</div>
+                  <div className="space-y-2">
+                    <div className="text-sm font-semibold text-zinc-900">Life CFO</div>
+                    <div className="text-sm text-zinc-700">{ask.message}</div>
+                    <div className="text-xs text-zinc-500">
+                      <span className="font-medium text-zinc-600">You asked:</span> {ask.question}
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <Chip className="text-xs" title="Try again" onClick={() => void askHome(ask.question)}>
+                        Try again
+                      </Chip>
+                      <Chip className="text-xs" title="Done" onClick={() => setAsk({ status: "idle" })}>
+                        Done
+                      </Chip>
+                    </div>
+                  </div>
                 ) : (
-                  <>
-                    {/* ✅ Rebalanced layout */}
-                    <div className="text-sm font-semibold text-zinc-900">You asked</div>
-                    <div className="text-[15px] leading-relaxed text-zinc-800">{ask.question}</div>
+                  <div className="space-y-4">
+                    {/* Memo header */}
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="space-y-1">
+                        <div className="text-sm font-semibold text-zinc-900">Life CFO memo</div>
+                        <div className="text-xs text-zinc-500">
+                          <span className="font-medium text-zinc-600">Question:</span> {ask.question}
+                        </div>
+                      </div>
 
-                    <div className="h-2" aria-hidden="true" />
+                      {memo ? (
+                        <div className={"rounded-full px-3 py-1 text-xs font-medium " + tonePill(memo.tone).className}>
+                          {tonePill(memo.tone).label}
+                        </div>
+                      ) : null}
+                    </div>
 
-                    <div className="text-sm font-semibold text-zinc-900">Answer</div>
-                    <div className="whitespace-pre-wrap text-[15px] leading-relaxed text-zinc-800">{ask.answer}</div>
+                    {/* One-sentence headline */}
+                    <div className="text-[16px] leading-relaxed text-zinc-900">
+                      <span className="font-medium">{memo?.headline || ask.answer}</span>
+                    </div>
 
-                    <div className="flex flex-wrap items-center gap-2 pt-1">
-                      {ask.actionHref && ask.suggestedNext !== "create_capture" ? (
-                        <Chip onClick={() => router.push(ask.actionHref!)} title="Open" className="text-xs">
-                          Open
+                    {/* Key points */}
+                    {memo ? (
+                      <div className="space-y-2">
+                        {memo.bullets.length > 0 ? (
+                          <ul className="space-y-1">
+                            {memo.bullets.slice(0, 3).map((b, idx) => (
+                              <li key={idx} className="text-[14px] leading-relaxed text-zinc-800">
+                                <span className="text-zinc-400">• </span>
+                                {b}
+                              </li>
+                            ))}
+                          </ul>
+                        ) : null}
+                      </div>
+                    ) : null}
+
+                    {/* Controls */}
+                    <div className="flex flex-wrap gap-2">
+                      <Chip className="text-xs" title="Ask follow-up" onClick={focusInput}>
+                        Ask follow-up
+                      </Chip>
+
+                      <Chip
+                        className="text-xs"
+                        title="Copy"
+                        onClick={async () => {
+                          try {
+                            await navigator.clipboard.writeText((memo?.headline ? memo.headline + "\n\n" : "") + (ask.answer || ""));
+                            toast({ title: "Copied", description: "Ready to paste." });
+                          } catch {
+                            toast({ title: "Couldn’t copy", description: "Your browser blocked clipboard access." });
+                          }
+                        }}
+                      >
+                        Copy
+                      </Chip>
+
+                      {ask.actionHref ? (
+                        <Chip className="text-xs" title="Open" onClick={() => router.push(ask.actionHref!)}>
+                          Open details
                         </Chip>
                       ) : null}
 
-                      {canCreateCapture ? (
-                        <Chip onClick={() => void onCreateCapture()} title="Create a Capture item" className="text-xs">
-                          {creatingCapture ? "Creating…" : "Create Capture"}
-                        </Chip>
-                      ) : null}
-
-                      <Chip onClick={() => setAsk({ status: "idle" })} title="Dismiss" className="text-xs">
+                      <Chip className="text-xs" title="Done" onClick={() => setAsk({ status: "idle" })}>
                         Done
                       </Chip>
                     </div>
 
-                    <div className="text-xs text-zinc-500 pt-1">You can reply here (e.g. “yes”, “show totals”, “only active”).</div>
-                  </>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        ) : null}
-
-        {notesVisible ? (
-          <Card className="border-zinc-200 bg-white">
-            <CardContent>
-              <div className="flex items-center justify-between gap-3">
-                <div className="text-sm font-semibold text-zinc-900">Notes from Keystone</div>
-                {orientation.loading ? <div className="text-xs text-zinc-500">Updating…</div> : <div className="h-4" aria-hidden="true" />}
-              </div>
-
-              <div className="mt-3">
-                {orientation.loading && orientation.items.length === 0 ? (
-                  <div className="space-y-3" aria-hidden="true">
-                    <div className="h-5 w-3/4 rounded bg-zinc-100" />
-                    <div className="h-5 w-2/3 rounded bg-zinc-100" />
-                  </div>
-                ) : (
-                  <ul className="space-y-2">
-                    {orientation.items.slice(0, 3).map((n, idx) => (
-                      <li key={`${idx}-${n.href}-${n.text}`} className="flex items-center justify-between gap-3">
-                        <button
-                          type="button"
-                          onClick={() => openHref(n.href)}
-                          className="min-w-0 flex-1 text-left text-[15px] leading-relaxed text-zinc-800 hover:underline underline-offset-4"
-                          title="Open"
-                        >
-                          <span className="mr-2 text-zinc-400">•</span>
-                          {n.text}
-                        </button>
-
-                        <div className="shrink-0 self-center">
-                          <GhostChip onClick={() => openHref(n.href)} title="Open">
-                            Open
-                          </GhostChip>
+                    {/* Optional depth */}
+                    {memo ? (
+                      <div className="space-y-3 pt-1">
+                        <div className="flex flex-wrap gap-2">
+                          <Chip className="text-xs" title="Details" onClick={() => setShowDetails((v) => !v)}>
+                            {showDetails ? "Hide details" : "Details"}
+                          </Chip>
+                          <Chip className="text-xs" title="What would change this?" onClick={() => setShowWhy((v) => !v)}>
+                            {showWhy ? "Hide what would change this" : "What would change this?"}
+                          </Chip>
+                          <Chip className="text-xs" title="Assumptions" onClick={() => setShowAssumptions((v) => !v)}>
+                            {showAssumptions ? "Hide assumptions" : "Assumptions"}
+                          </Chip>
                         </div>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        ) : null}
 
-        {unload.response ? <div className="text-[15px] leading-relaxed text-zinc-800">{unload.response}</div> : null}
+                        {showDetails ? (
+                          <div className="rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3">
+                            <div className="text-xs font-medium text-zinc-700">Details</div>
+                            <div className="mt-2 whitespace-pre-wrap text-[14px] leading-relaxed text-zinc-800">
+                              {memo.body ? memo.body : ask.answer}
+                            </div>
+                          </div>
+                        ) : null}
+
+                        {showWhy ? (
+                          <div className="rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3">
+                            <div className="text-xs font-medium text-zinc-700">What would change this</div>
+                            <ul className="mt-2 space-y-1">
+                              {calmWhatWouldChange(memo.tone).map((x) => (
+                                <li key={x} className="text-[14px] leading-relaxed text-zinc-800">
+                                  <span className="text-zinc-400">• </span>
+                                  {x}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        ) : null}
+
+                        {showAssumptions ? (
+                          <div className="rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3">
+                            <div className="text-xs font-medium text-zinc-700">Assumptions</div>
+                            <ul className="mt-2 space-y-1">
+                              {calmAssumptions().map((x) => (
+                                <li key={x} className="text-[14px] leading-relaxed text-zinc-800">
+                                  <span className="text-zinc-400">• </span>
+                                  {x}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+
+                    {/* Permissioned save */}
+                    <div className="pt-2">
+                      <div className="text-xs font-medium text-zinc-600">Want me to hold onto this?</div>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <Chip
+                          className="text-xs"
+                          title="Save a note"
+                          onClick={async () => {
+                            try {
+                              await navigator.clipboard.writeText(ask.question);
+                              toast({ title: "Copied", description: "Paste into Notes." });
+                            } catch {}
+                            router.push("/capture");
+                          }}
+                        >
+                          Save a note
+                        </Chip>
+
+                        <Chip
+                          className="text-xs"
+                          title="Save a decision"
+                          onClick={async () => {
+                            try {
+                              await navigator.clipboard.writeText(ask.question);
+                              toast({ title: "Copied", description: "Paste into a Decision." });
+                            } catch {}
+                            router.push("/framing");
+                          }}
+                        >
+                          Save a decision
+                        </Chip>
+
+                        <Chip
+                          className="text-xs"
+                          title="Leave it"
+                          onClick={() => {
+                            toast({ title: "Okay", description: "Nothing saved." });
+                          }}
+                        >
+                          Leave it
+                        </Chip>
+                      </div>
+
+                      {ask.suggestedNext === "create_capture" ? (
+                        <div className="mt-2 text-xs text-zinc-500">If you’d like, we can save this so it doesn’t stay in your head.</div>
+                      ) : null}
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        ) : null}
       </div>
     </Page>
   );
