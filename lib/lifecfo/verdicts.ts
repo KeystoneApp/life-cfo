@@ -1,3 +1,7 @@
+// lib/lifecfo/verdict.ts
+// Fine-grained verdicts for “should we / can we afford / decision outcomes”.
+// Not used for Home check-in tone (that is HomeTone in homeTone.ts).
+
 export type Verdict =
   | "CLEAR_YES"
   | "YES_NEEDS_PLANNING"
@@ -13,7 +17,6 @@ export type VerdictUI = {
 
 export function verdictToUI(v: Verdict): VerdictUI {
   // Keep this minimal + calm. No “alarm red” in V1.
-  // We’ll later map borders/accents in the design system.
   switch (v) {
     case "CLEAR_YES":
       return { label: "Comfortable", className: "bg-zinc-50 text-zinc-700 border border-zinc-200" };
@@ -26,7 +29,6 @@ export function verdictToUI(v: Verdict): VerdictUI {
     case "NO":
       return { label: "Doesn’t fit", className: "bg-zinc-900 text-white" };
     case "INSUFFICIENT_DATA":
-      return { label: "Not enough data", className: "bg-zinc-50 text-zinc-700 border border-zinc-200" };
     default:
       return { label: "Not enough data", className: "bg-zinc-50 text-zinc-700 border border-zinc-200" };
   }
@@ -49,7 +51,6 @@ export function verdictSentence(v: Verdict): string {
     case "NO":
       return "No — this doesn’t fit within your current financial reality.";
     case "INSUFFICIENT_DATA":
-      return "I don’t have enough information to answer this safely yet.";
     default:
       return "I don’t have enough information to answer this safely yet.";
   }

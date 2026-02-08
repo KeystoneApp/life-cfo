@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import OpenAI from "openai";
 import { createClient } from "@supabase/supabase-js";
 import { maybeCrisisIntercept } from "@/lib/safety/guard";
+import { decideHomeTone, type HomeTone } from "@/lib/lifecfo/homeTone";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -11,15 +12,6 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
 type Action = "open_bills" | "open_money" | "open_decisions" | "open_review" | "open_chapters" | "none";
 type SuggestedNext = "none" | "create_capture" | "open_thinking";
-
-type Verdict =
-  | "CLEAR_YES"
-  | "YES_NEEDS_PLANNING"
-  | "NOT_YET"
-  | "NEEDS_ATTENTION"
-  | "NO"
-  | "INSUFFICIENT_DATA"
-  | "INFO";
 
 type AskRequest = { userId: string; question: string };
 
@@ -31,12 +23,6 @@ function isAction(x: unknown): x is Action {
 }
 function isSuggestedNext(x: unknown): x is SuggestedNext {
   return typeof x === "string" && (["none", "create_capture", "open_thinking"] as const).includes(x as SuggestedNext);
-}
-function isVerdict(x: unknown): x is Verdict {
-  return (
-    typeof x === "string" &&
-    (["CLEAR_YES", "YES_NEEDS_PLANNING", "NOT_YET", "NEEDS_ATTENTION", "NO", "INSUFFICIENT_DATA", "INFO"] as const).includes(x as Verdict)
-  );
 }
 
 function monthBoundsLocal() {
@@ -118,30 +104,6 @@ function formatDateShort(iso: string) {
   });
 }
 
-/* ---------------- canonical verdict language ---------------- */
-
-function verdictSentence(v: Verdict): string {
-  // Keep these short, calm, and unambiguous.
-  switch (v) {
-    case "CLEAR_YES":
-      return "Yes — this fits comfortably within your current position.";
-    case "YES_NEEDS_PLANNING":
-      return "This is achievable, but it would need planning.";
-    case "NOT_YET":
-      return "Not yet — this would stretch things too far right now.";
-    case "NEEDS_ATTENTION":
-      return "This needs attention before you commit.";
-    case "NO":
-      return "No — this doesn’t fit within your current financial reality.";
-    case "INSUFFICIENT_DATA":
-      return "I don’t have enough information to answer this safely yet.";
-    case "INFO":
-      return "Here’s what I can see right now.";
-    default:
-      return "Here’s what I can see right now.";
-  }
-}
-
 /* ---------------- memo formatting helpers ---------------- */
 
 function mdSection(title: string, lines: string[]) {
@@ -154,23 +116,23 @@ function mdBullets(items: string[]) {
 }
 
 function buildMemoAnswer(params: {
-  verdict_sentence: string;
+  headline: string;
   key_points?: string[];
   details?: string;
   assumptions?: string[];
-  what_would_change?: string[];
+  what_changes_this?: string[];
 }) {
-  const verdict_sentence = (params.verdict_sentence || "").trim();
+  const headline = (params.headline || "").trim();
 
   const keyPoints = Array.isArray(params.key_points) ? params.key_points.map((x) => String(x || "").trim()).filter(Boolean) : [];
   const assumptions = Array.isArray(params.assumptions) ? params.assumptions.map((x) => String(x || "").trim()).filter(Boolean) : [];
-  const changes = Array.isArray(params.what_would_change)
-    ? params.what_would_change.map((x) => String(x || "").trim()).filter(Boolean)
+  const changes = Array.isArray(params.what_changes_this)
+    ? params.what_changes_this.map((x) => String(x || "").trim()).filter(Boolean)
     : [];
   const details = typeof params.details === "string" ? params.details.trim() : "";
 
   const blocks: string[] = [];
-  if (verdict_sentence) blocks.push(verdict_sentence);
+  if (headline) blocks.push(headline);
 
   const kpBlock = mdSection("Key points", [mdBullets(keyPoints)]);
   if (kpBlock) blocks.push(kpBlock);
@@ -728,6 +690,11 @@ async function buildFactsPack(userId: string) {
       })),
       notes: "Summaries are derived from active accounts and recurring_bills only.",
     },
+    // 🔒 Deterministic-only raw totals used for verdict selection
+    money_summary_raw: {
+      balances_by_currency_cents: balancesEntries.map(([currency, cents]) => ({ currency, cents })),
+      recurring_bills_totals_by_currency_cents: recurringEntries.map(([currency, cents]) => ({ currency, cents })),
+    },
   };
 }
 
@@ -744,46 +711,36 @@ NON-NEGOTIABLE RULES
 - No urgency. No pressure. No “you should”. No pretending anything was saved.
 - Answer-first. Save-later. Never imply persistence.
 
-CANONICAL OUTPUT (ONE SOURCE OF TRUTH)
-Return JSON ONLY with these fields:
-- verdict: one of
-  "CLEAR_YES" | "YES_NEEDS_PLANNING" | "NOT_YET" | "NEEDS_ATTENTION" | "NO" | "INSUFFICIENT_DATA" | "INFO"
-- verdict_sentence: one short sentence (front door). Must match verdict. Keep it calm.
-- key_points: 0–3 bullets max. Must be immediately clarifying and factual.
-- details: optional. Short paragraph(s) or a short list. Facts only.
-- what_would_change: 0–3 bullets max. What would change the conclusion (factual).
-- assumptions: 0–3 bullets max. Explicit assumptions based on visible data only.
+OUTPUT REQUIREMENT (FIELDS ONLY)
+Return structured fields only:
+- headline: one sentence, plain, specific, non-duplicative
+- key_points: 2–5 bullets max (short, factual)
+- details: optional, short paragraph(s) (factual)
+- what_changes_this: 2–4 bullets max (conditions that would change the conclusion)
+- assumptions: 2–4 bullets max (assumptions from the visible data)
 
-Also include:
-- action: open_bills | open_money | open_decisions | open_review | open_chapters | none
-- suggested_next: none | create_capture | open_thinking
-- capture_seed: only when suggested_next="create_capture", else null
-- answer: a memo-shaped readable string built from the structured fields (front door first)
+IMPORTANT
+- Do NOT format a full memo. Server will render the memo from your fields.
+- Do NOT choose tone/verdict. Server decides verdict deterministically.
+
+ROUTING
+- Choose action from: open_bills, open_money, open_decisions, open_review, open_chapters, none
+- suggested_next from: none, create_capture, open_thinking
+- capture_seed only when suggested_next="create_capture"
 
 OPEN DECISIONS
 - Use facts.open_decisions_preview for examples (count + up to 3 titles).
 - If asked about open decisions: give count first and include preview titles if present.
 - Never invent titles.
 
-GOALS
-- Use facts.goals only.
-- Give active count first; include up to 3 preview titles if present.
-- If primary exists, include current/target/remaining/percent when present.
-- No tactics. Fact-only.
-
-REVIEW
-- Use facts.review only.
-- Always count first. If items exist, list up to 3 with “scheduled for <date>”.
-- Never say “due”.
-
-CHAPTERS
-- Use facts.chapters only.
-- Always count first. List up to 3 titles; include “closed on <date>” if present.
+GOALS / REVIEW / CHAPTERS
+- Use facts.goals / facts.review / facts.chapters only.
+- Always count first; list up to 3 items/titles if present.
+- Never say “due”. Use “scheduled for”.
 
 AFFORD / SHOULD-WE
 - Never grant permission.
-- Provide bounded facts (balances + recurring commitments).
-- If you can't answer safely, verdict MUST be "INSUFFICIENT_DATA".
+- Provide bounded facts and state what's missing.
 - suggested_next should be "create_capture" when more context is needed.
 
 Return JSON only.
@@ -804,30 +761,28 @@ export async function POST(req: Request) {
     // 🔒 SAFETY INTERCEPT (V1 REQUIRED)
     const intercept = maybeCrisisIntercept(question);
     if (intercept) {
-      const verdict: Verdict = "NEEDS_ATTENTION";
-      const verdict_sentence = intercept.content.trim() || verdictSentence(verdict);
-
-      const payload = {
-        verdict,
-        verdict_sentence,
-        key_points: [] as string[],
+      const headline = intercept.content.trim();
+      const answer = buildMemoAnswer({
+        headline,
+        key_points: [],
         details: "",
-        what_would_change: [] as string[],
-        assumptions: [] as string[],
-        action: "none" as Action,
-        suggested_next: "none" as SuggestedNext,
-        capture_seed: null as any,
-        answer: buildMemoAnswer({
-          verdict_sentence,
-          key_points: [],
-          details: "",
-          what_would_change: [],
-          assumptions: [],
-        }),
-        kind: intercept.kind,
-      };
+        what_changes_this: [],
+        assumptions: [],
+      });
 
-      return NextResponse.json(payload);
+      return NextResponse.json({
+        answer,
+        tone: "attention",
+        headline,
+        key_points: [],
+        details: "",
+        what_changes_this: [],
+        assumptions: [],
+        action: "none",
+        suggested_next: "none",
+        capture_seed: null,
+        kind: intercept.kind,
+      });
     }
 
     const facts = await buildFactsPack(userId);
@@ -841,56 +796,45 @@ export async function POST(req: Request) {
 
       const balancesList =
         balancesArr.length > 0
-          ? balancesArr.map((b: any) => {
-              const cur = typeof b?.currency === "string" ? b.currency : "";
-              const bal = typeof b?.balance === "string" ? b.balance : "—";
-              return `${cur}: ${bal}`;
-            })
+          ? balancesArr.map((b: any) => `${String(b?.currency ?? "").toUpperCase()}: ${String(b?.balance ?? "—")}`)
           : ["(no account balances visible)"];
 
       const billsList =
         billsArr.length > 0
-          ? billsArr.map((b: any) => {
-              const cur = typeof b?.currency === "string" ? b.currency : "";
-              const tot = typeof b?.total === "string" ? b.total : "—";
-              return `${cur}: ${tot}`;
-            })
-          : ["(no recurring commitments visible)"];
+          ? billsArr.map((b: any) => `${String(b?.currency ?? "").toUpperCase()}: ${String(b?.total ?? "—")}`)
+          : ["(no recurring bills totals visible)"];
 
-      const verdict: Verdict = "INSUFFICIENT_DATA";
-      const verdict_sentence = verdictSentence(verdict);
+      // 👇 Single, non-duplicative headline (no “Here’s what I can see…” + another line)
+      const headline = "I can’t answer “yes” or “no” from Home alone — here’s what I can see, and what’s missing.";
 
       const key_points = [
-        "I can show your current balances and recurring commitments.",
-        "I can’t confirm affordability without timing + which account pays + the buffer you want to protect.",
+        "Available balances (by currency) are listed below.",
+        "Recurring commitments (by currency) are listed below.",
+        "To answer safely, we’d need timing + which account pays + your buffer.",
       ];
 
-      const details = [
-        "**Available balances**",
-        mdBullets(balancesList),
-        "",
-        "**Recurring commitments**",
-        mdBullets(billsList),
-      ].join("\n");
+      const details = ["**Available balances**", mdBullets(balancesList), "", "**Recurring commitments**", mdBullets(billsList)].join("\n");
 
-      const what_would_change = [
-        "If the spend is before or after income lands",
-        "If it must come from a specific account",
-        "If it’s one-off or ongoing",
-      ];
+      const what_changes_this = ["If the expense is one-off vs recurring", "If the timing is before/after pay day", "If it must come from a specific account"];
+      const assumptions = ["Balances reflect active accounts", "Commitments reflect active recurring bills"];
 
-      const assumptions = ["Balances reflect your active accounts", "Commitments reflect active recurring bills"];
+      const answer = buildMemoAnswer({ headline, key_points, details, what_changes_this, assumptions });
 
-      const answer = buildMemoAnswer({ verdict_sentence, key_points, details, what_would_change, assumptions });
+      const tone: Verdict = decideVerdict({
+        question,
+        suggested_next: "create_capture",
+        action: "open_money",
+        facts: facts as any,
+      });
 
       return NextResponse.json({
-        verdict,
-        verdict_sentence,
+        answer,
+        tone,
+        headline,
         key_points,
         details,
-        what_would_change,
+        what_changes_this,
         assumptions,
-        answer,
         action: "open_money",
         suggested_next: "create_capture",
         capture_seed: {
@@ -900,7 +844,7 @@ export async function POST(req: Request) {
             "Affordability question — no permission granted",
             "Known: current balances (accounts)",
             "Known: recurring commitments (recurring bills totals)",
-            "Unknown: timing, one-off vs ongoing, paying account, required buffer",
+            "Unknown: timing, one-off vs recurring, which account pays, required buffer",
           ],
         },
       });
@@ -912,29 +856,21 @@ export async function POST(req: Request) {
       const count = typeof review?.count === "number" ? review.count : 0;
       const upcoming = Array.isArray(review?.upcoming) ? review.upcoming : [];
 
-      const verdict: Verdict = "INFO";
-      const verdict_sentence = verdictSentence(verdict);
-
       if (count <= 0 || upcoming.length === 0) {
-        const key_points = ["There are no items scheduled for review (from what I can see)."];
+        const headline = "There are no items scheduled for review (from what I can see).";
         const assumptions = ["Review items come from decisions with review_at set and reviewed_at still empty"];
+        const answer = buildMemoAnswer({ headline, key_points: [], details: "", what_changes_this: [], assumptions });
 
-        const answer = buildMemoAnswer({
-          verdict_sentence,
-          key_points,
-          details: "",
-          what_would_change: [],
-          assumptions,
-        });
+        const tone: HomeTone = decideHomeTone({ question, suggested_next: "none", action: "open_review", facts: facts as any });
 
         return NextResponse.json({
-          verdict,
-          verdict_sentence,
-          key_points,
-          details: "",
-          what_would_change: [],
-          assumptions,
           answer,
+          tone,
+          headline,
+          key_points: [],
+          details: "",
+          what_changes_this: [],
+          assumptions,
           action: "open_review",
           suggested_next: "none",
           capture_seed: null,
@@ -948,19 +884,20 @@ export async function POST(req: Request) {
         return `${title}${when ? ` — scheduled for ${when}` : ""}`;
       });
 
-      const key_points = [`There are ${count} items scheduled for review.`, ...items].slice(0, 3);
-
+      const headline = `There are ${count} items scheduled for review.`;
       const assumptions = ["Review items come from decisions with review_at set and reviewed_at still empty"];
-      const answer = buildMemoAnswer({ verdict_sentence, key_points, details: "", what_would_change: [], assumptions });
+      const answer = buildMemoAnswer({ headline, key_points: items, details: "", what_changes_this: [], assumptions });
+
+      const tone: Verdict = decideVerdict({ question, suggested_next: "none", action: "open_review", facts: facts as any });
 
       return NextResponse.json({
-        verdict,
-        verdict_sentence,
-        key_points,
-        details: "",
-        what_would_change: [],
-        assumptions,
         answer,
+        tone,
+        headline,
+        key_points: items,
+        details: "",
+        what_changes_this: [],
+        assumptions,
         action: "open_review",
         suggested_next: "none",
         capture_seed: null,
@@ -973,22 +910,21 @@ export async function POST(req: Request) {
       const count = typeof chapters?.count === "number" ? chapters.count : 0;
       const recent = Array.isArray(chapters?.recent) ? chapters.recent : [];
 
-      const verdict: Verdict = "INFO";
-      const verdict_sentence = verdictSentence(verdict);
-
       if (count <= 0 || recent.length === 0) {
-        const key_points = ["There are no chapters yet (from what I can see)."];
+        const headline = "There are no chapters yet (from what I can see).";
         const assumptions = ["Chapters are decisions marked as chapter or with chaptered_at set"];
-        const answer = buildMemoAnswer({ verdict_sentence, key_points, details: "", what_would_change: [], assumptions });
+        const answer = buildMemoAnswer({ headline, key_points: [], details: "", what_changes_this: [], assumptions });
+
+        const tone: Verdict = decideVerdict({ question, suggested_next: "none", action: "open_chapters", facts: facts as any });
 
         return NextResponse.json({
-          verdict,
-          verdict_sentence,
-          key_points,
-          details: "",
-          what_would_change: [],
-          assumptions,
           answer,
+          tone,
+          headline,
+          key_points: [],
+          details: "",
+          what_changes_this: [],
+          assumptions,
           action: "open_chapters",
           suggested_next: "none",
           capture_seed: null,
@@ -1002,19 +938,20 @@ export async function POST(req: Request) {
         return `${title}${when ? ` — closed on ${when}` : ""}`;
       });
 
-      const key_points = [`There are ${count} chapters.`, ...items].slice(0, 3);
-
+      const headline = `There are ${count} chapters.`;
       const assumptions = ["Chapters are decisions marked as chapter or with chaptered_at set"];
-      const answer = buildMemoAnswer({ verdict_sentence, key_points, details: "", what_would_change: [], assumptions });
+      const answer = buildMemoAnswer({ headline, key_points: items, details: "", what_changes_this: [], assumptions });
+
+      const tone: Verdict = decideVerdict({ question, suggested_next: "none", action: "open_chapters", facts: facts as any });
 
       return NextResponse.json({
-        verdict,
-        verdict_sentence,
-        key_points,
-        details: "",
-        what_would_change: [],
-        assumptions,
         answer,
+        tone,
+        headline,
+        key_points: items,
+        details: "",
+        what_changes_this: [],
+        assumptions,
         action: "open_chapters",
         suggested_next: "none",
         capture_seed: null,
@@ -1029,22 +966,21 @@ export async function POST(req: Request) {
       const primary = goals?.primary ?? null;
       const active = Array.isArray(goals?.active) ? goals.active : [];
 
-      const verdict: Verdict = "INFO";
-      const verdict_sentence = verdictSentence(verdict);
-
       if (countActive <= 0) {
-        const key_points = ["There are no active goals (from what I can see)."];
+        const headline = "There are no active goals (from what I can see).";
         const assumptions = ["Goals come from money_goals"];
-        const answer = buildMemoAnswer({ verdict_sentence, key_points, details: "", what_would_change: [], assumptions });
+        const answer = buildMemoAnswer({ headline, key_points: [], details: "", what_changes_this: [], assumptions });
+
+        const tone: Verdict = decideVerdict({ question, suggested_next: "none", action: "open_money", facts: facts as any });
 
         return NextResponse.json({
-          verdict,
-          verdict_sentence,
-          key_points,
-          details: "",
-          what_would_change: [],
-          assumptions,
           answer,
+          tone,
+          headline,
+          key_points: [],
+          details: "",
+          what_changes_this: [],
+          assumptions,
           action: "open_money",
           suggested_next: "none",
           capture_seed: null,
@@ -1061,21 +997,21 @@ export async function POST(req: Request) {
         })();
 
         if (!buffer) {
-          const key_points = [
-            `I can see ${countActive} active goals, but none is explicitly named like “buffer” / “emergency fund”.`,
-            "If you tell me the goal’s exact name, I can report its progress precisely.",
-          ];
+          const headline = "I can see your goals, but I can’t see one explicitly named like “buffer” / “emergency fund”.";
+          const key_points = ["If you tell me the goal’s exact name, I can report its progress exactly."];
           const assumptions = ["Goals come from money_goals"];
-          const answer = buildMemoAnswer({ verdict_sentence, key_points, details: "", what_would_change: [], assumptions });
+          const answer = buildMemoAnswer({ headline, key_points, details: "", what_changes_this: [], assumptions });
+
+          const tone: Verdict = decideVerdict({ question, suggested_next: "none", action: "open_money", facts: facts as any });
 
           return NextResponse.json({
-            verdict,
-            verdict_sentence,
+            answer,
+            tone,
+            headline,
             key_points,
             details: "",
-            what_would_change: [],
+            what_changes_this: [],
             assumptions,
-            answer,
             action: "open_money",
             suggested_next: "none",
             capture_seed: null,
@@ -1089,20 +1025,21 @@ export async function POST(req: Request) {
         const p = typeof buffer.percent === "number" ? buffer.percent : null;
 
         if (!tgt) {
-          const verdict2: Verdict = "INSUFFICIENT_DATA";
-          const vs2 = verdictSentence(verdict2);
-          const key_points = [`Your “${title}” goal is currently at ${cur ?? "—"}.`, "I can’t calculate progress because I can’t see a target amount for it."];
+          const headline = `Your “${title}” goal is currently at ${cur ?? "—"}.`;
+          const key_points = ["I can’t calculate “how close” because I can’t see a target amount for it."];
           const assumptions = ["Goal target must be set to calculate remaining and percent"];
-          const answer = buildMemoAnswer({ verdict_sentence: vs2, key_points, details: "", what_would_change: [], assumptions });
+          const answer = buildMemoAnswer({ headline, key_points, details: "", what_changes_this: [], assumptions });
+
+          const tone: Verdict = decideVerdict({ question, suggested_next: "none", action: "open_money", facts: facts as any });
 
           return NextResponse.json({
-            verdict: verdict2,
-            verdict_sentence: vs2,
+            answer,
+            tone,
+            headline,
             key_points,
             details: "",
-            what_would_change: [],
+            what_changes_this: [],
             assumptions,
-            answer,
             action: "open_money",
             suggested_next: "none",
             capture_seed: null,
@@ -1122,23 +1059,21 @@ export async function POST(req: Request) {
                 .join(", ") + (linked.length > 3 ? ` +${linked.length - 3} more` : "")
             : "";
 
-        const key_points = [
-          `Buffer goal: ${title}`,
-          `${cur ?? "—"} / ${tgt}${p != null ? ` (${p}%)` : ""}${rem ? ` — remaining ${rem}` : ""}.`,
-          linked.length > 0 ? `Funds visible in: ${fundsVisible}.` : "I can’t see which account funds this goal yet.",
-        ];
-
+        const headline = `Buffer goal (“${title}”): ${cur ?? "—"} / ${tgt}${p != null ? ` (${p}%)` : ""}.`;
+        const key_points = [rem ? `Remaining: ${rem}.` : "", linked.length > 0 ? `Funds visible in: ${fundsVisible}.` : "I can’t see which account funds this goal yet."].filter(Boolean);
         const assumptions = ["Progress is based on the goal’s current and target values in money_goals"];
-        const answer = buildMemoAnswer({ verdict_sentence, key_points, details: "", what_would_change: [], assumptions });
+        const answer = buildMemoAnswer({ headline, key_points, details: "", what_changes_this: [], assumptions });
+
+        const tone: Verdict = decideVerdict({ question, suggested_next: "none", action: "open_money", facts: facts as any });
 
         return NextResponse.json({
-          verdict,
-          verdict_sentence,
-          key_points: key_points.slice(0, 3),
-          details: "",
-          what_would_change: [],
-          assumptions,
           answer,
+          tone,
+          headline,
+          key_points,
+          details: "",
+          what_changes_this: [],
+          assumptions,
           action: "open_money",
           suggested_next: "none",
           capture_seed: null,
@@ -1147,7 +1082,6 @@ export async function POST(req: Request) {
 
       // General goals summary
       const key_points: string[] = [];
-      key_points.push(`There are ${countActive} active goals.`);
 
       if (primary && typeof primary?.title === "string" && primary.title.trim()) {
         const cur = typeof primary?.current === "string" ? primary.current : null;
@@ -1155,13 +1089,13 @@ export async function POST(req: Request) {
         const p = typeof primary?.percent === "number" ? primary.percent : null;
         const rem = typeof primary?.remaining === "string" ? primary.remaining : null;
 
-        const bits: string[] = [];
-        if (cur) bits.push(cur);
-        if (tgt) bits.push(`of ${tgt}`);
-        if (p != null) bits.push(`${p}%`);
-        if (rem) bits.push(`remaining ${rem}`);
+        const progressBits: string[] = [];
+        if (cur) progressBits.push(cur);
+        if (tgt) progressBits.push(`of ${tgt}`);
+        if (p != null) progressBits.push(`${p}%`);
+        if (rem) progressBits.push(`remaining ${rem}`);
 
-        key_points.push(`Primary goal: ${primary.title.trim()}${bits.length ? ` (${bits.join(", ")})` : ""}.`);
+        key_points.push(`Primary goal: ${primary.title.trim()}${progressBits.length ? ` (${progressBits.join(", ")})` : ""}.`);
       }
 
       const titles = previewTitles
@@ -1171,24 +1105,27 @@ export async function POST(req: Request) {
 
       if (titles.length) key_points.push(`Including: ${titles.join(", ")}.`);
 
+      const headline = `There are ${countActive} active goals.`;
       const assumptions = ["Goals come from money_goals"];
-      const answer = buildMemoAnswer({ verdict_sentence, key_points: key_points.slice(0, 3), details: "", what_would_change: [], assumptions });
+      const answer = buildMemoAnswer({ headline, key_points, details: "", what_changes_this: [], assumptions });
+
+      const tone: Verdict = decideVerdict({ question, suggested_next: "none", action: "open_money", facts: facts as any });
 
       return NextResponse.json({
-        verdict,
-        verdict_sentence,
-        key_points: key_points.slice(0, 3),
-        details: "",
-        what_would_change: [],
-        assumptions,
         answer,
+        tone,
+        headline,
+        key_points,
+        details: "",
+        what_changes_this: [],
+        assumptions,
         action: "open_money",
         suggested_next: "none",
         capture_seed: null,
       });
     }
 
-    // ---- AI path (structured verdict output) ----
+    // ---- AI path (FIELDS ONLY; server builds memo + verdict) ----
     const resp = await openai.responses.create({
       model: "gpt-4o-mini",
       input: [
@@ -1198,20 +1135,16 @@ export async function POST(req: Request) {
       text: {
         format: {
           type: "json_schema",
-          name: "life_cfo_home_ask",
+          name: "life_cfo_home_ask_fields",
           strict: true,
           schema: {
             type: "object",
             additionalProperties: false,
             properties: {
-              verdict: {
-                type: "string",
-                enum: ["CLEAR_YES", "YES_NEEDS_PLANNING", "NOT_YET", "NEEDS_ATTENTION", "NO", "INSUFFICIENT_DATA", "INFO"],
-              },
-              verdict_sentence: { type: "string" },
+              headline: { type: "string" },
               key_points: { type: "array", items: { type: "string" } },
               details: { type: "string" },
-              what_would_change: { type: "array", items: { type: "string" } },
+              what_changes_this: { type: "array", items: { type: "string" } },
               assumptions: { type: "array", items: { type: "string" } },
 
               action: { type: "string", enum: ["open_bills", "open_money", "open_decisions", "open_review", "open_chapters", "none"] },
@@ -1231,21 +1164,8 @@ export async function POST(req: Request) {
                   },
                 ],
               },
-
-              answer: { type: "string" },
             },
-            required: [
-              "verdict",
-              "verdict_sentence",
-              "key_points",
-              "details",
-              "what_would_change",
-              "assumptions",
-              "action",
-              "suggested_next",
-              "capture_seed",
-              "answer",
-            ],
+            required: ["headline", "key_points", "details", "what_changes_this", "assumptions", "action", "suggested_next", "capture_seed"],
           },
         },
       },
@@ -1257,21 +1177,21 @@ export async function POST(req: Request) {
     try {
       parsed = JSON.parse(raw);
     } catch {
-      const fallbackVerdict: Verdict = "INSUFFICIENT_DATA";
-      const vs = verdictSentence(fallbackVerdict);
+      const headline = "I couldn’t format that safely.";
+      const answer = buildMemoAnswer({ headline, key_points: [], details: "", what_changes_this: [], assumptions: [] });
 
       return NextResponse.json(
         {
-          verdict: fallbackVerdict,
-          verdict_sentence: vs,
-          key_points: ["I couldn’t format that safely. Try again."],
+          answer,
+          tone: "tight",
+          headline,
+          key_points: [],
           details: "",
-          what_would_change: [],
+          what_changes_this: [],
           assumptions: [],
           action: "none",
           suggested_next: "none",
           capture_seed: null,
-          answer: buildMemoAnswer({ verdict_sentence: vs, key_points: ["I couldn’t format that safely. Try again."], details: "", what_would_change: [], assumptions: [] }),
         },
         { status: 502 }
       );
@@ -1279,14 +1199,10 @@ export async function POST(req: Request) {
 
     const obj = parsed as Record<string, unknown>;
 
-    const verdict: Verdict = isVerdict(obj.verdict) ? (obj.verdict as Verdict) : "INFO";
-    const verdict_sentence = String(obj.verdict_sentence ?? "").trim().slice(0, 240) || verdictSentence(verdict);
-
-    const key_points = Array.isArray(obj.key_points) ? (obj.key_points as unknown[]).map((x) => String(x)).map((s) => s.trim()).filter(Boolean).slice(0, 3) : [];
-    const what_would_change = Array.isArray(obj.what_would_change)
-      ? (obj.what_would_change as unknown[]).map((x) => String(x)).map((s) => s.trim()).filter(Boolean).slice(0, 3)
-      : [];
-    const assumptions = Array.isArray(obj.assumptions) ? (obj.assumptions as unknown[]).map((x) => String(x)).map((s) => s.trim()).filter(Boolean).slice(0, 3) : [];
+    const headline = String(obj.headline ?? "").trim().slice(0, 300);
+    const key_points = Array.isArray(obj.key_points) ? (obj.key_points as unknown[]).map((x) => String(x)).slice(0, 8) : [];
+    const what_changes_this = Array.isArray(obj.what_changes_this) ? (obj.what_changes_this as unknown[]).map((x) => String(x)).slice(0, 8) : [];
+    const assumptions = Array.isArray(obj.assumptions) ? (obj.assumptions as unknown[]).map((x) => String(x)).slice(0, 8) : [];
     const details = String(obj.details ?? "").trim().slice(0, 6000);
 
     const action: Action = isAction(obj.action) ? (obj.action as Action) : "none";
@@ -1303,26 +1219,31 @@ export async function POST(req: Request) {
           }
         : null;
 
-    // Prefer model "answer", but enforce canonical memo build if empty
-    const answerRaw = String(obj.answer ?? "").trim().slice(0, 12000);
-    const answer = answerRaw
-      ? answerRaw
-      : buildMemoAnswer({
-          verdict_sentence,
-          key_points,
-          details,
-          what_would_change,
-          assumptions,
-        });
-
-    return NextResponse.json({
-      verdict,
-      verdict_sentence,
+    // ✅ Canonical memo formatting (server owns presentation)
+    const answer = buildMemoAnswer({
+      headline,
       key_points,
       details,
-      what_would_change,
+      what_changes_this,
       assumptions,
+    });
+
+    // ✅ Canonical verdict selection (server owns verdict)
+    const tone: Verdict = decideVerdict({
+      question,
+      suggested_next,
+      action,
+      facts: facts as any,
+    });
+
+    return NextResponse.json({
       answer,
+      tone,
+      headline,
+      key_points,
+      details,
+      what_changes_this,
+      assumptions,
       action,
       suggested_next,
       capture_seed,
