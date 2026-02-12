@@ -257,6 +257,7 @@ export default function ThinkingClient({
   const [newText, setNewText] = useState<string>("");
   const [newDraftId, setNewDraftId] = useState<string | null>(null);
   const [creatingNew, setCreatingNew] = useState<boolean>(false);
+  const [composerChatForId, setComposerChatForId] = useState<string | null>(null);
 
   const scheduleReload = () => {
     if (reloadTimerRef.current) window.clearTimeout(reloadTimerRef.current);
@@ -911,6 +912,7 @@ export default function ThinkingClient({
     setNewText("");
     setNewDraftId(null);
     setCreatingNew(false);
+    setComposerChatForId(null);
     try {
       composerInputRef.current?.focus?.({ preventScroll: true } as any);
     } catch {
@@ -975,13 +977,22 @@ export default function ThinkingClient({
                   />
 
                   <div className="flex flex-wrap items-center gap-2">
-                    <PrimaryActionButton
-                      disabled={creatingNew}
-                      onClick={() => void createNewDraftIfNeeded({ openChat: true, focusCard: true })}
-                      title="Create a draft and talk it through"
-                    >
-                      Talk this through
-                    </PrimaryActionButton>
+                      <PrimaryActionButton
+                        disabled={creatingNew}
+                        onClick={async () => {
+                          const id = await createNewDraftIfNeeded({ openChat: false, focusCard: true });
+                          if (!id) return;
+                          setComposerChatForId(id);
+                          setChatForId(id); // optional: keeps card chat state consistent
+                          window.setTimeout(() => {
+                            const el = document.getElementById("composer-chat");
+                            el?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+                          }, 60);
+                        }}
+                        title="Create a draft and talk it through"
+                      >
+                        Talk this through
+                      </PrimaryActionButton>
 
                     <Chip
                       onClick={() => void createNewDraftIfNeeded({ openChat: false, focusCard: true })}
@@ -1024,6 +1035,19 @@ export default function ThinkingClient({
                   ) : (
                     <div className="text-xs text-zinc-500">Optional: you can add files after creating the draft.</div>
                   )}
+                  {userId && composerChatForId ? (
+                      <div id="composer-chat" className="mt-3 rounded-xl border border-zinc-200 bg-white p-3">
+                        <ConversationPanel
+                          decisionId={composerChatForId}
+                          decisionTitle={drafts.find((x) => x.id === composerChatForId)?.title ?? "New decision"}
+                          frame={{
+                            decision_statement: drafts.find((x) => x.id === composerChatForId)?.title ?? "New decision",
+                          }}
+                          onClose={() => setComposerChatForId(null)}
+                          onSummarySaved={() => void reloadSummaries(composerChatForId)}
+                        />
+                      </div>
+                    ) : null}
                 </div>
               </CardContent>
             </Card>
