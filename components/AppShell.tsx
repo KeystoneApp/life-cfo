@@ -59,7 +59,7 @@ export function AppShell({ children }: AppShellProps) {
 
   return (
     <div className="min-h-dvh bg-[#faf7f2]">
-      <div className="sticky top-0 z-40 border-b border-zinc-200 bg-white/90 backdrop-blur">
+      <div className="sticky top-0 z-40 border-b border-zinc-200 bg-white">
         <div className="mx-auto flex w-full max-w-[1100px] items-center justify-between gap-3 px-4 py-3">
           {/* Brand */}
           <div className="flex items-center gap-3">
@@ -87,7 +87,7 @@ export function AppShell({ children }: AppShellProps) {
             </Chip>
 
             {menuOpen ? (
-              <div className="absolute right-0 mt-2 w-[240px] overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm">
+  <div className="absolute right-0 top-full z-50 mt-2 w-[240px] overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-lg">
                 <div className="px-3 py-2 text-xs font-semibold text-zinc-700">Menu</div>
 
                 <div className="grid">
