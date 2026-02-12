@@ -15,8 +15,7 @@ import { TilesRow } from "@/components/TilesRow";
 // ✅ Notes (quiet)
 import { DecisionNotes } from "@/components/decision/DecisionNotes";
 
-// (Keeping this import even if not used by this file directly in some branches)
-// Your current file had it; safe to keep.
+// ✅ Attachments
 import { AttachmentsBlock } from "@/components/AttachmentsBlock";
 
 export const dynamic = "force-dynamic";
@@ -179,6 +178,13 @@ function PrimaryActionButton(props: {
   );
 }
 
+function titleFromStatement(statement: string) {
+  const s = (statement || "").trim().replace(/\s+/g, " ");
+  if (!s) return "Untitled";
+  // Keep titles readable without truncating too aggressively
+  return s.length > 90 ? `${s.slice(0, 87)}…` : s;
+}
+
 export default function ThinkingClient({
   surface = "thinking",
 }: {
@@ -244,6 +250,17 @@ export default function ThinkingClient({
 
   // ✅ Capture-style delete confirm (inline, stronger)
   const [confirmDeleteForId, setConfirmDeleteForId] = useState<string | null>(null);
+
+  // ✅ Original capture collapsible
+  const [showOriginalById, setShowOriginalById] = useState<Record<string, boolean>>({});
+
+  // ✅ NEW DECISION (Life CFO) composer state
+  const composerRef = useRef<HTMLDivElement | null>(null);
+  const composerInputRef = useRef<HTMLTextAreaElement | null>(null);
+
+  const [newText, setNewText] = useState<string>("");
+  const [newDraftId, setNewDraftId] = useState<string | null>(null);
+  const [creatingNew, setCreatingNew] = useState<boolean>(false);
 
   const scheduleReload = () => {
     if (reloadTimerRef.current) window.clearTimeout(reloadTimerRef.current);
@@ -760,6 +777,9 @@ export default function ThinkingClient({
       if (prev[d.id]) return prev;
       return { ...prev, [d.id]: { title: d.title ?? "", captured: parts.captured ?? "" } };
     });
+
+    // default: keep original collapsed unless user opens it
+    setShowOriginalById((prev) => (prev[d.id] !== undefined ? prev : { ...prev, [d.id]: false }));
   };
 
   const cancelEditDraft = (d: Decision) => {
@@ -796,6 +816,121 @@ export default function ThinkingClient({
     showToast({ message: "Saved." }, 1800);
   };
 
+  // ✅ Life CFO: create a new draft decision from the top composer
+  const createNewDraftIfNeeded = async (opts?: { openChat?: boolean; focusCard?: boolean }) => {
+    if (!userId) {
+      showToast({ message: "Not signed in." }, 2500);
+      return null;
+    }
+
+    // If we already created one for the composer, reuse it
+    if (newDraftId) {
+      if (opts?.openChat) setChatForId(newDraftId);
+      if (opts?.focusCard) setOpenId(newDraftId);
+      return newDraftId;
+    }
+
+    const statement = (newText || "").trim();
+    if (!statement) {
+      showToast({ message: "Write the decision in one sentence first." }, 2200);
+      try {
+        composerInputRef.current?.focus?.();
+      } catch {}
+      return null;
+    }
+
+    if (creatingNew) return null;
+    setCreatingNew(true);
+
+    try {
+      const title = titleFromStatement(statement);
+      const context = composeThinkingContext(statement, "");
+
+      const { data, error } = await supabase
+        .from("decisions")
+        .insert({
+          user_id: userId,
+          title,
+          context,
+          status: "draft",
+          origin: "decisions",
+          decided_at: null,
+        })
+        .select("id,user_id,title,context,status,created_at,decided_at,review_at,origin,framed_at,attachments")
+        .single();
+
+      if (error || !data?.id) {
+        showToast({ message: `Couldn’t create: ${error?.message ?? "Unknown error"}` }, 3500);
+        return null;
+      }
+
+      const row: any = data;
+      const created: Decision = {
+        id: row.id,
+        user_id: row.user_id,
+        title: row.title ?? title,
+        context: row.context ?? context,
+        status: row.status ?? "draft",
+        created_at: row.created_at ?? new Date().toISOString(),
+        decided_at: row.decided_at ?? null,
+        review_at: row.review_at ?? null,
+        origin: row.origin ?? "decisions",
+        framed_at: row.framed_at ?? null,
+        attachments: normalizeAttachments(row.attachments),
+      };
+
+      // Put at top, open it, highlight briefly
+      setDrafts((prev) => [created, ...prev]);
+      setOpenId(created.id);
+      setHighlightId(created.id);
+
+      setOriginalCaptureById((prev) => ({
+        ...prev,
+        [created.id]: { title: created.title ?? "", captured: statement },
+      }));
+      setShowOriginalById((prev) => ({ ...prev, [created.id]: false }));
+
+      // Let the composer now “own” this draft for attachments
+      setNewDraftId(created.id);
+
+      // Clear input text (so it feels like it moved into the list)
+      setNewText("");
+
+      window.setTimeout(() => {
+        const el = cardRefs.current[created.id];
+        el?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+      }, 80);
+
+      if (opts?.openChat) setChatForId(created.id);
+
+      // remove highlight after a beat
+      window.setTimeout(() => setHighlightId(null), 1600);
+
+      showToast({ message: "Draft created." }, 1600);
+      return created.id;
+    } catch (e: any) {
+      showToast({ message: e?.message ?? "Couldn’t create draft." }, 3500);
+      return null;
+    } finally {
+      setCreatingNew(false);
+    }
+  };
+
+  const resetComposer = () => {
+    setNewText("");
+    setNewDraftId(null);
+    setCreatingNew(false);
+    try {
+      composerInputRef.current?.focus?.({ preventScroll: true } as any);
+    } catch {
+      try {
+        composerInputRef.current?.focus?.();
+      } catch {}
+    }
+  };
+
+  const assistedScope = surface === "decisions" ? "decisions" : "thinking";
+
   return (
     <Page title={pageTitle} subtitle={pageSubtitle} right={null}>
       <div className="mx-auto w-full max-w-[760px] space-y-6">
@@ -813,9 +948,27 @@ export default function ThinkingClient({
               </Chip>
             </div>
 
-            <Chip onClick={() => router.push("/capture")} title="Capture something new">
-              Capture <span className="ml-1 opacity-70">›</span>
-            </Chip>
+            <div className="flex items-center gap-2">
+              <Chip
+                onClick={() => {
+                  composerRef.current?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+                  window.setTimeout(() => {
+                    try {
+                      (composerInputRef.current as any)?.focus?.({ preventScroll: true });
+                    } catch {
+                      composerInputRef.current?.focus();
+                    }
+                  }, 80);
+                }}
+                title="Start a new decision"
+              >
+                New decision
+              </Chip>
+
+              <Chip onClick={() => router.push("/capture")} title="Capture something new">
+                Capture <span className="ml-1 opacity-70">›</span>
+              </Chip>
+            </div>
           </div>
         ) : (
           <div className="flex items-center justify-end gap-3">
@@ -831,7 +984,92 @@ export default function ThinkingClient({
           </div>
         )}
 
-        <AssistedSearch scope="thinking" placeholder="Search drafts and decisions…" />
+        {/* ✅ Life CFO top composer (Decisions only) */}
+        {surface === "decisions" ? (
+          <div ref={composerRef}>
+            <Card className="border-zinc-200 bg-white">
+              <CardContent>
+                <div className="space-y-3">
+                  <div className="space-y-1">
+                    <div className="text-sm font-semibold text-zinc-900">New decision</div>
+                    <div className="text-sm text-zinc-600">Write it in one sentence. You can refine it after.</div>
+                  </div>
+
+                  <textarea
+                    ref={composerInputRef}
+                    value={newText}
+                    onChange={(e) => setNewText(e.target.value)}
+                    rows={3}
+                    placeholder="What are you deciding?"
+                    className="w-full resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[15px] leading-relaxed text-zinc-900 outline-none focus:ring-2 focus:ring-zinc-200"
+                  />
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <PrimaryActionButton
+                      disabled={creatingNew}
+                      onClick={() => void createNewDraftIfNeeded({ openChat: true, focusCard: true })}
+                      title="Create a draft and talk it through"
+                    >
+                      Talk this through
+                    </PrimaryActionButton>
+
+                    <Chip
+                      onClick={() => void createNewDraftIfNeeded({ openChat: false, focusCard: true })}
+                      title="Create a draft (no chat yet)"
+                    >
+                      Save draft
+                    </Chip>
+
+                    <Chip
+                      onClick={async () => {
+                        const id = await createNewDraftIfNeeded({ openChat: false, focusCard: true });
+                        if (!id) return;
+                        // Small nudge: scroll to the attachments block in the composer
+                        window.setTimeout(() => {
+                          const el = document.getElementById(`new-draft-attachments-${id}`);
+                          el?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+                        }, 120);
+                      }}
+                      title="Add files (creates the draft first if needed)"
+                    >
+                      Add files
+                    </Chip>
+
+                    {newDraftId ? (
+                      <Chip onClick={resetComposer} title="Start a fresh new decision">
+                        Start another
+                      </Chip>
+                    ) : null}
+
+                    {creatingNew ? <div className="text-xs text-zinc-500">Creating…</div> : null}
+                  </div>
+
+                  {userId && newDraftId ? (
+                    <div
+                      id={`new-draft-attachments-${newDraftId}`}
+                      className="rounded-xl border border-zinc-200 bg-white p-3"
+                    >
+                      <AttachmentsBlock
+                        userId={userId}
+                        decisionId={newDraftId}
+                        title="Files"
+                        bucket="captures"
+                        initial={[]}
+                      />
+                      <div className="mt-2 text-xs text-zinc-500">
+                        These files are attached to the new draft you just created.
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-xs text-zinc-500">Optional: you can add files after creating the draft.</div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        ) : null}
+
+        <AssistedSearch scope={assistedScope as any} placeholder="Search drafts and decisions…" />
 
         <div className="space-y-4">
           <TilesRow title="Filter by area" items={domains} activeId={activeDomainId} onSelect={(id) => setActiveDomainId(id)} />
@@ -885,15 +1123,15 @@ export default function ThinkingClient({
               const revisitMode = revisitModeById[d.id] ?? "";
               const customDate = customDateById[d.id] ?? "";
 
-              const originLabel = d.origin === "capture" ? "Sent from Capture." : "";
-
+              // ✅ remove "Sent from Capture." (too system-y / noisy)
               const parts = splitThinkingContext(d.context);
               const originalSnapshot = originalCaptureById[d.id] ?? { title: d.title ?? "", captured: parts.captured ?? "" };
               const isEditingDraft = !!isEditingDraftById[d.id];
-              const isConfirmingDelete = confirmDeleteForId === d.id;
 
               const allAtt = normalizeAttachments(d.attachments) as AttachmentMeta[];
               const attachmentsTitle = allAtt.length > 0 ? `Attachments (${allAtt.length})` : "Attachments";
+
+              const showOriginal = showOriginalById[d.id] ?? false;
 
               return (
                 <div
@@ -921,6 +1159,7 @@ export default function ThinkingClient({
                               if (prev[d.id]) return prev;
                               return { ...prev, [d.id]: { title: d.title ?? "", captured: parts.captured ?? "" } };
                             });
+                            setShowOriginalById((prev) => (prev[d.id] !== undefined ? prev : { ...prev, [d.id]: false }));
                           }
                         }}
                         className="w-full text-left"
@@ -955,13 +1194,25 @@ export default function ThinkingClient({
 
                       {isOpen ? (
                         <div className="mt-4 space-y-4">
-                          {originLabel ? <div className="mt-1 text-xs text-zinc-500">{originLabel}</div> : null}
-
+                          {/* ✅ Original capture collapsible */}
                           <div className="rounded-xl border border-zinc-200 bg-white p-4 space-y-2">
-                            <div className="text-sm font-semibold text-zinc-900">Original capture</div>
-                            <div className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-700">
-                              {(originalSnapshot.captured || originalSnapshot.title || "").trim() || "—"}
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="text-sm font-semibold text-zinc-900">Original</div>
+                              <Chip
+                                onClick={() => setShowOriginalById((prev) => ({ ...prev, [d.id]: !(prev[d.id] ?? false) }))}
+                                title={showOriginal ? "Hide original" : "Show original"}
+                              >
+                                {showOriginal ? "Hide" : "Show"}
+                              </Chip>
                             </div>
+
+                            {showOriginal ? (
+                              <div className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-700">
+                                {(originalSnapshot.captured || originalSnapshot.title || "").trim() || "—"}
+                              </div>
+                            ) : (
+                              <div className="text-sm text-zinc-600">Hidden to keep this page calm.</div>
+                            )}
                           </div>
 
                           <div className="rounded-xl border border-zinc-200 bg-white p-4 space-y-3">
@@ -1024,6 +1275,7 @@ export default function ThinkingClient({
 
                           <DecisionNotes decisionId={d.id} kind="thinking" />
 
+                          {/* Filed under card (no standalone 'File under' button) */}
                           {showFiledUnderCard ? (
                             <div className="rounded-xl border border-zinc-200 bg-white p-3 space-y-2">
                               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1087,23 +1339,11 @@ export default function ThinkingClient({
                                 </div>
                               )}
                             </div>
-                          ) : hasAnyLabelOptions ? (
-                            <div className="flex items-center gap-2">
-                              <Chip onClick={() => setLabelsEditForId(d.id)} title="Optional: file under an area or group">
-                                File under
-                              </Chip>
-                            </div>
                           ) : null}
 
                           <div className="rounded-xl border border-zinc-200 bg-white p-3 space-y-2">
                             {userId ? (
-                              <AttachmentsBlock
-                                userId={userId}
-                                decisionId={d.id}
-                                title={attachmentsTitle}
-                                bucket="captures"
-                                initial={allAtt}
-                              />
+                              <AttachmentsBlock userId={userId} decisionId={d.id} title={attachmentsTitle} bucket="captures" initial={allAtt} />
                             ) : (
                               <div className="text-sm text-zinc-600">Attachments unavailable.</div>
                             )}
