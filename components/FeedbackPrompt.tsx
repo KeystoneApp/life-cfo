@@ -48,7 +48,7 @@ function questionForPath(path: string) {
     "/revisit": "Did Review show the right amount—no more, no less?",
     "/chapters": "Did this page help you feel finished?",
     "/family": "Does this capture who Keystone should keep in mind?",
-    "/how-keystone-works": "Do you understand what Keystone is for now?",
+    "/how-life-cfo-works": "Do you understand what Keystone is for now?",
     "/planned-upgrades": "Did this set expectations clearly?",
     "/settings": "Was this straightforward?",
     "/fine-print": "Did this feel clear and fair?",

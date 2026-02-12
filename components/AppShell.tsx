@@ -1,4 +1,3 @@
-// components/AppShell.tsx
 "use client";
 
 import type { ReactNode } from "react";
@@ -64,7 +63,7 @@ export function AppShell({ children }: AppShellProps) {
         <div className="mx-auto flex w-full max-w-[1100px] items-center justify-between gap-3 px-4 py-3">
           {/* Brand */}
           <div className="flex items-center gap-3">
-            <Link href="/home" className="text-sm font-semibold text-zinc-900">
+            <Link href="/lifecfo-home" className="text-sm font-semibold text-zinc-900">
               Life CFO
             </Link>
           </div>
@@ -88,7 +87,7 @@ export function AppShell({ children }: AppShellProps) {
             </Chip>
 
             {menuOpen ? (
-              <div className="absolute right-0 mt-2 w-[220px] overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm">
+              <div className="absolute right-0 mt-2 w-[240px] overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm">
                 <div className="px-3 py-2 text-xs font-semibold text-zinc-700">Menu</div>
 
                 <div className="grid">
@@ -108,10 +107,18 @@ export function AppShell({ children }: AppShellProps) {
                     Family
                   </Link>
 
+                  <Link
+                    href="/fine-print"
+                    className="px-3 py-3 text-sm text-zinc-800 hover:bg-zinc-50"
+                    onClick={() => setMenuOpen(false)}
+                  >
+                    Fine print
+                  </Link>
+
                   <div className="h-px bg-zinc-100" />
 
                   <Link
-                    href="/how-keystone-works"
+                    href="/how-life-cfo-works"
                     className="px-3 py-3 text-sm text-zinc-800 hover:bg-zinc-50"
                     onClick={() => setMenuOpen(false)}
                   >

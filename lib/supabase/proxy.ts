@@ -93,8 +93,8 @@ export async function updateSession(request: NextRequest) {
     pathname.startsWith("/transactions/") ||
     pathname === "/settings" ||
     pathname.startsWith("/settings/") ||
-    pathname === "/how-keystone-works" ||
-    pathname.startsWith("/how-keystone-works/") ||
+    pathname === "/how-life-cfo-works" ||
+    pathname.startsWith("/how-life-cfo-works/") ||
     pathname === "/fine-print" ||
     pathname.startsWith("/fine-print/");
 
@@ -120,7 +120,7 @@ export async function updateSession(request: NextRequest) {
   if (userClaims && !isPublic) {
     const allowWithoutConsent = new Set([
       "/fine-print",
-      "/how-keystone-works",
+      "/how-life-cfo-works",
       "/settings",
       "/settings/delete",
     ]);

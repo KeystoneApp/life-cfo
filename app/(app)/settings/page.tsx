@@ -165,7 +165,7 @@ export default function SettingsPage() {
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
-                <Chip onClick={() => router.push("/how-keystone-works")} title="How Keystone works">
+                <Chip onClick={() => router.push("/how-life-cfo-works")} title="How Keystone works">
                   How it works
                 </Chip>
                 <Chip onClick={() => router.push("/fine-print")} title="Read the fine print">
