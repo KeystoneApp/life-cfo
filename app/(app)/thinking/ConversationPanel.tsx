@@ -22,6 +22,7 @@ export function ConversationPanel(props: {
   frame?: Frame | null;
   onClose: () => void;
   onSummarySaved?: () => void;
+  autoFocusToken?: number; // ✅ new
 }) {
   const { decisionId, decisionTitle, frame, onClose, onSummarySaved } = props;
 
@@ -123,7 +124,7 @@ export function ConversationPanel(props: {
     }, 0);
 
     return () => window.clearTimeout(t);
-  }, [decisionId]);
+  }, [decisionId, props.autoFocusToken]);
 
   // Autoscroll the message list container to bottom (NOT the whole page)
   useEffect(() => {

@@ -257,6 +257,9 @@ export default function ThinkingClient({
   const [newText, setNewText] = useState<string>("");
   const [newDraftId, setNewDraftId] = useState<string | null>(null);
   const [creatingNew, setCreatingNew] = useState<boolean>(false);
+  const [composerCollapsed, setComposerCollapsed] = useState<boolean>(false);
+  // chat autofocus tokens (decisionId -> number)
+  const [chatFocusTokenById, setChatFocusTokenById] = useState<Record<string, number>>({});
   const [composerChatForId, setComposerChatForId] = useState<string | null>(null);
 
   const scheduleReload = () => {
@@ -889,6 +892,8 @@ export default function ThinkingClient({
       // Clear input text (so it feels like it moved into the list)
       setNewText("");
 
+      setComposerCollapsed(true);
+
       window.setTimeout(() => {
         const el = cardRefs.current[created.id];
         el?.scrollIntoView?.({ behavior: "smooth", block: "start" });
@@ -913,6 +918,7 @@ export default function ThinkingClient({
     setNewDraftId(null);
     setCreatingNew(false);
     setComposerChatForId(null);
+    setComposerCollapsed(false);
     try {
       composerInputRef.current?.focus?.({ preventScroll: true } as any);
     } catch {
@@ -956,34 +962,45 @@ export default function ThinkingClient({
           </div>
         )}
 
-        {/* ✅ Life CFO top composer (Decisions only) */}
-        {surface === "decisions" ? (
-          <div ref={composerRef}>
-            <Card className="border-zinc-200 bg-white">
-              <CardContent>
-                <div className="space-y-3">
-                  <div className="space-y-1">
-                    <div className="text-sm font-semibold text-zinc-900">New decision</div>
-                    <div className="text-sm text-zinc-600">One sentence is enough — you can refine it later.</div>
-                  </div>
+          {/* ✅ Life CFO top composer (Decisions only) */}
+          {surface === "decisions" ? (
+            <div
+              ref={composerRef}
+              className={[
+                "transition",
+                newDraftId ? "opacity-60" : "opacity-100", // slightly dim once draft is created
+              ].join(" ")}
+            >
+              <Card className="border-zinc-200 bg-white">
+                <CardContent>
+                  <div className="space-y-3">
+                    <div className="space-y-1">
+                      <div className="text-sm font-semibold text-zinc-900">New decision</div>
+                      <div className="text-sm text-zinc-600">One sentence is enough. You can refine it after.</div>
+                    </div>
 
-                  <textarea
-                    ref={composerInputRef}
-                    value={newText}
-                    onChange={(e) => setNewText(e.target.value)}
-                    rows={3}
-                    placeholder="What are you deciding?"
-                    className="w-full resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[15px] leading-relaxed text-zinc-900 outline-none focus:ring-2 focus:ring-zinc-200"
-                  />
+                    <textarea
+                      ref={composerInputRef}
+                      value={newText}
+                      onChange={(e) => setNewText(e.target.value)}
+                      rows={3}
+                      placeholder="What are you deciding?"
+                      className="w-full resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[15px] leading-relaxed text-zinc-900 outline-none focus:ring-2 focus:ring-zinc-200"
+                    />
 
-                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <PrimaryActionButton
                         disabled={creatingNew}
                         onClick={async () => {
                           const id = await createNewDraftIfNeeded({ openChat: false, focusCard: true });
                           if (!id) return;
+
                           setComposerChatForId(id);
-                          setChatForId(id); // optional: keeps card chat state consistent
+                          setChatForId(id);
+
+                          // trigger chat auto-focus in ConversationPanel
+                          setChatFocusTokenById((p) => ({ ...p, [id]: (p[id] ?? 0) + 1 }));
+
                           window.setTimeout(() => {
                             const el = document.getElementById("composer-chat");
                             el?.scrollIntoView?.({ behavior: "smooth", block: "start" });
@@ -994,65 +1011,66 @@ export default function ThinkingClient({
                         Talk this through
                       </PrimaryActionButton>
 
-                    <Chip
-                      onClick={() => void createNewDraftIfNeeded({ openChat: false, focusCard: true })}
-                      title="Create a draft (no chat yet)"
-                    >
-                      Save draft
-                    </Chip>
-
-                    <Chip
-                      onClick={async () => {
-                        const id = await createNewDraftIfNeeded({ openChat: false, focusCard: true });
-                        if (!id) return;
-                        window.setTimeout(() => {
-                          const el = document.getElementById(`new-draft-attachments-${id}`);
-                          el?.scrollIntoView?.({ behavior: "smooth", block: "center" });
-                        }, 120);
-                      }}
-                      title="Add files (creates the draft first if needed)"
-                    >
-                      Add files
-                    </Chip>
-
-                    {newDraftId ? (
-                      <Chip onClick={resetComposer} title="Start a fresh new decision">
-                        Start another
+                      <Chip onClick={() => void createNewDraftIfNeeded({ openChat: false, focusCard: true })} title="Create a draft (no chat yet)">
+                        Save draft
                       </Chip>
-                    ) : null}
 
-                    {creatingNew ? <div className="text-xs text-zinc-500">Creating…</div> : null}
-                  </div>
+                      <Chip
+                        onClick={async () => {
+                          const id = await createNewDraftIfNeeded({ openChat: false, focusCard: true });
+                          if (!id) return;
+                          window.setTimeout(() => {
+                            const el = document.getElementById(`new-draft-attachments-${id}`);
+                            el?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+                          }, 120);
+                        }}
+                        title="Add files (creates the draft first if needed)"
+                      >
+                        Add files
+                      </Chip>
 
-                  {userId && newDraftId ? (
-                    <div
-                      id={`new-draft-attachments-${newDraftId}`}
-                      className="rounded-xl border border-zinc-200 bg-white p-3"
-                    >
-                      <AttachmentsBlock userId={userId} decisionId={newDraftId} title="Files" bucket="captures" initial={[]} />
-                      <div className="mt-2 text-xs text-zinc-500">These files are attached to the new draft you just created.</div>
+                      {newDraftId ? (
+                        <Chip
+                          onClick={() => {
+                            setComposerChatForId(null);
+                            resetComposer();
+                          }}
+                          title="Start a fresh new decision"
+                        >
+                          Start another
+                        </Chip>
+                      ) : null}
+
+                      {creatingNew ? <div className="text-xs text-zinc-500">Creating…</div> : null}
                     </div>
-                  ) : (
-                    <div className="text-xs text-zinc-500">Optional: you can add files after creating the draft.</div>
-                  )}
-                  {userId && composerChatForId ? (
-                      <div id="composer-chat" className="mt-3 rounded-xl border border-zinc-200 bg-white p-3">
+
+                    {userId && newDraftId ? (
+                      <div id={`new-draft-attachments-${newDraftId}`} className="rounded-xl border border-zinc-200 bg-white p-3">
+                        <AttachmentsBlock userId={userId} decisionId={newDraftId} title="Files" bucket="captures" initial={[]} />
+                        <div className="mt-2 text-xs text-zinc-500">These files are attached to the new draft you just created.</div>
+                      </div>
+                    ) : (
+                      <div className="text-xs text-zinc-500">Optional: you can add files after creating the draft.</div>
+                    )}
+
+                    {composerChatForId ? (
+                      <div id="composer-chat" className="pt-2">
                         <ConversationPanel
                           decisionId={composerChatForId}
                           decisionTitle={drafts.find((x) => x.id === composerChatForId)?.title ?? "New decision"}
-                          frame={{
-                            decision_statement: drafts.find((x) => x.id === composerChatForId)?.title ?? "New decision",
-                          }}
+                          frame={{ decision_statement: drafts.find((x) => x.id === composerChatForId)?.title ?? "" }}
                           onClose={() => setComposerChatForId(null)}
                           onSummarySaved={() => void reloadSummaries(composerChatForId)}
+                          autoFocusToken={chatFocusTokenById[composerChatForId] ?? 0}
                         />
                       </div>
                     ) : null}
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        ) : null}
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          ) : null}
+
 
         <AssistedSearch scope={assistedScope as any} placeholder="Search drafts and decisions…" />
 
@@ -1362,8 +1380,16 @@ export default function ThinkingClient({
                             ) : (
                               <div className="flex flex-wrap items-center gap-2">
                                 <PrimaryActionButton
-                                  onClick={() => setChatForId((cur) => (cur === d.id ? null : d.id))}
-                                  title="Talk it through with Keystone"
+                                  onClick={() => {
+                                    setChatForId((cur) => {
+                                      const next = cur === d.id ? null : d.id;
+                                      if (next) {
+                                        setChatFocusTokenById((p) => ({ ...p, [d.id]: (p[d.id] ?? 0) + 1 }));
+                                      }
+                                      return next;
+                                    });
+                                  }}
+                                  title="Talk it through with me"
                                 >
                                   {isChatOpen ? "Hide chat" : "Talk this through"}
                                 </PrimaryActionButton>
@@ -1440,6 +1466,7 @@ export default function ThinkingClient({
                                 decisionId={d.id}
                                 decisionTitle={d.title}
                                 frame={{ decision_statement: d.title }}
+                                autoFocusToken={chatFocusTokenById[d.id] ?? 0}
                                 onClose={() => setChatForId(null)}
                                 onSummarySaved={() => void reloadSummaries(d.id)}
                               />
