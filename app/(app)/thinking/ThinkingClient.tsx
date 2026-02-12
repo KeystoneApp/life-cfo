@@ -181,7 +181,6 @@ function PrimaryActionButton(props: {
 function titleFromStatement(statement: string) {
   const s = (statement || "").trim().replace(/\s+/g, " ");
   if (!s) return "Untitled";
-  // Keep titles readable without truncating too aggressively
   return s.length > 90 ? `${s.slice(0, 87)}…` : s;
 }
 
@@ -198,7 +197,7 @@ export default function ThinkingClient({
   const pageTitle = surface === "decisions" ? "Decisions" : "Thinking";
   const pageSubtitle =
     surface === "decisions"
-      ? "A safe place to think — without carrying it all."
+      ? "Start a decision, talk it through, then decide or schedule a review."
       : "Work on drafts here. When you’re ready to commit, save it into Decisions.";
 
   const [highlightId, setHighlightId] = useState<string | null>(null);
@@ -243,16 +242,13 @@ export default function ThinkingClient({
   const [draftTitleById, setDraftTitleById] = useState<Record<string, string>>({});
   const [draftBodyById, setDraftBodyById] = useState<Record<string, string>>({});
 
-  // ✅ Keep a stable “Original capture” snapshot (read-only) per decision
+  // ✅ Keep a stable “Original decision” snapshot (read-only) per decision
   const [originalCaptureById, setOriginalCaptureById] = useState<Record<string, { title: string; captured: string }>>(
     {}
   );
 
   // ✅ Capture-style delete confirm (inline, stronger)
   const [confirmDeleteForId, setConfirmDeleteForId] = useState<string | null>(null);
-
-  // ✅ Original capture collapsible
-  const [showOriginalById, setShowOriginalById] = useState<Record<string, boolean>>({});
 
   // ✅ NEW DECISION (Life CFO) composer state
   const composerRef = useRef<HTMLDivElement | null>(null);
@@ -777,9 +773,6 @@ export default function ThinkingClient({
       if (prev[d.id]) return prev;
       return { ...prev, [d.id]: { title: d.title ?? "", captured: parts.captured ?? "" } };
     });
-
-    // default: keep original collapsed unless user opens it
-    setShowOriginalById((prev) => (prev[d.id] !== undefined ? prev : { ...prev, [d.id]: false }));
   };
 
   const cancelEditDraft = (d: Decision) => {
@@ -832,7 +825,7 @@ export default function ThinkingClient({
 
     const statement = (newText || "").trim();
     if (!statement) {
-      showToast({ message: "Write the decision in one sentence first." }, 2200);
+      showToast({ message: "Type the decision first." }, 2200);
       try {
         composerInputRef.current?.focus?.();
       } catch {}
@@ -888,7 +881,6 @@ export default function ThinkingClient({
         ...prev,
         [created.id]: { title: created.title ?? "", captured: statement },
       }));
-      setShowOriginalById((prev) => ({ ...prev, [created.id]: false }));
 
       // Let the composer now “own” this draft for attachments
       setNewDraftId(created.id);
@@ -903,7 +895,6 @@ export default function ThinkingClient({
 
       if (opts?.openChat) setChatForId(created.id);
 
-      // remove highlight after a beat
       window.setTimeout(() => setHighlightId(null), 1600);
 
       showToast({ message: "Draft created." }, 1600);
@@ -935,7 +926,8 @@ export default function ThinkingClient({
     <Page title={pageTitle} subtitle={pageSubtitle} right={null}>
       <div className="mx-auto w-full max-w-[760px] space-y-6">
         {surface === "decisions" ? (
-          <div className="flex items-center justify-between gap-3">
+          // ✅ Centered nav row (under top app nav)
+          <div className="flex justify-center">
             <div className="flex flex-wrap items-center gap-2">
               <Chip active title="Open (this page)">
                 Open
@@ -945,28 +937,6 @@ export default function ThinkingClient({
               </Chip>
               <Chip onClick={() => router.push("/chapters")} title="Chapters">
                 Chapters
-              </Chip>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <Chip
-                onClick={() => {
-                  composerRef.current?.scrollIntoView?.({ behavior: "smooth", block: "start" });
-                  window.setTimeout(() => {
-                    try {
-                      (composerInputRef.current as any)?.focus?.({ preventScroll: true });
-                    } catch {
-                      composerInputRef.current?.focus();
-                    }
-                  }, 80);
-                }}
-                title="Start a new decision"
-              >
-                New decision
-              </Chip>
-
-              <Chip onClick={() => router.push("/capture")} title="Capture something new">
-                Capture <span className="ml-1 opacity-70">›</span>
               </Chip>
             </div>
           </div>
@@ -992,7 +962,7 @@ export default function ThinkingClient({
                 <div className="space-y-3">
                   <div className="space-y-1">
                     <div className="text-sm font-semibold text-zinc-900">New decision</div>
-                    <div className="text-sm text-zinc-600">Write it in one sentence. You can refine it after.</div>
+                    <div className="text-sm text-zinc-600">One sentence is enough — you can refine it later.</div>
                   </div>
 
                   <textarea
@@ -1024,7 +994,6 @@ export default function ThinkingClient({
                       onClick={async () => {
                         const id = await createNewDraftIfNeeded({ openChat: false, focusCard: true });
                         if (!id) return;
-                        // Small nudge: scroll to the attachments block in the composer
                         window.setTimeout(() => {
                           const el = document.getElementById(`new-draft-attachments-${id}`);
                           el?.scrollIntoView?.({ behavior: "smooth", block: "center" });
@@ -1049,16 +1018,8 @@ export default function ThinkingClient({
                       id={`new-draft-attachments-${newDraftId}`}
                       className="rounded-xl border border-zinc-200 bg-white p-3"
                     >
-                      <AttachmentsBlock
-                        userId={userId}
-                        decisionId={newDraftId}
-                        title="Files"
-                        bucket="captures"
-                        initial={[]}
-                      />
-                      <div className="mt-2 text-xs text-zinc-500">
-                        These files are attached to the new draft you just created.
-                      </div>
+                      <AttachmentsBlock userId={userId} decisionId={newDraftId} title="Files" bucket="captures" initial={[]} />
+                      <div className="mt-2 text-xs text-zinc-500">These files are attached to the new draft you just created.</div>
                     </div>
                   ) : (
                     <div className="text-xs text-zinc-500">Optional: you can add files after creating the draft.</div>
@@ -1123,15 +1084,12 @@ export default function ThinkingClient({
               const revisitMode = revisitModeById[d.id] ?? "";
               const customDate = customDateById[d.id] ?? "";
 
-              // ✅ remove "Sent from Capture." (too system-y / noisy)
               const parts = splitThinkingContext(d.context);
               const originalSnapshot = originalCaptureById[d.id] ?? { title: d.title ?? "", captured: parts.captured ?? "" };
               const isEditingDraft = !!isEditingDraftById[d.id];
 
               const allAtt = normalizeAttachments(d.attachments) as AttachmentMeta[];
               const attachmentsTitle = allAtt.length > 0 ? `Attachments (${allAtt.length})` : "Attachments";
-
-              const showOriginal = showOriginalById[d.id] ?? false;
 
               return (
                 <div
@@ -1159,7 +1117,6 @@ export default function ThinkingClient({
                               if (prev[d.id]) return prev;
                               return { ...prev, [d.id]: { title: d.title ?? "", captured: parts.captured ?? "" } };
                             });
-                            setShowOriginalById((prev) => (prev[d.id] !== undefined ? prev : { ...prev, [d.id]: false }));
                           }
                         }}
                         className="w-full text-left"
@@ -1194,25 +1151,12 @@ export default function ThinkingClient({
 
                       {isOpen ? (
                         <div className="mt-4 space-y-4">
-                          {/* ✅ Original capture collapsible */}
+                          {/* ✅ Original decision (always visible; no hide/show control) */}
                           <div className="rounded-xl border border-zinc-200 bg-white p-4 space-y-2">
-                            <div className="flex items-center justify-between gap-2">
-                              <div className="text-sm font-semibold text-zinc-900">Original</div>
-                              <Chip
-                                onClick={() => setShowOriginalById((prev) => ({ ...prev, [d.id]: !(prev[d.id] ?? false) }))}
-                                title={showOriginal ? "Hide original" : "Show original"}
-                              >
-                                {showOriginal ? "Hide" : "Show"}
-                              </Chip>
+                            <div className="text-sm font-semibold text-zinc-900">Original decision</div>
+                            <div className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-700">
+                              {(originalSnapshot.captured || originalSnapshot.title || "").trim() || "—"}
                             </div>
-
-                            {showOriginal ? (
-                              <div className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-700">
-                                {(originalSnapshot.captured || originalSnapshot.title || "").trim() || "—"}
-                              </div>
-                            ) : (
-                              <div className="text-sm text-zinc-600">Hidden to keep this page calm.</div>
-                            )}
                           </div>
 
                           <div className="rounded-xl border border-zinc-200 bg-white p-4 space-y-3">
@@ -1295,11 +1239,7 @@ export default function ThinkingClient({
 
                               {!isEditingLabels ? (
                                 <div className="text-sm text-zinc-700">
-                                  {filedUnder.length > 0 ? (
-                                    <span>{filedUnder.join(", ")}</span>
-                                  ) : (
-                                    <span className="text-zinc-600">Not set.</span>
-                                  )}
+                                  {filedUnder.length > 0 ? <span>{filedUnder.join(", ")}</span> : <span className="text-zinc-600">Not set.</span>}
                                 </div>
                               ) : (
                                 <div className="space-y-3">
@@ -1490,8 +1430,6 @@ export default function ThinkingClient({
             })}
           </div>
         )}
-
-        {process.env.NODE_ENV === "development" && openDraft ? <div className="text-xs text-zinc-400">openId: {openDraft.id}</div> : null}
       </div>
     </Page>
   );
