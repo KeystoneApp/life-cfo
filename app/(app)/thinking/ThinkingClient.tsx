@@ -7,7 +7,6 @@ import { supabase } from "@/lib/supabaseClient";
 import { Page } from "@/components/Page";
 import { Chip, Card, CardContent, useToast } from "@/components/ui";
 import { ConversationPanel } from "./ConversationPanel";
-import { AttachmentsBlock } from "@/components/AttachmentsBlock";
 
 // ✅ Assisted retrieval + tiles
 import { AssistedSearch } from "@/components/AssistedSearch";
@@ -15,6 +14,10 @@ import { TilesRow } from "@/components/TilesRow";
 
 // ✅ Notes (quiet)
 import { DecisionNotes } from "@/components/decision/DecisionNotes";
+
+// (Keeping this import even if not used by this file directly in some branches)
+// Your current file had it; safe to keep.
+import { AttachmentsBlock } from "@/components/AttachmentsBlock";
 
 export const dynamic = "force-dynamic";
 
@@ -176,11 +179,21 @@ function PrimaryActionButton(props: {
   );
 }
 
-export default function ThinkingClient() {
+export default function ThinkingClient({
+  surface = "thinking",
+}: {
+  surface?: "thinking" | "decisions";
+}) {
   const router = useRouter();
   const { showToast } = useToast();
   const searchParams = useSearchParams();
   const openFromQuery = searchParams.get("open");
+
+  const pageTitle = surface === "decisions" ? "Decisions" : "Thinking";
+  const pageSubtitle =
+    surface === "decisions"
+      ? "A safe place to think — without carrying it all."
+      : "Work on drafts here. When you’re ready to commit, save it into Decisions.";
 
   const [highlightId, setHighlightId] = useState<string | null>(null);
 
@@ -409,11 +422,11 @@ export default function ThinkingClient() {
       if (el?.scrollIntoView) el.scrollIntoView({ behavior: "smooth", block: "start" });
     }, 60);
 
-    router.replace("/thinking");
+    router.replace(surface === "decisions" ? "/decisions" : "/thinking");
 
     const t = window.setTimeout(() => setHighlightId(null), 1600);
     return () => window.clearTimeout(t);
-  }, [openFromQuery, drafts, router]);
+  }, [openFromQuery, drafts, router, surface]);
 
   // Keep chat only for the open card
   useEffect(() => {
@@ -784,19 +797,39 @@ export default function ThinkingClient() {
   };
 
   return (
-    <Page title="Thinking" subtitle="Work on drafts here. When you’re ready to commit, save it into Decisions." right={null}>
+    <Page title={pageTitle} subtitle={pageSubtitle} right={null}>
       <div className="mx-auto w-full max-w-[760px] space-y-6">
-        <div className="flex items-center justify-end gap-3">
-          <div className="flex items-center gap-2">
-            <Chip onClick={() => router.push("/capture")} title="Back: Capture">
-              <span className="mr-1 opacity-70">‹</span> Back: Capture
-            </Chip>
+        {surface === "decisions" ? (
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <Chip active title="Open (this page)">
+                Open
+              </Chip>
+              <Chip onClick={() => router.push("/revisit")} title="Review scheduled items">
+                Review
+              </Chip>
+              <Chip onClick={() => router.push("/chapters")} title="Chapters">
+                Chapters
+              </Chip>
+            </div>
 
-            <Chip onClick={() => router.push("/decisions")} title="Next: Decisions">
-              Next: Decisions <span className="ml-1 opacity-70">›</span>
+            <Chip onClick={() => router.push("/capture")} title="Capture something new">
+              Capture <span className="ml-1 opacity-70">›</span>
             </Chip>
           </div>
-        </div>
+        ) : (
+          <div className="flex items-center justify-end gap-3">
+            <div className="flex items-center gap-2">
+              <Chip onClick={() => router.push("/capture")} title="Back: Capture">
+                <span className="mr-1 opacity-70">‹</span> Back: Capture
+              </Chip>
+
+              <Chip onClick={() => router.push("/decisions")} title="Next: Decisions">
+                Next: Decisions <span className="ml-1 opacity-70">›</span>
+              </Chip>
+            </div>
+          </div>
+        )}
 
         <AssistedSearch scope="thinking" placeholder="Search drafts and decisions…" />
 
@@ -852,8 +885,7 @@ export default function ThinkingClient() {
               const revisitMode = revisitModeById[d.id] ?? "";
               const customDate = customDateById[d.id] ?? "";
 
-              const originLabel =
-                d.origin === "capture" ? "Sent from Capture." : "";
+              const originLabel = d.origin === "capture" ? "Sent from Capture." : "";
 
               const parts = splitThinkingContext(d.context);
               const originalSnapshot = originalCaptureById[d.id] ?? { title: d.title ?? "", captured: parts.captured ?? "" };
@@ -972,7 +1004,9 @@ export default function ThinkingClient() {
 
                               {!isEditingDraft ? (
                                 <div className="whitespace-pre-wrap rounded-2xl border border-zinc-100 bg-zinc-50 px-4 py-3 text-[15px] leading-relaxed text-zinc-800">
-                                  {parts.draft?.trim() ? parts.draft : (
+                                  {parts.draft?.trim() ? (
+                                    parts.draft
+                                  ) : (
                                     <span className="text-zinc-500">This is what I’m deciding… (optional)</span>
                                   )}
                                 </div>
@@ -1009,7 +1043,11 @@ export default function ThinkingClient() {
 
                               {!isEditingLabels ? (
                                 <div className="text-sm text-zinc-700">
-                                  {filedUnder.length > 0 ? <span>{filedUnder.join(", ")}</span> : <span className="text-zinc-600">Not set.</span>}
+                                  {filedUnder.length > 0 ? (
+                                    <span>{filedUnder.join(", ")}</span>
+                                  ) : (
+                                    <span className="text-zinc-600">Not set.</span>
+                                  )}
                                 </div>
                               ) : (
                                 <div className="space-y-3">
@@ -1098,7 +1136,7 @@ export default function ThinkingClient() {
                             </div>
 
                             {/* ✅ Delete confirm (capture-style) */}
-                            {isConfirmingDelete ? (
+                            {confirmDeleteForId === d.id ? (
                               <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#C94A4A] bg-[#FCECEC] px-4 py-3">
                                 <div className="text-sm text-[#7A1E1E]">
                                   Delete this draft? <span className="opacity-80">This can’t be undone.</span>
