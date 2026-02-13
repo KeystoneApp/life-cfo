@@ -213,10 +213,10 @@ export default function ThinkingClient({
   const DEFAULT_LIMIT = 5;
   const [showAll, setShowAll] = useState(false);
 
-  // Summaries for the currently open draft (small, capped) — hidden unless present
+  // Summaries for the currently open draft (small, capped)
   const [summaries, setSummaries] = useState<DecisionSummary[]>([]);
 
-  // ✅ Labels (tiles + assignment) — internal tables remain domains/constellations
+  // ✅ Labels (tiles + assignment)
   const [domains, setDomains] = useState<Domain[]>([]);
   const [constellations, setConstellations] = useState<Constellation[]>([]);
   const [activeDomainId, setActiveDomainId] = useState<string | null>(null);
@@ -233,25 +233,25 @@ export default function ThinkingClient({
   // ✅ Card refs for scroll-to-open
   const cardRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
-  // ✅ Inline label editor + revisit control state (per decision)
+  // ✅ Inline label editor + revisit control state
   const [labelsEditForId, setLabelsEditForId] = useState<string | null>(null);
   const [revisitModeById, setRevisitModeById] = useState<Record<string, "7" | "30" | "90" | "custom" | "">>({});
   const [customDateById, setCustomDateById] = useState<Record<string, string>>({});
 
-  // ✅ Draft editor (single editable body — overwrite on save)
+  // ✅ Draft editor
   const [isEditingDraftById, setIsEditingDraftById] = useState<Record<string, boolean>>({});
   const [draftTitleById, setDraftTitleById] = useState<Record<string, string>>({});
   const [draftBodyById, setDraftBodyById] = useState<Record<string, string>>({});
 
-  // ✅ Keep a stable “Original decision” snapshot (read-only) per decision
+  // ✅ Stable “Original decision” snapshot (read-only)
   const [originalCaptureById, setOriginalCaptureById] = useState<Record<string, { title: string; captured: string }>>(
     {}
   );
 
-  // ✅ Capture-style delete confirm (inline, stronger)
+  // ✅ Capture-style delete confirm
   const [confirmDeleteForId, setConfirmDeleteForId] = useState<string | null>(null);
 
-  // ✅ NEW DECISION (Life CFO) composer state
+  // ✅ NEW DECISION composer state
   const composerRef = useRef<HTMLDivElement | null>(null);
   const composerInputRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -259,11 +259,21 @@ export default function ThinkingClient({
   const [newDraftId, setNewDraftId] = useState<string | null>(null);
   const [creatingNew, setCreatingNew] = useState<boolean>(false);
 
-  // chat autofocus tokens (decisionId -> number)
+  // chat tokens (decisionId -> number) — used for focus AND auto-start boot message
   const [chatFocusTokenById, setChatFocusTokenById] = useState<Record<string, number>>({});
 
-  // ✅ Composer-hosted conversation (stays here until you click Save draft)
+  // ✅ Composer-hosted conversation (stays here until Save draft)
   const [composerChatForId, setComposerChatForId] = useState<string | null>(null);
+
+  // ✅ Composer: show Files only when requested OR there are files
+  const [composerShowFiles, setComposerShowFiles] = useState<boolean>(false);
+
+  const composerDraft = useMemo(() => {
+    if (!newDraftId) return null;
+    return drafts.find((x) => x.id === newDraftId) ?? null;
+  }, [newDraftId, drafts]);
+
+  const composerHasFiles = (composerDraft?.attachments?.length ?? 0) > 0;
 
   const scheduleReload = () => {
     if (reloadTimerRef.current) window.clearTimeout(reloadTimerRef.current);
@@ -418,7 +428,7 @@ export default function ThinkingClient({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ✅ Auto-open draft from query (?open=...) + scroll into view + clear param
+  // ✅ Auto-open from query (?open=...) + scroll + clear param
   useEffect(() => {
     if (!openFromQuery) return;
     if (drafts.length === 0) return;
@@ -526,9 +536,7 @@ export default function ThinkingClient({
             const patch = toDecision(next ?? prev);
 
             const exists = current.some((d) => d.id === patch.id);
-            const merged = exists
-              ? current.map((d) => (d.id === patch.id ? { ...d, ...patch } : d))
-              : [patch, ...current];
+            const merged = exists ? current.map((d) => (d.id === patch.id ? { ...d, ...patch } : d)) : [patch, ...current];
 
             merged.sort((a, b) => {
               const ta = safeMs(a.created_at) ?? 0;
@@ -621,7 +629,6 @@ export default function ThinkingClient({
   const performDeleteDraft = async (d: Decision) => {
     if (!userId) return;
 
-    // Optimistic remove
     const prev = drafts;
     setDrafts((p) => p.filter((x) => x.id !== d.id));
     if (openId === d.id) setOpenId(null);
@@ -629,7 +636,6 @@ export default function ThinkingClient({
     if (labelsEditForId === d.id) setLabelsEditForId(null);
     if (confirmDeleteForId === d.id) setConfirmDeleteForId(null);
 
-    // Best-effort: clear dependent rows
     try {
       await supabase.from("decision_domains").delete().eq("user_id", userId).eq("decision_id", d.id);
     } catch {}
@@ -810,15 +816,13 @@ export default function ThinkingClient({
     showToast({ message: "Saved." }, 1800);
   };
 
-  // ✅ Life CFO: create a new draft decision from the top composer
-  // NOTE: we do NOT auto-open the card anymore. We only open the card when explicitly asked (Save draft).
+  // ✅ Create a new draft for the composer (no auto-open)
   const createNewDraftIfNeeded = async () => {
     if (!userId) {
       showToast({ message: "Not signed in." }, 2500);
       return null;
     }
 
-    // If we already created one for the composer, reuse it
     if (newDraftId) return newDraftId;
 
     const statement = (newText || "").trim();
@@ -870,7 +874,6 @@ export default function ThinkingClient({
         attachments: normalizeAttachments(row.attachments),
       };
 
-      // Put at top (but do NOT open it yet)
       setDrafts((prev) => [created, ...prev]);
 
       setOriginalCaptureById((prev) => ({
@@ -878,13 +881,12 @@ export default function ThinkingClient({
         [created.id]: { title: created.title ?? "", captured: statement },
       }));
 
-      // Let the composer now “own” this draft for attachments/chat
       setNewDraftId(created.id);
-
-      // Clear input text (so it feels like it moved into the system)
       setNewText("");
 
-      // Slight nudge animation on the new card in the list
+      // default: hide Files until user asks (or there are files)
+      setComposerShowFiles(false);
+
       setAnimateCardId(created.id);
       window.setTimeout(() => setAnimateCardId(null), 700);
 
@@ -915,6 +917,7 @@ export default function ThinkingClient({
     setNewDraftId(null);
     setCreatingNew(false);
     setComposerChatForId(null);
+    setComposerShowFiles(false);
     try {
       composerInputRef.current?.focus?.({ preventScroll: true } as any);
     } catch {
@@ -930,7 +933,6 @@ export default function ThinkingClient({
     <Page title={pageTitle} subtitle={pageSubtitle} right={null}>
       <div className="mx-auto w-full max-w-[760px] space-y-6">
         {surface === "decisions" ? (
-          // ✅ Centered nav row (under top app nav)
           <div className="flex justify-center">
             <div className="flex flex-wrap items-center gap-2">
               <Chip active title="Open (this page)">
@@ -960,13 +962,7 @@ export default function ThinkingClient({
 
         {/* ✅ Life CFO top composer (Decisions only) */}
         {surface === "decisions" ? (
-          <div
-            ref={composerRef}
-            className={[
-              "transition",
-              newDraftId ? "opacity-60" : "opacity-100", // slightly dim once draft exists
-            ].join(" ")}
-          >
+          <div ref={composerRef} className={["transition", newDraftId ? "opacity-60" : "opacity-100"].join(" ")}>
             <Card className="border-zinc-200 bg-white">
               <CardContent>
                 <div className="space-y-3">
@@ -985,17 +981,15 @@ export default function ThinkingClient({
                   />
 
                   <div className="flex flex-wrap items-center gap-2">
-                    {/* ✅ Talk stays in composer (does not open the card) */}
                     <PrimaryActionButton
                       disabled={creatingNew}
                       onClick={async () => {
                         const id = await createNewDraftIfNeeded();
                         if (!id) return;
 
-                        // show composer conversation + autofocus
+                        // show composer conversation + autofocus + boot message
                         setComposerChatForId(id);
                         setChatForId(null);
-
                         setChatFocusTokenById((p) => ({ ...p, [id]: (p[id] ?? 0) + 1 }));
 
                         window.setTimeout(() => {
@@ -1008,7 +1002,6 @@ export default function ThinkingClient({
                       Talk this through
                     </PrimaryActionButton>
 
-                    {/* ✅ Save draft = open the card (and if you were chatting, move that chat into the card) */}
                     <Chip
                       onClick={async () => {
                         const id = await createNewDraftIfNeeded();
@@ -1032,6 +1025,7 @@ export default function ThinkingClient({
                       onClick={async () => {
                         const id = await createNewDraftIfNeeded();
                         if (!id) return;
+                        setComposerShowFiles(true);
                         window.setTimeout(() => {
                           const el = document.getElementById(`new-draft-attachments-${id}`);
                           el?.scrollIntoView?.({ behavior: "smooth", block: "center" });
@@ -1043,12 +1037,7 @@ export default function ThinkingClient({
                     </Chip>
 
                     {newDraftId ? (
-                      <Chip
-                        onClick={() => {
-                          resetComposer();
-                        }}
-                        title="Start a fresh new decision"
-                      >
+                      <Chip onClick={resetComposer} title="Start a fresh new decision">
                         Start another
                       </Chip>
                     ) : null}
@@ -1056,24 +1045,27 @@ export default function ThinkingClient({
                     {creatingNew ? <div className="text-xs text-zinc-500">Creating…</div> : null}
                   </div>
 
-                  {userId && newDraftId ? (
+                  {/* ✅ Remove redundant Files section unless (a) user asked OR (b) there are files */}
+                  {userId && newDraftId && (composerShowFiles || composerHasFiles) ? (
                     <div id={`new-draft-attachments-${newDraftId}`} className="rounded-xl border border-zinc-200 bg-white p-3">
                       <AttachmentsBlock userId={userId} decisionId={newDraftId} title="Files" bucket="captures" initial={[]} />
-                      <div className="mt-2 text-xs text-zinc-500">These files are attached to the new draft you just created.</div>
+                      <div className="mt-2 text-xs text-zinc-500">
+                        These files are attached to the new draft you just created.
+                      </div>
                     </div>
-                  ) : (
-                    <div className="text-xs text-zinc-500">Optional: you can add files after creating the draft.</div>
-                  )}
+                  ) : null}
 
                   {composerChatForId ? (
                     <div id="composer-chat" className="pt-2">
                       <ConversationPanel
                         decisionId={composerChatForId}
                         decisionTitle={drafts.find((x) => x.id === composerChatForId)?.title ?? "New decision"}
+                        askedText={drafts.find((x) => x.id === composerChatForId)?.title ?? ""}
                         frame={{ decision_statement: drafts.find((x) => x.id === composerChatForId)?.title ?? "" }}
                         onClose={() => setComposerChatForId(null)}
                         onSummarySaved={() => void reloadSummaries(composerChatForId)}
                         autoFocusToken={chatFocusTokenById[composerChatForId] ?? 0}
+                        autoStartToken={chatFocusTokenById[composerChatForId] ?? 0}
                       />
                     </div>
                   ) : null}
@@ -1087,7 +1079,12 @@ export default function ThinkingClient({
 
         <div className="space-y-4">
           <TilesRow title="Filter by area" items={domains} activeId={activeDomainId} onSelect={(id) => setActiveDomainId(id)} />
-          <TilesRow title="Filter by group" items={constellations} activeId={activeConstellationId} onSelect={(id) => setActiveConstellationId(id)} />
+          <TilesRow
+            title="Filter by group"
+            items={constellations}
+            activeId={activeConstellationId}
+            onSelect={(id) => setActiveConstellationId(id)}
+          />
         </div>
 
         <div className="text-xs text-zinc-500">{statusLine}</div>
@@ -1122,12 +1119,15 @@ export default function ThinkingClient({
               const domainName = domainId ? domains.find((x) => x.id === domainId)?.name ?? null : null;
 
               const memberIds = constellationsByDecision[d.id] ?? [];
-              const memberNames = memberIds.map((cid) => constellations.find((c) => c.id === cid)?.name).filter(Boolean) as string[];
+              const memberNames = memberIds
+                .map((cid) => constellations.find((c) => c.id === cid)?.name)
+                .filter(Boolean) as string[];
 
               const filedUnder = [domainName, ...memberNames].filter(Boolean) as string[];
               const isEditingLabels = labelsEditForId === d.id;
 
-              const showFiledUnderCard = (hasAnyLabelOptions && isEditingLabels) || (hasAnyLabelOptions && filedUnder.length > 0);
+              const showFiledUnderCard =
+                (hasAnyLabelOptions && isEditingLabels) || (hasAnyLabelOptions && filedUnder.length > 0);
 
               const revisitMode = revisitModeById[d.id] ?? "";
               const customDate = customDateById[d.id] ?? "";
@@ -1205,7 +1205,6 @@ export default function ThinkingClient({
 
                       {isOpen ? (
                         <div className="mt-4 space-y-4">
-                          {/* ✅ Original decision (always visible; no hide/show control) */}
                           <div className="rounded-xl border border-zinc-200 bg-white p-4 space-y-2">
                             <div className="text-sm font-semibold text-zinc-900">Original decision</div>
                             <div className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-700">
@@ -1240,7 +1239,9 @@ export default function ThinkingClient({
                                 disabled={!isEditingDraft}
                                 onChange={(e) => setDraftTitleById((prev) => ({ ...prev, [d.id]: e.target.value }))}
                                 className={`h-11 w-full rounded-2xl border px-4 text-[15px] text-zinc-900 outline-none ${
-                                  isEditingDraft ? "border-zinc-200 bg-white focus:ring-2 focus:ring-zinc-200" : "border-zinc-100 bg-zinc-50 text-zinc-900"
+                                  isEditingDraft
+                                    ? "border-zinc-200 bg-white focus:ring-2 focus:ring-zinc-200"
+                                    : "border-zinc-100 bg-zinc-50 text-zinc-900"
                                 }`}
                                 aria-label="Draft title"
                               />
@@ -1251,7 +1252,11 @@ export default function ThinkingClient({
 
                               {!isEditingDraft ? (
                                 <div className="whitespace-pre-wrap rounded-2xl border border-zinc-100 bg-zinc-50 px-4 py-3 text-[15px] leading-relaxed text-zinc-800">
-                                  {parts.draft?.trim() ? parts.draft : <span className="text-zinc-500">This is what I’m deciding… (optional)</span>}
+                                  {parts.draft?.trim() ? (
+                                    parts.draft
+                                  ) : (
+                                    <span className="text-zinc-500">This is what I’m deciding… (optional)</span>
+                                  )}
                                 </div>
                               ) : (
                                 <textarea
@@ -1267,7 +1272,6 @@ export default function ThinkingClient({
 
                           <DecisionNotes decisionId={d.id} kind="thinking" />
 
-                          {/* Filed under card */}
                           {showFiledUnderCard ? (
                             <div className="rounded-xl border border-zinc-200 bg-white p-3 space-y-2">
                               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1287,7 +1291,11 @@ export default function ThinkingClient({
 
                               {!isEditingLabels ? (
                                 <div className="text-sm text-zinc-700">
-                                  {filedUnder.length > 0 ? <span>{filedUnder.join(", ")}</span> : <span className="text-zinc-600">Not set.</span>}
+                                  {filedUnder.length > 0 ? (
+                                    <span>{filedUnder.join(", ")}</span>
+                                  ) : (
+                                    <span className="text-zinc-600">Not set.</span>
+                                  )}
                                 </div>
                               ) : (
                                 <div className="space-y-3">
@@ -1300,7 +1308,11 @@ export default function ThinkingClient({
                                         None
                                       </Chip>
                                       {domains.map((dom) => (
-                                        <Chip key={dom.id} active={domainId === dom.id} onClick={() => void setDecisionDomain(d.id, dom.id)}>
+                                        <Chip
+                                          key={dom.id}
+                                          active={domainId === dom.id}
+                                          onClick={() => void setDecisionDomain(d.id, dom.id)}
+                                        >
                                           {dom.name}
                                         </Chip>
                                       ))}
@@ -1363,7 +1375,6 @@ export default function ThinkingClient({
                               Talk it through if you’re unsure. Decide saves it into <span className="font-medium">Decisions</span>.
                             </div>
 
-                            {/* ✅ Delete confirm (capture-style) */}
                             {confirmDeleteForId === d.id ? (
                               <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#C94A4A] bg-[#FCECEC] px-4 py-3">
                                 <div className="text-sm text-[#7A1E1E]">
@@ -1469,8 +1480,10 @@ export default function ThinkingClient({
                               <ConversationPanel
                                 decisionId={d.id}
                                 decisionTitle={d.title}
+                                askedText={d.title}
                                 frame={{ decision_statement: d.title }}
                                 autoFocusToken={chatFocusTokenById[d.id] ?? 0}
+                                autoStartToken={chatFocusTokenById[d.id] ?? 0}
                                 onClose={() => setChatForId(null)}
                                 onSummarySaved={() => void reloadSummaries(d.id)}
                               />
