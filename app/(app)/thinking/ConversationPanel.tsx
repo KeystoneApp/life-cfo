@@ -22,9 +22,17 @@ export function ConversationPanel(props: {
   frame?: Frame | null;
   onClose: () => void;
   onSummarySaved?: () => void;
-  autoFocusToken?: number; // ✅ new
+
+  // ✅ focus without scrolling (existing)
+  autoFocusToken?: number;
+
+  // ✅ NEW: show "You asked:" line (use the user's question/title)
+  askedText?: string;
+
+  // ✅ NEW: triggers a boot assistant message when panel opens
+  autoStartToken?: number;
 }) {
-  const { decisionId, decisionTitle, frame, onClose, onSummarySaved } = props;
+  const { decisionId, decisionTitle, frame, onClose, onSummarySaved, askedText, autoStartToken } = props;
 
   const [userId, setUserId] = useState<string | null>(null);
   const [status, setStatus] = useState<string>("");
@@ -35,6 +43,9 @@ export function ConversationPanel(props: {
 
   const [messages, setMessages] = useState<Msg[]>([]);
   const [draft, setDraft] = useState<string>("");
+
+  // Boot assistant message shown immediately when chat opens (before user sends)
+  const [bootMessage, setBootMessage] = useState<string>("");
 
   // Summary preview (non-committal)
   const [summaryText, setSummaryText] = useState<string>("");
@@ -113,6 +124,17 @@ export function ConversationPanel(props: {
     };
   }, [decisionId]);
 
+  // ✅ Boot message on open (re-runs when autoStartToken increments)
+  useEffect(() => {
+    if (!autoStartToken) return;
+
+    const asked = (askedText || decisionStatement || decisionTitle || "").trim();
+    const line1 = asked ? `Okay — let’s work through this: “${asked}”.` : "Okay — let’s work through this.";
+    const line2 = "I’ll clarify what matters, check constraints, then lay out options + trade-offs.";
+
+    setBootMessage(`${line1}\n\n${line2}`);
+  }, [autoStartToken, askedText, decisionStatement, decisionTitle]);
+
   // Focus input without scrolling the page (prevents the "jump to bottom" issue)
   useEffect(() => {
     const t = window.setTimeout(() => {
@@ -129,7 +151,7 @@ export function ConversationPanel(props: {
   // Autoscroll the message list container to bottom (NOT the whole page)
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "auto", block: "end" });
-  }, [messages.length]);
+  }, [messages.length, bootMessage]);
 
   const persist = async (next: Msg[]) => {
     if (!userId) return;
@@ -199,10 +221,7 @@ export function ConversationPanel(props: {
         return;
       }
 
-      const after: Msg[] = [
-        ...next,
-        { role: "assistant" as const, content: assistantText, at: new Date().toISOString() },
-      ];
+      const after: Msg[] = [...next, { role: "assistant" as const, content: assistantText, at: new Date().toISOString() }];
       setMessages(after);
       setStatus("");
       void persist(after);
@@ -305,6 +324,11 @@ export function ConversationPanel(props: {
           <div className="min-w-0">
             <div className="text-sm font-semibold text-zinc-900">Conversation</div>
             <div className="mt-0.5 text-xs text-zinc-500 truncate">Anchored to: {decisionTitle}</div>
+            {askedText ? (
+              <div className="mt-1 text-xs text-zinc-600">
+                <span className="font-medium text-zinc-700">You asked:</span> {askedText}
+              </div>
+            ) : null}
           </div>
 
           <div className="flex items-center gap-2">
@@ -319,7 +343,9 @@ export function ConversationPanel(props: {
             {loading ? <div className="text-sm text-zinc-600">Loading…</div> : null}
 
             {!loading && messages.length === 0 ? (
-              <div className="text-sm text-zinc-600">Start anywhere. Keystone will keep this conversation with the decision.</div>
+              <div className="rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-sm leading-relaxed text-zinc-800 whitespace-pre-wrap">
+                {bootMessage || "Okay — let’s think this through."}
+              </div>
             ) : null}
 
             {messages.map((m, idx) => (
@@ -344,8 +370,7 @@ export function ConversationPanel(props: {
                 placeholder="Talk it through…"
                 className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 pr-12 text-sm text-zinc-800 outline-none focus:ring-2 focus:ring-zinc-200"
                 onKeyDown={(e) => {
-                  const isMac =
-                    typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+                  const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
                   const cmdOrCtrl = isMac ? e.metaKey : e.ctrlKey;
 
                   // Cmd/Ctrl + Enter sends
@@ -381,8 +406,8 @@ export function ConversationPanel(props: {
                 {sending ? "Thinking…" : "Send"}
               </Chip>
 
-              <Chip onClick={summariseChat} title="Generate a preview summary (nothing is saved yet)">
-                {summarising ? "Summarising…" : "Summarise chat"}
+              <Chip onClick={summariseChat} title="Generate a summary and save it to this draft">
+                {summarising ? "Summarising…" : "Summarise chat & save draft"}
               </Chip>
 
               <div className="text-xs text-zinc-500">
