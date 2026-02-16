@@ -21,8 +21,18 @@ function isQuotaError(status: number, errorMsg: string) {
 
 function MarkdownBubble({ content }: { content: string }) {
   return (
-    <div className="prose prose-sm max-w-none text-zinc-800 prose-headings:text-zinc-900 prose-headings:font-semibold prose-p:leading-relaxed prose-li:leading-relaxed prose-strong:text-zinc-900 prose-code:text-zinc-900 prose-pre:bg-zinc-50 prose-pre:border prose-pre:border-zinc-200 prose-pre:rounded-xl prose-pre:p-3">
-      <ReactMarkdown
+<div
+  className={[
+    "prose max-w-none text-zinc-800",
+    "prose-headings:text-zinc-900 prose-headings:font-semibold",
+    "prose-h1:text-lg prose-h2:text-base prose-h3:text-base",
+    "prose-p:my-3 prose-ul:my-3 prose-ol:my-3",
+    "prose-li:my-1 prose-hr:my-4",
+    "prose-strong:text-zinc-900",
+    "prose-code:text-zinc-900 prose-code:bg-zinc-100 prose-code:px-1 prose-code:py-0.5 prose-code:rounded",
+    "prose-pre:bg-zinc-50 prose-pre:border prose-pre:border-zinc-200 prose-pre:rounded-xl prose-pre:p-3",
+  ].join(" ")}
+>      <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
           code({ children, className }) {

@@ -12,11 +12,61 @@ const client = new OpenAI({
 type InMsg = { role: "user" | "assistant"; content: string };
 type Mode = "chat" | "summarise";
 
-function buildSystemPrompt(args: {
-  decisionTitle: string;
-  decisionStatement?: string;
-  mode: Mode;
-}) {
+const STYLE_GUIDE = [
+  "Formatting rules (very important):",
+  "- Write in Markdown.",
+  "- Use short sections with headings using '###'.",
+  "- Prefer bullet points for lists.",
+  "- Add blank lines between paragraphs.",
+  "- Bold key phrases, numbers, and decisions (use **bold**).",
+  "- Keep sentences short and scannable.",
+  "- Avoid walls of text. Aim for calm whitespace.",
+  "- Ask at most 1–2 questions at a time.",
+  "- If you provide steps, use numbered lists.",
+  "- If you provide options, present as 'Option A / Option B' with trade-offs.",
+].join("\n");
+
+const CHAT_TEMPLATE = [
+  "When helpful, use this structure:",
+  "",
+  "### What I’m hearing",
+  "- ...",
+  "",
+  "### Key factors",
+  "- ...",
+  "",
+  "### Options",
+  "- **Option A:** ...",
+  "- **Option B:** ...",
+  "",
+  "### Suggested next step",
+  "- ...",
+  "",
+  "### Next question (pick one)",
+  "- ...",
+].join("\n");
+
+const SUMMARY_TEMPLATE = [
+  "When summarising, use this structure:",
+  "",
+  "### Snapshot",
+  "- **Current leaning:** ... (or 'Not stated')",
+  "- **Why it matters:** ...",
+  "",
+  "### Key constraints",
+  "- ...",
+  "",
+  "### Key considerations",
+  "- ...",
+  "",
+  "### Open questions",
+  "- ...",
+  "",
+  "### Suggested next step",
+  "- ...",
+].join("\n");
+
+function buildSystemPrompt(args: { decisionTitle: string; decisionStatement?: string; mode: Mode }) {
   const { decisionTitle, decisionStatement, mode } = args;
 
   if (mode === "summarise") {
@@ -28,6 +78,11 @@ function buildSystemPrompt(args: {
       "- Keep it short and scannable.",
       "- Include: current leaning (if any), key constraints, open questions, next steps.",
       "- If unclear, ask 1–2 clarifying questions at the end.",
+      "",
+      STYLE_GUIDE,
+      "",
+      "Template:",
+      SUMMARY_TEMPLATE,
       "",
       `Decision title: ${decisionTitle}`,
       decisionStatement ? `Decision statement: ${decisionStatement}` : "",
@@ -46,6 +101,11 @@ function buildSystemPrompt(args: {
     "- Do NOT aggressively optimise unless asked.",
     "- Keep tone grounded, gentle, and practical.",
     "- Ask clarifying questions when needed instead of guessing.",
+    "",
+    STYLE_GUIDE,
+    "",
+    "Template:",
+    CHAT_TEMPLATE,
     "",
     `Decision title: ${decisionTitle}`,
     decisionStatement ? `Decision statement: ${decisionStatement}` : "",
@@ -102,15 +162,9 @@ export async function POST(req: Request) {
     }
 
     // 🔒 SAFETY INTERCEPT (V1 REQUIRED)
-    // - pre-answer gate
-    // - no model call
-    // - no memory writes (none in this route)
-    // - respond once and stop
     const userText = lastUserText(safeMessages);
     const intercept = maybeCrisisIntercept(userText);
     if (intercept) {
-      // Maintain the same response shape your UI expects.
-      // We return assistantText for chat mode and summaryText for summarise mode.
       if (mode === "summarise") {
         return NextResponse.json({ summaryText: intercept.content, kind: intercept.kind });
       }
@@ -127,20 +181,34 @@ export async function POST(req: Request) {
 
     const userContent =
       mode === "summarise"
-        ? `Summarise this conversation.\n\nCONVERSATION:\n${transcript}`
-        : `Continue the conversation based on the transcript so far.\n\nCONVERSATION:\n${transcript}`;
+        ? [
+            "Summarise this conversation as a capture preview.",
+            "Follow the formatting rules and template.",
+            "",
+            "CONVERSATION:",
+            transcript,
+          ].join("\n")
+        : [
+            "Continue the conversation.",
+            "Follow the formatting rules and template.",
+            "Keep it calm and scannable.",
+            "Ask at most 1–2 questions at the end if needed.",
+            "",
+            "CONVERSATION:",
+            transcript,
+          ].join("\n");
 
+    // Keep your env override; default matches your current setup.
     const model = process.env.OPENAI_MODEL || "gpt-4.1";
 
     const resp = await client.responses.create({
       model,
       input: [
-        // Use "system" here because your installed SDK typings accept it (as shown in your other route).
         { role: "system", content: system },
         { role: "user", content: userContent },
       ],
-      temperature: mode === "summarise" ? 0.3 : 0.6,
-      max_output_tokens: mode === "summarise" ? 400 : 700,
+      temperature: mode === "summarise" ? 0.2 : 0.5,
+      max_output_tokens: mode === "summarise" ? 520 : 900,
     });
 
     const text = String(resp.output_text ?? "").trim();
