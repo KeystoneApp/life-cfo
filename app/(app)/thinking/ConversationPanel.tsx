@@ -23,7 +23,7 @@ function MarkdownBubble({ content }: { content: string }) {
   return (
     <div
       className={[
-        "prose prose-zinc max-w-none text-zinc-800",
+        "prose max-w-none text-zinc-800",
         "prose-headings:text-zinc-900 prose-headings:font-semibold",
         "prose-h1:text-lg prose-h2:text-base prose-h3:text-base",
         "prose-p:my-3 prose-ul:my-3 prose-ol:my-3",
@@ -397,13 +397,13 @@ export function ConversationPanel(props: {
         </div>
 
         <div className="mt-3 rounded-xl border border-zinc-200 bg-zinc-50">
-          <div className="max-h-[460px] overflow-auto p-3">
+          <div className="max-h-[420px] overflow-auto p-3">
             {loading ? <div className="text-sm text-zinc-600">Loading…</div> : null}
 
             {!loading && messages.length === 0 ? (
               <div className="py-2">
                 <div className="flex justify-start">
-                  <div className="max-w-[86%] rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-sm leading-relaxed text-zinc-800 whitespace-pre-wrap">
+                  <div className="max-w-[88%] rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-sm leading-relaxed text-zinc-800 whitespace-pre-wrap">
                     {bootMessage || "Okay — let’s think this through."}
                   </div>
                 </div>
@@ -413,11 +413,15 @@ export function ConversationPanel(props: {
             <div className="space-y-3">
               {messages.map((m, idx) => {
                 const isUser = m.role === "user";
+
+                // ✅ Make assistant bubble wider than user bubble
+                const bubbleWidth = isUser ? "max-w-[72%]" : "max-w-[88%]";
+
                 return (
                   <div key={idx} className={isUser ? "flex justify-end" : "flex justify-start"}>
                     <div
                       className={[
-                        isUser ? "max-w-[72%]" : "max-w-[86%]",
+                        bubbleWidth,
                         "rounded-2xl px-4 py-3 text-sm leading-relaxed",
                         isUser
                           ? "bg-zinc-200/70 text-zinc-900 border border-zinc-200"
@@ -434,7 +438,7 @@ export function ConversationPanel(props: {
             {summaryText ? (
               <div className="mt-4 space-y-2">
                 <div className="flex justify-start">
-                  <div className="max-w-[86%] rounded-2xl border border-zinc-200 bg-white px-4 py-3">
+                  <div className="max-w-[88%] rounded-2xl border border-zinc-200 bg-white px-4 py-3">
                     <div className="text-xs text-zinc-500 mb-2">Capture preview</div>
                     <MarkdownBubble content={summaryText} />
 

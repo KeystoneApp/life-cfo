@@ -5,7 +5,7 @@ import { maybeCrisisIntercept } from "@/lib/safety/guard";
 
 export const dynamic = "force-dynamic";
 
-const VERSION = "conversation-route:v2026-02-16-001";
+const VERSION = "conversation-route:v2026-02-16-002";
 
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -14,28 +14,38 @@ const client = new OpenAI({
 type InMsg = { role: "user" | "assistant"; content: string };
 type Mode = "chat" | "summarise";
 
+/**
+ * Core principle:
+ * - Answer the NEW user message first.
+ * - Only add sections when they help.
+ * - Avoid repeating the same structure every turn.
+ */
 const STYLE_GUIDE = [
   "Output formatting rules (MANDATORY):",
   "- Output MUST be valid Markdown.",
-  "- Use headings with '###' for section titles when you use sections.",
   "- Use blank lines between paragraphs and between sections.",
-  "- Prefer bullet lists for factors/options/steps.",
+  "- Keep replies calm and scannable. No walls of text.",
+  "- Start by answering the user's NEW message in 1–3 sentences.",
+  "- Only use structured sections if they genuinely help this turn.",
+  "- Do NOT reuse the same full structure every reply.",
+  "- If listing 3+ items, use bullets.",
   "- If you write 'Label: text', convert it to a bullet: '- **Label:** text'.",
   "- Bold key numbers and key phrases using **bold**.",
-  "- Do NOT dump the same full template every turn.",
-  "- Always answer the user's NEW message first in 1–2 sentences.",
-  "- Then add only the sections that add value for this turn.",
-  "- Ask at most 1 question at the end (2 max if critical).",
+  "- Ask at most 1 question at the end (2 max only if essential).",
+  "",
+  "Headings:",
+  "- If you use headings, use '###'.",
+  "- Do not add headings unless you are actually creating sections.",
 ].join("\n");
 
-const OPTIONAL_SECTIONS = [
-  "You may use these headings (only when helpful):",
-  "### What I’m hearing",
-  "### Key factors",
-  "### Options",
-  "### Trade-offs",
-  "### Suggested next step",
-  "### Next question",
+const OPTIONAL_SECTION_HEADINGS = [
+  "Optional headings you may use (only when helpful):",
+  "- ### What I’m hearing",
+  "- ### Key factors",
+  "- ### Options",
+  "- ### Trade-offs",
+  "- ### Suggested next step",
+  "- ### Next question",
 ].join("\n");
 
 function buildSystemPrompt(args: { decisionTitle: string; decisionStatement?: string; mode: Mode }) {
@@ -52,7 +62,7 @@ function buildSystemPrompt(args: { decisionTitle: string; decisionStatement?: st
       "",
       STYLE_GUIDE,
       "",
-      OPTIONAL_SECTIONS,
+      OPTIONAL_SECTION_HEADINGS,
       "",
       `Decision title: ${decisionTitle}`,
       decisionStatement ? `Decision statement: ${decisionStatement}` : "",
@@ -71,7 +81,7 @@ function buildSystemPrompt(args: { decisionTitle: string; decisionStatement?: st
     "",
     STYLE_GUIDE,
     "",
-    OPTIONAL_SECTIONS,
+    OPTIONAL_SECTION_HEADINGS,
     "",
     `Decision title: ${decisionTitle}`,
     decisionStatement ? `Decision statement: ${decisionStatement}` : "",
@@ -94,6 +104,30 @@ function lastUserText(messages: InMsg[]) {
   }
   return "";
 }
+
+function classifyTurn(userText: string) {
+  const t = (userText || "").trim().toLowerCase();
+
+  const isShort = t.length <= 110;
+  const isCapability =
+    /\b(can you|can u|are you able|do you have access|can you see|can you check|can you view)\b/.test(t) ||
+    /\b(account info|bank account|my finances|see my)\b/.test(t);
+
+  const isFollowUp =
+    /\b(yes|no|yep|nah|ok|okay|cool|thanks|got it|sure)\b/.test(t) && t.length <= 40;
+
+  const isComplex =
+    t.length > 160 ||
+    (t.match(/\?/g) || []).length >= 2 ||
+    /\b(compare|options|trade-?offs|plan|steps|break down|budget|afford|how much)\b/.test(t);
+
+  if (isCapability && isShort) return "direct";
+  if (isFollowUp) return "direct";
+  if (isComplex) return "structured";
+  return "light";
+}
+
+/** --- Markdown normalization (keeps things consistently readable) --- */
 
 const TITLE_SET = new Set(
   [
@@ -141,6 +175,7 @@ function normalizeMarkdown(raw: string) {
   let text = String(raw ?? "").replace(/\r\n/g, "\n").trim();
   if (!text) return text;
 
+  // normalize overly-deep headings
   text = text.replace(/^\s{0,3}#{4,}\s+/gm, "### ");
 
   const lines = text.split("\n");
@@ -164,6 +199,7 @@ function normalizeMarkdown(raw: string) {
       continue;
     }
 
+    // Convert plain title lines to headings (only when they appear as standalone lines)
     if (isTitleLine(t) && !/^#{1,6}\s+/.test(t) && !/^(-|\*|\d+\.)\s+/.test(t)) {
       ensureBlank();
       out.push(`### ${t}`);
@@ -199,6 +235,7 @@ function normalizeMarkdown(raw: string) {
       continue;
     }
 
+    // If we were in a list, separate next paragraph
     if (prevWasList) out.push("");
     out.push(t);
     prevBlank = false;
@@ -239,12 +276,14 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Missing decisionTitle.", version: VERSION }, { status: 400 });
     }
 
+    // Safety intercept
     const userText = lastUserText(safeMessages);
     const intercept = maybeCrisisIntercept(userText);
     if (intercept) {
-      const payload = mode === "summarise"
-        ? { summaryText: intercept.content, kind: intercept.kind, version: VERSION }
-        : { assistantText: intercept.content, kind: intercept.kind, version: VERSION };
+      const payload =
+        mode === "summarise"
+          ? { summaryText: intercept.content, kind: intercept.kind, version: VERSION }
+          : { assistantText: intercept.content, kind: intercept.kind, version: VERSION };
 
       return NextResponse.json(payload, { headers: { "x-keystone-ai-version": VERSION } });
     }
@@ -257,13 +296,24 @@ export async function POST(req: Request) {
 
     const transcript = buildTranscript(safeMessages);
 
+    const turnKind = classifyTurn(userText);
+
     const userContent =
       mode === "summarise"
-        ? ["Write a capture preview summary.", "You MUST follow the formatting rules.", "", "CONVERSATION:", transcript].join("\n")
-        : [
-            "Reply to the user's latest message.",
-            "Answer the new message first, then add structure only if helpful.",
+        ? [
+            "Write a capture preview summary.",
             "You MUST follow the formatting rules.",
+            "",
+            "CONVERSATION:",
+            transcript,
+          ].join("\n")
+        : [
+            `Turn type: ${turnKind}.`,
+            "You MUST answer the user's latest message first.",
+            "If Turn type is 'direct': reply plainly (no big template), max ~120–180 words, 0–1 headings, bullets only if helpful.",
+            "If Turn type is 'light': 1 short paragraph + (optional) a small bullet list (3–6 bullets) + 1 question.",
+            "If Turn type is 'structured': you may use 2–4 headings, but only those that help.",
+            "Do NOT repeat the same headings every turn.",
             "",
             "CONVERSATION:",
             transcript,
