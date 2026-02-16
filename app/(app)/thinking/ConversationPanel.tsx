@@ -24,15 +24,14 @@ function MarkdownBubble({ content }: { content: string }) {
   return (
     <div
       className={[
-        // Typography + sizing similar to ChatGPT
-        "prose max-w-none",
-        "prose-sm sm:prose-base",
+        // Typography (keep same base size as user via wrapper text-sm)
+        "prose prose-sm max-w-none",
         "text-zinc-800",
         // Headings
         "prose-headings:text-zinc-900 prose-headings:font-semibold",
-        "prose-h1:text-lg prose-h2:text-base prose-h3:text-base",
-        // Spacing (key for “ChatGPT feel”)
-        "prose-p:my-3 prose-ul:my-3 prose-ol:my-3",
+        "prose-h1:text-base prose-h2:text-base prose-h3:text-sm",
+        // Spacing (ChatGPT-ish, but not too airy)
+        "prose-p:my-2.5 prose-ul:my-2.5 prose-ol:my-2.5",
         "prose-li:my-1 prose-hr:my-4",
         // Emphasis + inline code
         "prose-strong:text-zinc-900",
@@ -54,7 +53,7 @@ function MarkdownBubble({ content }: { content: string }) {
             );
           },
           code({ children, className }) {
-            // Keep block code as-is (react-markdown wraps it in <pre><code>)
+            // Keep block code as-is (<pre><code>...</code></pre> from react-markdown)
             const isBlock = (className || "").includes("language-");
             if (isBlock) return <code className={className}>{children}</code>;
             return <code className="rounded bg-zinc-100 px-1 py-0.5">{children}</code>;
@@ -407,39 +406,49 @@ export function ConversationPanel(props: {
           </div>
         </div>
 
-        <div className="mt-3 rounded-xl border border-zinc-200 bg-zinc-50">
-          <div className="max-h-[420px] overflow-auto p-3">
+        {/* --- Chat container: remove the disjointed grey boxes/lines --- */}
+        <div className="mt-3 rounded-2xl border border-zinc-200 bg-white">
+          {/* Messages area */}
+          <div className="max-h-[420px] overflow-auto px-4 py-4">
             {loading ? <div className="text-sm text-zinc-600">Loading…</div> : null}
 
             {!loading && messages.length === 0 ? (
               <div className="py-2">
                 <div className="flex justify-start">
-                  <div className="max-w-[88%] rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-sm leading-relaxed text-zinc-800 whitespace-pre-wrap">
+                  <div className="max-w-[80%] rounded-3xl border border-zinc-200 bg-white px-5 py-3.5 text-sm leading-relaxed text-zinc-800 whitespace-pre-wrap">
                     {bootMessage || "Okay — let’s think this through."}
                   </div>
                 </div>
               </div>
             ) : null}
 
-            <div className="space-y-3">
+            {/* More vertical rhythm between bubbles */}
+            <div className="space-y-5">
               {messages.map((m, idx) => {
                 const isUser = m.role === "user";
 
-                // Make assistant bubble wider than user bubble
-                const bubbleWidth = isUser ? "max-w-[72%]" : "max-w-[88%]";
+                // ChatGPT-ish proportions
+                const bubbleWidth = isUser ? "max-w-[68%]" : "max-w-[80%]";
+
+                const bubbleBase =
+                  "rounded-3xl px-5 py-3.5 border border-zinc-200 text-sm leading-relaxed";
 
                 return (
                   <div key={idx} className={isUser ? "flex justify-end" : "flex justify-start"}>
                     <div
                       className={[
                         bubbleWidth,
-                        "rounded-2xl px-4 py-3",
+                        bubbleBase,
                         isUser
-                          ? "bg-zinc-200/70 text-zinc-900 border border-zinc-200 text-sm leading-relaxed"
-                          : "bg-white text-zinc-800 border border-zinc-200",
+                          ? "bg-zinc-100 text-zinc-900"
+                          : "bg-white text-zinc-800",
                       ].join(" ")}
                     >
-                      {isUser ? <div className="whitespace-pre-wrap">{m.content}</div> : <MarkdownBubble content={m.content} />}
+                      {isUser ? (
+                        <div className="whitespace-pre-wrap">{m.content}</div>
+                      ) : (
+                        <MarkdownBubble content={m.content} />
+                      )}
                     </div>
                   </div>
                 );
@@ -447,9 +456,9 @@ export function ConversationPanel(props: {
             </div>
 
             {summaryText ? (
-              <div className="mt-4 space-y-2">
+              <div className="mt-6 space-y-2">
                 <div className="flex justify-start">
-                  <div className="max-w-[88%] rounded-2xl border border-zinc-200 bg-white px-4 py-3">
+                  <div className="max-w-[80%] rounded-3xl border border-zinc-200 bg-white px-5 py-4">
                     <div className="text-xs text-zinc-500 mb-2">Capture preview</div>
                     <MarkdownBubble content={summaryText} />
 
@@ -480,7 +489,8 @@ export function ConversationPanel(props: {
             <div ref={endRef} />
           </div>
 
-          <div className="border-t border-zinc-200 bg-white p-3 space-y-2 rounded-b-xl">
+          {/* Composer: keep a single subtle divider (not multiple grey boxes) */}
+          <div className="border-t border-zinc-200 px-4 py-4 space-y-2">
             {status ? <div className="text-xs text-zinc-500">{status}</div> : null}
             {summaryStatus ? <div className="text-xs text-zinc-500">{summaryStatus}</div> : null}
 
@@ -491,9 +501,10 @@ export function ConversationPanel(props: {
                 onChange={(e) => setDraft(e.target.value)}
                 rows={3}
                 placeholder="Talk it through…"
-                className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 pr-12 text-sm text-zinc-800 outline-none focus:ring-2 focus:ring-zinc-200"
+                className="w-full rounded-2xl border border-zinc-200 bg-white px-4 py-3 pr-12 text-sm text-zinc-800 outline-none focus:ring-2 focus:ring-zinc-200"
                 onKeyDown={(e) => {
-                  const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+                  const isMac =
+                    typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
                   const cmdOrCtrl = isMac ? e.metaKey : e.ctrlKey;
 
                   if (cmdOrCtrl && e.key === "Enter") {
@@ -513,7 +524,7 @@ export function ConversationPanel(props: {
                 <button
                   type="button"
                   onClick={() => void send()}
-                  className="absolute bottom-2 right-2 inline-flex h-8 w-8 items-center justify-center rounded-full border border-zinc-200 bg-white text-zinc-800 hover:bg-zinc-50 focus:outline-none focus:ring-2 focus:ring-zinc-200"
+                  className="absolute bottom-3 right-3 inline-flex h-9 w-9 items-center justify-center rounded-full border border-zinc-200 bg-white text-zinc-800 hover:bg-zinc-50 focus:outline-none focus:ring-2 focus:ring-zinc-200"
                   aria-label="Send"
                   title="Send (Enter)"
                 >
