@@ -1005,100 +1005,115 @@ export default function ThinkingClient({ surface = "thinking" }: { surface?: "th
         {/* ✅ Chat-first composer (Decisions only) */}
         {surface === "decisions" ? (
           <div ref={composerRef}>
-            <Card className="border-zinc-200 bg-white">
-              <CardContent>
-                <div className="space-y-3">
-                  <div className="space-y-1">
-                    <div className="text-sm font-semibold text-zinc-900">Talk it through</div>
-                    <div className="text-sm text-zinc-600">Start messy. We’ll make it clear as we go.</div>
-                  </div>
+          <Card className="border-0 bg-white shadow-sm">
+            <CardContent className="p-5">
+              <div className="space-y-4">
+                <div className="space-y-1">
+                  <div className="text-sm font-semibold text-zinc-900">Talk it through</div>
+                  <div className="text-sm text-zinc-600">Start messy. We’ll make it clear as we go.</div>
+                </div>
 
-                  {composerChatForId ? (
-                    <div id="composer-chat" className="pt-1">
-                      <ConversationPanel
-                        decisionId={composerChatForId}
-                        decisionTitle={drafts.find((x) => x.id === composerChatForId)?.title ?? "New decision"}
-                        askedText={drafts.find((x) => x.id === composerChatForId)?.title ?? ""}
-                        frame={{ decision_statement: drafts.find((x) => x.id === composerChatForId)?.title ?? "" }}
-                        onClose={() => setComposerChatForId(null)}
-                        onSummarySaved={() => void reloadSummaries(composerChatForId)}
-                        autoFocusToken={chatFocusTokenById[composerChatForId] ?? 0}
-                        autoStartToken={chatFocusTokenById[composerChatForId] ?? 0}
-                        initialUserMessage={pendingFirstMsgById[composerChatForId] ?? ""}
-                        initialUserMessageToken={pendingFirstMsgTokenById[composerChatForId] ?? 0}
-                        onInitialUserMessageConsumed={() => {
-                          const id = composerChatForId;
-                          if (!id) return;
-                          setPendingFirstMsgById((p) => ({ ...p, [id]: "" }));
-                        }}
-                      />
-                    </div>
-                  ) : null}
-
-                  <textarea
-                    ref={composerInputRef}
-                    value={newText}
-                    onChange={(e) => setNewText(e.target.value)}
-                    rows={3}
-                    placeholder="What’s on your mind?"
-                    className="w-full resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[15px] leading-relaxed text-zinc-900 outline-none focus:ring-2 focus:ring-zinc-200"
-                    onKeyDown={(e) => {
-                      // Enter sends (Shift+Enter newline)
-                      if (e.key === "Enter" && !e.shiftKey) {
-                        e.preventDefault();
-                        void sendFromComposer();
-                      }
-                    }}
-                  />
-
-                  <div className="flex flex-wrap items-center gap-2">
-                    <PrimaryActionButton disabled={creatingNew} onClick={() => void sendFromComposer()} title="Send">
-                      {creatingNew ? "Creating…" : "Send"}
-                    </PrimaryActionButton>
-
-                    <Chip
-                      onClick={async () => {
-                        const id = await createNewDraftIfNeeded();
+                {composerChatForId ? (
+                  <div id="composer-chat" className="pt-1">
+                    <ConversationPanel
+                      decisionId={composerChatForId}
+                      decisionTitle={drafts.find((x) => x.id === composerChatForId)?.title ?? "New decision"}
+                      askedText={drafts.find((x) => x.id === composerChatForId)?.title ?? ""}
+                      frame={{ decision_statement: drafts.find((x) => x.id === composerChatForId)?.title ?? "" }}
+                      onClose={() => setComposerChatForId(null)}
+                      onSummarySaved={() => void reloadSummaries(composerChatForId)}
+                      autoFocusToken={chatFocusTokenById[composerChatForId] ?? 0}
+                      autoStartToken={chatFocusTokenById[composerChatForId] ?? 0}
+                      initialUserMessage={pendingFirstMsgById[composerChatForId] ?? ""}
+                      initialUserMessageToken={pendingFirstMsgTokenById[composerChatForId] ?? 0}
+                      onInitialUserMessageConsumed={() => {
+                        const id = composerChatForId;
                         if (!id) return;
-                        setComposerShowFiles(true);
-                        setComposerChatForId(id);
+                        setPendingFirstMsgById((p) => ({ ...p, [id]: "" }));
                       }}
-                      title="Attach files"
-                    >
-                      Add files
-                    </Chip>
+                    />
 
-                    {newDraftId ? (
-                      <Chip
-                        onClick={() => {
-                          // move the created draft into list view (open it)
-                          const id = newDraftId;
-                          if (!id) return;
-                          openCardAtTop(id);
-                          setComposerChatForId(null);
-                        }}
-                        title="Open the draft below"
-                      >
-                        Open draft
-                      </Chip>
-                    ) : null}
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      {newDraftId ? (
+                        <Chip
+                          onClick={() => {
+                            const id = newDraftId;
+                            if (!id) return;
+                            openCardAtTop(id);
+                            setComposerChatForId(null);
+                          }}
+                          title="Open the draft below"
+                        >
+                          Open draft
+                        </Chip>
+                      ) : null}
 
-                    {newDraftId ? (
                       <Chip onClick={resetComposer} title="Start a fresh new decision">
                         Start another
                       </Chip>
+                    </div>
+
+                    {userId && newDraftId && (composerShowFiles || composerHasFiles) ? (
+                      <div className="mt-3 rounded-2xl bg-zinc-50 p-4">
+                        <AttachmentsBlock userId={userId} decisionId={newDraftId} title="Files" bucket="captures" initial={[]} />
+                        <div className="mt-2 text-xs text-zinc-500">These files are attached to this draft.</div>
+                      </div>
                     ) : null}
                   </div>
+                ) : (
+                  <>
+                    <textarea
+                      ref={composerInputRef}
+                      value={newText}
+                      onChange={(e) => setNewText(e.target.value)}
+                      rows={3}
+                      placeholder="What’s on your mind?"
+                      className="w-full resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[15px] leading-relaxed text-zinc-900 outline-none focus:ring-2 focus:ring-zinc-200"
+                      onKeyDown={(e) => {
+                        // Enter sends (Shift+Enter newline)
+                        if (e.key === "Enter" && !e.shiftKey) {
+                          e.preventDefault();
+                          void sendFromComposer();
+                        }
+                      }}
+                    />
 
-                  {userId && newDraftId && (composerShowFiles || composerHasFiles) ? (
-                    <div className="rounded-xl border border-zinc-200 bg-white p-3">
-                      <AttachmentsBlock userId={userId} decisionId={newDraftId} title="Files" bucket="captures" initial={[]} />
-                      <div className="mt-2 text-xs text-zinc-500">These files are attached to this draft.</div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <PrimaryActionButton disabled={creatingNew} onClick={() => void sendFromComposer()} title="Send">
+                        {creatingNew ? "Creating…" : "Send"}
+                      </PrimaryActionButton>
+
+                      <Chip
+                        onClick={async () => {
+                          const id = await createNewDraftIfNeeded();
+                          if (!id) return;
+                          setComposerShowFiles(true);
+                          setComposerChatForId(id);
+                        }}
+                        title="Attach files"
+                      >
+                        Add files
+                      </Chip>
+
+                      {newDraftId ? (
+                        <Chip
+                          onClick={() => {
+                            const id = newDraftId;
+                            if (!id) return;
+                            openCardAtTop(id);
+                            setComposerChatForId(null);
+                          }}
+                          title="Open the draft below"
+                        >
+                          Open draft
+                        </Chip>
+                      ) : null}
                     </div>
-                  ) : null}
-                </div>
-              </CardContent>
-            </Card>
+                  </>
+                )}
+              </div>
+            </CardContent>
+          </Card>
           </div>
         ) : null}
 
