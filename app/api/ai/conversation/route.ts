@@ -12,22 +12,28 @@ const client = new OpenAI({
 type InMsg = { role: "user" | "assistant"; content: string };
 type Mode = "chat" | "summarise";
 
-const STYLE_GUIDE = [
-  "Formatting rules (very important):",
-  "- Write in Markdown.",
-  "- Use short sections with headings using '###'.",
-  "- Prefer bullet points for lists.",
-  "- Add blank lines between paragraphs.",
-  "- Bold key phrases, numbers, and decisions (use **bold**).",
-  "- Keep sentences short and scannable.",
-  "- Avoid walls of text. Aim for calm whitespace.",
-  "- Ask at most 1–2 questions at a time.",
-  "- If you provide steps, use numbered lists.",
-  "- If you provide options, present as 'Option A / Option B' with trade-offs.",
+/**
+ * We want ChatGPT-like readability:
+ * - markdown headings + bullets
+ * - whitespace
+ * - bold key phrases
+ * We must REQUIRE markdown output (not just suggest it),
+ * otherwise the model will often respond in plain prose.
+ */
+const OUTPUT_CONTRACT = [
+  "OUTPUT CONTRACT (must follow):",
+  "1) Output MUST be valid Markdown.",
+  "2) Use headings with '### ' exactly (NOT plain text headings).",
+  "3) Use bullet points with '- ' for lists (NOT plain sentences).",
+  "4) Add blank lines between sections.",
+  "5) Bold key phrases and numbers using **bold**.",
+  "6) Ask at most 1–2 questions at the end under '### Next question'.",
+  "7) Do NOT include any meta commentary about these rules.",
+  "8) Do NOT wrap the entire answer in a code block.",
 ].join("\n");
 
 const CHAT_TEMPLATE = [
-  "When helpful, use this structure:",
+  "TEMPLATE (use exactly these headings):",
   "",
   "### What I’m hearing",
   "- ...",
@@ -42,15 +48,15 @@ const CHAT_TEMPLATE = [
   "### Suggested next step",
   "- ...",
   "",
-  "### Next question (pick one)",
-  "- ...",
+  "### Next question",
+  "- ... (ask 1–2 max)",
 ].join("\n");
 
 const SUMMARY_TEMPLATE = [
-  "When summarising, use this structure:",
+  "TEMPLATE (use exactly these headings):",
   "",
   "### Snapshot",
-  "- **Current leaning:** ... (or 'Not stated')",
+  "- **Current leaning:** ... (or **Not stated**)",
   "- **Why it matters:** ...",
   "",
   "### Key constraints",
@@ -64,6 +70,9 @@ const SUMMARY_TEMPLATE = [
   "",
   "### Suggested next step",
   "- ...",
+  "",
+  "### Next question",
+  "- ... (ask 1–2 max, only if needed)",
 ].join("\n");
 
 function buildSystemPrompt(args: { decisionTitle: string; decisionStatement?: string; mode: Mode }) {
@@ -72,16 +81,14 @@ function buildSystemPrompt(args: { decisionTitle: string; decisionStatement?: st
   if (mode === "summarise") {
     return [
       "You are Keystone.",
-      "Task: Summarise the user's conversation about a decision into a calm, useful preview.",
+      "Task: produce a calm, scannable capture preview of the conversation.",
       "Rules:",
       "- Do NOT recommend a choice unless explicitly asked.",
-      "- Keep it short and scannable.",
-      "- Include: current leaning (if any), key constraints, open questions, next steps.",
-      "- If unclear, ask 1–2 clarifying questions at the end.",
+      "- Keep it short and useful.",
+      "- Include: current leaning (if any), constraints, open questions, next steps.",
       "",
-      STYLE_GUIDE,
+      OUTPUT_CONTRACT,
       "",
-      "Template:",
       SUMMARY_TEMPLATE,
       "",
       `Decision title: ${decisionTitle}`,
@@ -96,15 +103,12 @@ function buildSystemPrompt(args: { decisionTitle: string; decisionStatement?: st
     "You are helping the user think, not forcing a decision.",
     "Rules:",
     "- Do NOT recommend a choice unless the user asks you to recommend.",
-    "- Do NOT pick a winner unless asked to compare with a winner.",
-    "- Do NOT simulate irreversible outcomes unless asked.",
-    "- Do NOT aggressively optimise unless asked.",
-    "- Keep tone grounded, gentle, and practical.",
+    "- Do NOT pick a winner unless asked.",
     "- Ask clarifying questions when needed instead of guessing.",
+    "- Keep tone grounded, gentle, practical.",
     "",
-    STYLE_GUIDE,
+    OUTPUT_CONTRACT,
     "",
-    "Template:",
     CHAT_TEMPLATE,
     "",
     `Decision title: ${decisionTitle}`,
@@ -115,8 +119,7 @@ function buildSystemPrompt(args: { decisionTitle: string; decisionStatement?: st
 }
 
 function buildTranscript(messages: InMsg[]) {
-  // Simple, robust transcript for both modes.
-  // Avoids content-block typing + avoids input_text/output_text mismatch.
+  // Keep transcript simple + robust.
   return messages
     .map((m) => `${m.role === "user" ? "You" : "Keystone"}: ${m.content}`)
     .join("\n\n");
@@ -131,6 +134,31 @@ function lastUserText(messages: InMsg[]) {
     }
   }
   return "";
+}
+
+// If the model still tries to output plain headings, this nudges it hard.
+function buildUserInstruction(mode: Mode, transcript: string) {
+  if (mode === "summarise") {
+    return [
+      "Create a capture preview from the conversation below.",
+      "IMPORTANT: Follow the OUTPUT CONTRACT and TEMPLATE exactly.",
+      "Headings must begin with '### '. Lists must use '- '.",
+      "",
+      "CONVERSATION:",
+      transcript,
+    ].join("\n");
+  }
+
+  return [
+    "Continue the conversation below.",
+    "IMPORTANT: Follow the OUTPUT CONTRACT and TEMPLATE exactly.",
+    "Headings must begin with '### '. Lists must use '- '.",
+    "Keep it calm and scannable.",
+    "Ask 1–2 questions max under '### Next question'.",
+    "",
+    "CONVERSATION:",
+    transcript,
+  ].join("\n");
 }
 
 export async function POST(req: Request) {
@@ -165,9 +193,7 @@ export async function POST(req: Request) {
     const userText = lastUserText(safeMessages);
     const intercept = maybeCrisisIntercept(userText);
     if (intercept) {
-      if (mode === "summarise") {
-        return NextResponse.json({ summaryText: intercept.content, kind: intercept.kind });
-      }
+      if (mode === "summarise") return NextResponse.json({ summaryText: intercept.content, kind: intercept.kind });
       return NextResponse.json({ assistantText: intercept.content, kind: intercept.kind });
     }
 
@@ -178,27 +204,8 @@ export async function POST(req: Request) {
     });
 
     const transcript = buildTranscript(safeMessages);
+    const userContent = buildUserInstruction(mode, transcript);
 
-    const userContent =
-      mode === "summarise"
-        ? [
-            "Summarise this conversation as a capture preview.",
-            "Follow the formatting rules and template.",
-            "",
-            "CONVERSATION:",
-            transcript,
-          ].join("\n")
-        : [
-            "Continue the conversation.",
-            "Follow the formatting rules and template.",
-            "Keep it calm and scannable.",
-            "Ask at most 1–2 questions at the end if needed.",
-            "",
-            "CONVERSATION:",
-            transcript,
-          ].join("\n");
-
-    // Keep your env override; default matches your current setup.
     const model = process.env.OPENAI_MODEL || "gpt-4.1";
 
     const resp = await client.responses.create({
@@ -207,7 +214,8 @@ export async function POST(req: Request) {
         { role: "system", content: system },
         { role: "user", content: userContent },
       ],
-      temperature: mode === "summarise" ? 0.2 : 0.5,
+      // Lower temp makes formatting + template adherence more reliable
+      temperature: mode === "summarise" ? 0.15 : 0.35,
       max_output_tokens: mode === "summarise" ? 520 : 900,
     });
 
@@ -217,10 +225,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Empty AI response." }, { status: 502 });
     }
 
-    if (mode === "summarise") {
-      return NextResponse.json({ summaryText: text });
-    }
-
+    if (mode === "summarise") return NextResponse.json({ summaryText: text });
     return NextResponse.json({ assistantText: text });
   } catch (err: any) {
     const message = err?.message ? String(err.message) : "AI request failed.";

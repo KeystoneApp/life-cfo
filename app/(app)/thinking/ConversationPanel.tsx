@@ -21,24 +21,29 @@ function isQuotaError(status: number, errorMsg: string) {
 
 function MarkdownBubble({ content }: { content: string }) {
   return (
-<div
-  className={[
-    "prose max-w-none text-zinc-800",
-    "prose-headings:text-zinc-900 prose-headings:font-semibold",
-    "prose-h1:text-lg prose-h2:text-base prose-h3:text-base",
-    "prose-p:my-3 prose-ul:my-3 prose-ol:my-3",
-    "prose-li:my-1 prose-hr:my-4",
-    "prose-strong:text-zinc-900",
-    "prose-code:text-zinc-900 prose-code:bg-zinc-100 prose-code:px-1 prose-code:py-0.5 prose-code:rounded",
-    "prose-pre:bg-zinc-50 prose-pre:border prose-pre:border-zinc-200 prose-pre:rounded-xl prose-pre:p-3",
-  ].join(" ")}
->      <ReactMarkdown
+    <div
+      className={[
+        "prose max-w-none text-zinc-800",
+        "prose-headings:text-zinc-900 prose-headings:font-semibold",
+        "prose-h1:text-xl prose-h1:my-3",
+        "prose-h2:text-lg prose-h2:my-3",
+        "prose-h3:text-base prose-h3:my-2",
+        "prose-p:my-3",
+        "prose-ul:my-3 prose-ol:my-3",
+        "prose-li:my-1",
+        "prose-hr:my-4",
+        "prose-strong:text-zinc-900",
+        "prose-code:text-zinc-900 prose-code:bg-zinc-100 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded",
+        "prose-pre:bg-zinc-50 prose-pre:border prose-pre:border-zinc-200 prose-pre:rounded-xl prose-pre:p-3",
+      ].join(" ")}
+    >
+      <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
           code({ children, className }) {
             const isBlock = (className || "").includes("language-");
             if (isBlock) return <code className={className}>{children}</code>;
-            return <code className="rounded bg-zinc-100 px-1 py-0.5">{children}</code>;
+            return <code className="rounded bg-zinc-100 px-1.5 py-0.5">{children}</code>;
           },
           a({ children, href }) {
             return (
@@ -175,7 +180,8 @@ export function ConversationPanel(props: {
     const line1 = asked ? `Okay — let’s work through this: “${asked}”.` : "Okay — let’s work through this.";
     const line2 = "I’ll clarify what matters, check constraints, then lay out options + trade-offs.";
 
-    setBootMessage(`${line1}\n\n${line2}`);
+    // Boot message itself is markdown so it renders nicely.
+    setBootMessage(`### Let’s work through it\n- ${line1}\n- ${line2}`);
   }, [autoStartToken, askedText, decisionStatement, decisionTitle]);
 
   useEffect(() => {
@@ -395,16 +401,16 @@ export function ConversationPanel(props: {
           </div>
         </div>
 
-        {/* Slight grey background behind the chat viewport */}
+        {/* Chat viewport */}
         <div className="mt-3 rounded-xl border border-zinc-200 bg-zinc-50">
-          <div className="max-h-[420px] overflow-auto p-3">
+          <div className="max-h-[460px] overflow-auto p-4">
             {loading ? <div className="text-sm text-zinc-600">Loading…</div> : null}
 
             {!loading && messages.length === 0 ? (
               <div className="py-2">
                 <div className="flex justify-start">
-                  <div className="max-w-[78%] rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-sm leading-relaxed text-zinc-800 whitespace-pre-wrap">
-                    {bootMessage || "Okay — let’s think this through."}
+                  <div className="max-w-[84%] rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-sm leading-relaxed text-zinc-800">
+                    <MarkdownBubble content={bootMessage || "### Okay\n- Let’s think this through."} />
                   </div>
                 </div>
               </div>
@@ -413,14 +419,14 @@ export function ConversationPanel(props: {
             <div className="space-y-3">
               {messages.map((m, idx) => {
                 const isUser = m.role === "user";
+                const bubbleWidth = isUser ? "max-w-[72%]" : "max-w-[84%]";
                 return (
                   <div key={idx} className={isUser ? "flex justify-end" : "flex justify-start"}>
                     <div
                       className={[
-                        "max-w-[78%] rounded-2xl px-4 py-3 text-sm leading-relaxed",
-                        isUser
-                          ? "bg-zinc-200/70 text-zinc-900 border border-zinc-200"
-                          : "bg-white text-zinc-800 border border-zinc-200",
+                        bubbleWidth,
+                        "rounded-2xl px-4 py-3 text-sm leading-relaxed border",
+                        isUser ? "bg-zinc-200/60 text-zinc-900 border-zinc-200" : "bg-white text-zinc-800 border-zinc-200",
                       ].join(" ")}
                     >
                       {isUser ? <div className="whitespace-pre-wrap">{m.content}</div> : <MarkdownBubble content={m.content} />}
@@ -433,7 +439,7 @@ export function ConversationPanel(props: {
             {summaryText ? (
               <div className="mt-4 space-y-2">
                 <div className="flex justify-start">
-                  <div className="max-w-[78%] rounded-2xl border border-zinc-200 bg-white px-4 py-3">
+                  <div className="max-w-[84%] rounded-2xl border border-zinc-200 bg-white px-4 py-3">
                     <div className="text-xs text-zinc-500 mb-2">Capture preview</div>
                     <MarkdownBubble content={summaryText} />
 
@@ -464,6 +470,7 @@ export function ConversationPanel(props: {
             <div ref={endRef} />
           </div>
 
+          {/* Composer */}
           <div className="border-t border-zinc-200 bg-white p-3 space-y-2 rounded-b-xl">
             {status ? <div className="text-xs text-zinc-500">{status}</div> : null}
             {summaryStatus ? <div className="text-xs text-zinc-500">{summaryStatus}</div> : null}
