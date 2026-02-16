@@ -23,13 +23,16 @@ function MarkdownBubble({ content }: { content: string }) {
   return (
     <div
       className={[
-        "prose max-w-none text-zinc-800",
+        // slightly larger + airier like ChatGPT
+        "prose prose-zinc max-w-none text-[15px] leading-relaxed",
         "prose-headings:text-zinc-900 prose-headings:font-semibold",
-        // We aren't using markdown headings, but keep this sane anyway:
-        "prose-h1:text-lg prose-h2:text-base prose-h3:text-base",
-        "prose-p:my-3 prose-ul:my-3 prose-ol:my-3",
-        "prose-li:my-1 prose-hr:my-4",
+        // we are NOT using markdown # headings, but keep styles for any bold "title-like" lines in paragraphs
+        "prose-p:my-3",
+        "prose-ul:my-3 prose-ol:my-3",
+        "prose-li:my-1",
+        "prose-hr:my-4",
         "prose-strong:text-zinc-900",
+        "prose-blockquote:border-l-zinc-300 prose-blockquote:text-zinc-700",
         "prose-code:text-zinc-900 prose-code:bg-zinc-100 prose-code:px-1 prose-code:py-0.5 prose-code:rounded",
         "prose-pre:bg-zinc-50 prose-pre:border prose-pre:border-zinc-200 prose-pre:rounded-xl prose-pre:p-3",
       ].join(" ")}
@@ -48,6 +51,23 @@ function MarkdownBubble({ content }: { content: string }) {
                 {children}
               </a>
             );
+          },
+          // Make "plain title lines" feel like headings:
+          // If the model outputs a standalone line like "Key factors" as a paragraph,
+          // users will still read it as a heading. This styles short paragraphs that look like titles.
+          p({ children }) {
+            const text = typeof children === "string" ? children : "";
+            const looksLikeTitle =
+              typeof children === "string" &&
+              text.length <= 32 &&
+              /^[A-Z][A-Za-z’' ]+$/.test(text.trim()) &&
+              !text.trim().endsWith(".") &&
+              !text.trim().includes(":");
+
+            if (looksLikeTitle) {
+              return <div className="mt-4 mb-2 font-semibold text-zinc-900">{children}</div>;
+            }
+            return <p>{children}</p>;
           },
         }}
       >
@@ -110,6 +130,7 @@ export function ConversationPanel(props: {
   const decisionStatement = useMemo(() => frame?.decision_statement ?? "", [frame]);
   const canSend = draft.trim().length > 0 && !sending;
 
+  // Load auth + conversation
   useEffect(() => {
     let mounted = true;
 
@@ -170,16 +191,18 @@ export function ConversationPanel(props: {
     };
   }, [decisionId]);
 
+  // Boot message on open
   useEffect(() => {
     if (!autoStartToken) return;
 
     const asked = (askedText || decisionStatement || decisionTitle || "").trim();
     const line1 = asked ? `Okay — let’s work through this: “${asked}”.` : "Okay — let’s work through this.";
-    const line2 = "Tell me what you’re unsure about, and we’ll make it clear as we go.";
+    const line2 = "I’ll clarify what matters, check constraints, then lay out options + trade-offs.";
 
     setBootMessage(`${line1}\n\n${line2}`);
   }, [autoStartToken, askedText, decisionStatement, decisionTitle]);
 
+  // Focus input without scrolling the page
   useEffect(() => {
     const t = window.setTimeout(() => {
       try {
@@ -192,6 +215,7 @@ export function ConversationPanel(props: {
     return () => window.clearTimeout(t);
   }, [decisionId, props.autoFocusToken]);
 
+  // Autoscroll within chat container
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "auto", block: "end" });
   }, [messages.length, bootMessage, summaryText]);
@@ -226,6 +250,7 @@ export function ConversationPanel(props: {
     setStatus("");
     void persist(next);
 
+    // New message invalidates summary preview
     setSummaryText("");
     setSummaryStatus("");
     setAddedSummary(false);
@@ -279,6 +304,7 @@ export function ConversationPanel(props: {
     await sendText(text);
   };
 
+  // Consume injected first message when token increments
   useEffect(() => {
     const injected = (initialUserMessage ?? "").trim();
     if (!injected) return;
@@ -376,10 +402,6 @@ export function ConversationPanel(props: {
     }
   };
 
-  // Bubble widths (ChatGPT-ish): assistant wider, user narrower
-  const ASSIST_MAX = "max-w-[88%]";
-  const USER_MAX = "max-w-[72%]";
-
   return (
     <Card className="border-zinc-200 bg-white">
       <CardContent>
@@ -401,17 +423,16 @@ export function ConversationPanel(props: {
           </div>
         </div>
 
+        {/* chat viewport */}
         <div className="mt-3 rounded-xl border border-zinc-200 bg-zinc-50">
-          <div className="max-h-[440px] overflow-auto p-4">
+          <div className="max-h-[460px] overflow-auto p-3">
             {loading ? <div className="text-sm text-zinc-600">Loading…</div> : null}
 
             {!loading && messages.length === 0 ? (
               <div className="py-2">
                 <div className="flex justify-start">
-                  <div className={[ASSIST_MAX, "rounded-2xl border border-zinc-200 bg-white px-4 py-3"].join(" ")}>
-                    <div className="text-sm leading-relaxed text-zinc-800 whitespace-pre-wrap">
-                      {bootMessage || "Okay — let’s think this through."}
-                    </div>
+                  <div className="max-w-[88%] rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-sm leading-relaxed text-zinc-800 whitespace-pre-wrap">
+                    {bootMessage || "Okay — let’s think this through."}
                   </div>
                 </div>
               </div>
@@ -424,7 +445,8 @@ export function ConversationPanel(props: {
                   <div key={idx} className={isUser ? "flex justify-end" : "flex justify-start"}>
                     <div
                       className={[
-                        isUser ? USER_MAX : ASSIST_MAX,
+                        // wider assistant bubble, slightly narrower user bubble
+                        isUser ? "max-w-[72%]" : "max-w-[90%]",
                         "rounded-2xl px-4 py-3 text-sm leading-relaxed border",
                         isUser ? "bg-zinc-200/70 text-zinc-900 border-zinc-200" : "bg-white text-zinc-800 border-zinc-200",
                       ].join(" ")}
@@ -436,10 +458,11 @@ export function ConversationPanel(props: {
               })}
             </div>
 
+            {/* summary preview bubble */}
             {summaryText ? (
               <div className="mt-4 space-y-2">
                 <div className="flex justify-start">
-                  <div className={[ASSIST_MAX, "rounded-2xl border border-zinc-200 bg-white px-4 py-3"].join(" ")}>
+                  <div className="max-w-[90%] rounded-2xl border border-zinc-200 bg-white px-4 py-3">
                     <div className="text-xs text-zinc-500 mb-2">Capture preview</div>
                     <MarkdownBubble content={summaryText} />
 
@@ -470,6 +493,7 @@ export function ConversationPanel(props: {
             <div ref={endRef} />
           </div>
 
+          {/* composer */}
           <div className="border-t border-zinc-200 bg-white p-3 space-y-2 rounded-b-xl">
             {status ? <div className="text-xs text-zinc-500">{status}</div> : null}
             {summaryStatus ? <div className="text-xs text-zinc-500">{summaryStatus}</div> : null}
@@ -486,12 +510,14 @@ export function ConversationPanel(props: {
                   const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
                   const cmdOrCtrl = isMac ? e.metaKey : e.ctrlKey;
 
+                  // Cmd/Ctrl + Enter sends
                   if (cmdOrCtrl && e.key === "Enter") {
                     e.preventDefault();
                     void send();
                     return;
                   }
 
+                  // Enter sends (Shift+Enter newline)
                   if (e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();
                     void send();

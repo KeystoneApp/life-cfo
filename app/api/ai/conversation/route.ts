@@ -13,45 +13,43 @@ type InMsg = { role: "user" | "assistant"; content: string };
 type Mode = "chat" | "summarise";
 
 /**
- * ✅ Output style goal:
- * - ChatGPT-like readability
- * - NO markdown heading markers like ### or ##
- * - Use short bold section titles as plain lines (or just paragraphs)
- * - Do NOT force the same structure every message
- * - Always make it obvious you are answering the *latest* user message
+ * We want ChatGPT-like readability WITHOUT forcing "### headings".
+ * So: markdown, but section titles are plain lines (no #), with whitespace.
  */
-const STYLE_RULES = [
+const STYLE_GUIDE = [
   "Formatting rules (very important):",
   "- Write in Markdown.",
-  "- DO NOT use markdown headings like '#', '##', or '###'. (No heading markers.)",
-  "- If you want section titles, write them as a plain line with **bold** only, e.g. '**Key factors**'.",
-  "- Start every reply with 1–2 short sentences that clearly respond to the user's latest message.",
-  "- Those opening sentences MUST reference the user's latest message directly (paraphrase it).",
-  "- Use blank lines between paragraphs.",
-  "- Use bullet points only when it improves clarity. Avoid long bullet-only answers.",
-  "- Mix short paragraphs + bullets (ChatGPT style).",
-  "- Bold key phrases, numbers, and decisions (use **bold**).",
-  "- Ask at most 1–2 questions at a time.",
-  "- Keep it calm, practical, and scannable.",
+  "- DO NOT use markdown headings that start with # (no '#', '##', '###').",
+  "- If you need section titles, write them as plain text lines like:",
+  "  What I’m hearing",
+  "  Key factors",
+  "  Options",
+  "  Suggested next step",
+  "  Next question",
+  "- Always add a blank line between sections and between paragraphs.",
+  "- Default to 2–5 short paragraphs. Avoid walls of text.",
+  "- Use bullet points only when they genuinely help scanning (usually 3–6 bullets max).",
+  "- Use **bold** sparingly for key numbers/constraints/decisions (don’t bold whole paragraphs).",
+  "- Answer the user’s latest message FIRST (directly), then add structure if helpful.",
+  "- Don’t repeat the same full template every turn. Follow-ups should feel new.",
+  "- Ask at most 1 question at the end (2 max only if essential).",
 ].join("\n");
 
-const CHAT_BEHAVIOR = [
-  "Behavior rules:",
-  "- Do NOT recommend a choice unless explicitly asked to recommend.",
-  "- Do NOT pick a 'winner' unless asked.",
-  "- If the user asks a direct question, answer it directly first (no template).",
-  "- Only introduce structure (options, factors) when the user is doing broader thinking.",
-  "- Avoid repeating the exact same section titles in consecutive replies unless truly needed.",
-  "- If you already gave a structured breakdown earlier, don't repeat it. Instead: update only what changed.",
+const CHAT_BEHAVIOUR = [
+  "Conversation behaviour (very important):",
+  "- This is a back-and-forth. Use prior messages; do not reintroduce the whole framing each time.",
+  "- If the user asks a direct question (e.g. 'can you see my accounts?'), answer it plainly in 1–2 sentences first.",
+  "- If the user provides new numbers/details, reflect them briefly and move forward (don’t restart).",
+  "- Only use 'Options' when there are genuinely multiple paths.",
+  "- Only use 'Key factors' when the answer depends on unknowns or trade-offs.",
+  "- Keep tone calm, practical, and non-salesy.",
 ].join("\n");
 
-const SUMMARY_RULES = [
-  "Summary (capture preview) rules:",
-  "- Keep it short and scannable.",
-  "- Use short paragraphs + a small number of bullets.",
-  "- No markdown headings (no ###). Use **bold** section labels if needed.",
-  "- Include: current leaning (if any), constraints, key considerations, open questions, suggested next step.",
-  "- If unclear, add 1–2 clarifying questions at the end.",
+const SUMMARY_BEHAVIOUR = [
+  "Summaries (capture preview) behaviour:",
+  "- Output a scannable preview that could be saved to the decision.",
+  "- Keep it structured, but again: NO headings with #.",
+  "- Include: current leaning (if any), key constraints, key considerations, open questions, suggested next step, revisit trigger (if obvious).",
 ].join("\n");
 
 function buildSystemPrompt(args: { decisionTitle: string; decisionStatement?: string; mode: Mode }) {
@@ -59,12 +57,28 @@ function buildSystemPrompt(args: { decisionTitle: string; decisionStatement?: st
 
   if (mode === "summarise") {
     return [
-      "You are Keystone — a calm, values-anchored decision partner.",
-      "Task: Create a capture preview from the conversation.",
+      "You are Keystone.",
+      "Task: Create a calm, useful *capture preview* of the conversation.",
+      "Rules:",
+      "- Do NOT recommend a choice unless explicitly asked.",
+      "- Be brief, clear, and scannable.",
       "",
-      SUMMARY_RULES,
+      STYLE_GUIDE,
       "",
-      STYLE_RULES,
+      SUMMARY_BEHAVIOUR,
+      "",
+      "Suggested layout (only if helpful; do not force):",
+      "Snapshot",
+      "",
+      "Key constraints",
+      "",
+      "Key considerations",
+      "",
+      "Open questions",
+      "",
+      "Suggested next step",
+      "",
+      "Revisit trigger",
       "",
       `Decision title: ${decisionTitle}`,
       decisionStatement ? `Decision statement: ${decisionStatement}` : "",
@@ -75,11 +89,16 @@ function buildSystemPrompt(args: { decisionTitle: string; decisionStatement?: st
 
   return [
     "You are Keystone — a calm, values-anchored decision partner.",
-    "You help the user think clearly without overwhelm.",
+    "You are helping the user think, not forcing a decision.",
+    "Rules:",
+    "- Do NOT recommend a choice unless the user asks you to recommend.",
+    "- Do NOT pick a winner unless asked to compare with a winner.",
+    "- Do NOT aggressively optimise unless asked.",
+    "- Ask clarifying questions when needed instead of guessing.",
     "",
-    CHAT_BEHAVIOR,
+    STYLE_GUIDE,
     "",
-    STYLE_RULES,
+    CHAT_BEHAVIOUR,
     "",
     `Decision title: ${decisionTitle}`,
     decisionStatement ? `Decision statement: ${decisionStatement}` : "",
@@ -89,8 +108,8 @@ function buildSystemPrompt(args: { decisionTitle: string; decisionStatement?: st
 }
 
 function buildTranscript(messages: InMsg[]) {
-  // Simple, robust transcript for both modes.
-  return messages.map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`).join("\n\n");
+  // Simple, robust transcript
+  return messages.map((m) => `${m.role === "user" ? "You" : "Keystone"}: ${m.content}`).join("\n\n");
 }
 
 function lastUserText(messages: InMsg[]) {
@@ -133,10 +152,12 @@ export async function POST(req: Request) {
     }
 
     // 🔒 SAFETY INTERCEPT (V1 REQUIRED)
-    const latestUser = lastUserText(safeMessages);
-    const intercept = maybeCrisisIntercept(latestUser);
+    const userText = lastUserText(safeMessages);
+    const intercept = maybeCrisisIntercept(userText);
     if (intercept) {
-      if (mode === "summarise") return NextResponse.json({ summaryText: intercept.content, kind: intercept.kind });
+      if (mode === "summarise") {
+        return NextResponse.json({ summaryText: intercept.content, kind: intercept.kind });
+      }
       return NextResponse.json({ assistantText: intercept.content, kind: intercept.kind });
     }
 
@@ -148,31 +169,23 @@ export async function POST(req: Request) {
 
     const transcript = buildTranscript(safeMessages);
 
-    /**
-     * ✅ Key change:
-     * We explicitly tell the model what the LATEST USER MESSAGE is,
-     * and instruct it to answer that first, then optionally add structure.
-     */
     const userContent =
       mode === "summarise"
         ? [
             "Create a capture preview of this conversation.",
-            "Keep it calm and easy to read.",
-            "No markdown headings (no ###). Use **bold** labels if needed.",
+            "Follow the formatting rules.",
+            "Do not use # headings.",
             "",
             "CONVERSATION:",
             transcript,
           ].join("\n")
         : [
-            "Continue the conversation.",
-            "First, answer the user's latest message directly in 1–2 sentences.",
-            "Then add only the minimum extra structure needed (if any).",
-            "Avoid repeating the same section titles from earlier replies.",
-            "No markdown headings (no ###).",
+            "Respond to the user's latest message in context.",
+            "Answer first, then add light structure only if helpful.",
+            "Follow the formatting rules.",
+            "Do not use # headings.",
             "",
-            `LATEST USER MESSAGE (answer this): ${latestUser || "(none)"}`,
-            "",
-            "CONVERSATION SO FAR:",
+            "CONVERSATION:",
             transcript,
           ].join("\n");
 
@@ -184,7 +197,7 @@ export async function POST(req: Request) {
         { role: "system", content: system },
         { role: "user", content: userContent },
       ],
-      temperature: mode === "summarise" ? 0.2 : 0.55,
+      temperature: mode === "summarise" ? 0.2 : 0.45,
       max_output_tokens: mode === "summarise" ? 520 : 900,
     });
 
@@ -194,7 +207,10 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Empty AI response." }, { status: 502 });
     }
 
-    if (mode === "summarise") return NextResponse.json({ summaryText: text });
+    if (mode === "summarise") {
+      return NextResponse.json({ summaryText: text });
+    }
+
     return NextResponse.json({ assistantText: text });
   } catch (err: any) {
     const message = err?.message ? String(err.message) : "AI request failed.";
