@@ -133,7 +133,7 @@ export function ConversationPanel(props: {
       const { data, error } = await supabase
         .from("decision_conversations")
         .select("messages")
-        .eq("id", auth.user.id)
+        .eq("user_id", auth.user.id) // ✅ correct column
         .eq("decision_id", decisionId)
         .maybeSingle();
 
@@ -403,7 +403,7 @@ export function ConversationPanel(props: {
 
       {/* Messages */}
       <div className="mt-3 max-h-[560px] overflow-auto px-2 py-3 sm:px-4">
-        {loading ? <div className="text-sm text-zinc-600 px-2">Loading…</div> : null}
+        {loading ? <div className="px-2 text-sm text-zinc-600">Loading…</div> : null}
 
         {!loading && messages.length === 0 ? (
           <div className="py-2">
@@ -437,7 +437,7 @@ export function ConversationPanel(props: {
           <div className="mt-6">
             <div className="flex justify-start">
               <div className={[widthAsst, "rounded-3xl bg-zinc-50 px-5 py-4"].join(" ")}>
-                <div className="text-xs text-zinc-500 mb-2">Capture preview</div>
+                <div className="mb-2 text-xs text-zinc-500">Capture preview</div>
                 <MarkdownBubble content={summaryText} />
 
                 <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -469,8 +469,8 @@ export function ConversationPanel(props: {
 
       {/* Composer */}
       <div className="px-2 pb-3 sm:px-4">
-        {status ? <div className="text-xs text-zinc-500 px-2 mb-2">{status}</div> : null}
-        {summaryStatus ? <div className="text-xs text-zinc-500 px-2 mb-2">{summaryStatus}</div> : null}
+        {status ? <div className="mb-2 px-2 text-xs text-zinc-500">{status}</div> : null}
+        {summaryStatus ? <div className="mb-2 px-2 text-xs text-zinc-500">{summaryStatus}</div> : null}
 
         <div className="rounded-2xl bg-zinc-50 p-3">
           <div className="relative">
@@ -512,10 +512,7 @@ export function ConversationPanel(props: {
           </div>
 
           <div className="mt-2 flex flex-wrap items-center gap-2">
-            <Chip onClick={send} title={sending ? "Working…" : "Send"}>
-              {sending ? "Thinking…" : "Send"}
-            </Chip>
-
+            {/* ✅ removed duplicate "Send" chip (arrow + Enter already send) */}
             <Chip onClick={summariseChat} title="Generate a capture preview (nothing commits yet)">
               {summarising ? "Capturing…" : "Capture preview"}
             </Chip>

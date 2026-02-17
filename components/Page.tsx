@@ -24,7 +24,7 @@ export function Page({
 }: PageProps) {
   return (
     <main className={cn("space-y-6", className)}>
-      {(title || subtitle || right) ? (
+      {title || subtitle || right ? (
         <header className="flex flex-wrap items-start justify-between gap-3">
           <div className="space-y-1">
             {title ? <h1 className="text-3xl font-semibold text-zinc-900">{title}</h1> : null}
