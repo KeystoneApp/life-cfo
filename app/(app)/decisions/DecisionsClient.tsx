@@ -195,17 +195,35 @@ function titleFromStatement(statement: string) {
   return s.length > 90 ? `${s.slice(0, 87)}…` : s;
 }
 
-export default function DecisionsClient({ surface = "thinking" }: { surface?: "thinking" | "decisions" }) {
+type DecisionsSurface = "thinking" | "decisions" | "revisit" | "chapters";
+
+export default function DecisionsClient({
+  surface = "decisions",
+}: {
+  surface?: DecisionsSurface;
+}) {
   const router = useRouter();
   const { showToast } = useToast();
   const searchParams = useSearchParams();
   const openFromQuery = searchParams.get("open");
 
-  const pageTitle = surface === "decisions" ? "Decisions" : "Thinking";
+  const pageTitle =
+    surface === "decisions"
+      ? "Decisions"
+      : surface === "thinking"
+      ? "Thinking"
+      : surface === "revisit"
+      ? "Review"
+      : "Chapters";
+
   const pageSubtitle =
     surface === "decisions"
       ? "Bring any money decision here. Talk it through, capture what matters, and save the conclusion — without turning it into a project."
-      : "Work on drafts here. When you’re ready to commit, save it into Decisions.";
+      : surface === "thinking"
+      ? "Work on drafts here. When you’re ready to commit, save it into Decisions."
+      : surface === "revisit"
+      ? "A light review view — just what needs attention, no more."
+      : "Closed decisions live here quietly, still searchable whenever you need them.";
 
   const [highlightId, setHighlightId] = useState<string | null>(null);
   const [animateCardId, setAnimateCardId] = useState<string | null>(null);
