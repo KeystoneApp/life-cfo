@@ -3,7 +3,7 @@
 
 import type * as React from "react";
 import { cn } from "@/lib/cn";
-import { FeedbackPrompt } from "@/components/FeedbackPrompt";
+import FeedbackPrompt from "@/components/FeedbackPrompt";
 
 type PageProps = {
   title?: string;
