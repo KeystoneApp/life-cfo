@@ -46,6 +46,8 @@ type Constellation = { id: string; name: string; sort_order?: number | null };
 
 type Tab = "new" | "active" | "closed";
 
+type SortKey = "newest" | "oldest" | "reviewSoon" | "reviewLate" | "titleAZ" | "titleZA";
+
 /** ✅ decision notes table rows */
 type DecisionNote = {
   id: string;
@@ -187,15 +189,6 @@ function PrimaryActionButton(props: {
   );
 }
 
-function buildUrl(tab: Tab, open?: string | null, work?: boolean) {
-  const sp = new URLSearchParams();
-  sp.set("tab", tab);
-  if (open) sp.set("open", open);
-  if (work) sp.set("work", "1");
-  const s = sp.toString();
-  return s ? `/decisions?${s}` : "/decisions";
-}
-
 function isReviewDue(review_at: string | null) {
   const ms = safeMs(review_at);
   if (!ms) return false;
@@ -226,12 +219,7 @@ function FilterIconButton({
       aria-label="Filters"
     >
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <path
-          d="M3 5h18l-7 8v5l-4 2v-7L3 5z"
-          stroke="currentColor"
-          strokeWidth="1.8"
-          strokeLinejoin="round"
-        />
+        <path d="M3 5h18l-7 8v5l-4 2v-7L3 5z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
       </svg>
 
       {count && count > 0 ? (
@@ -243,6 +231,81 @@ function FilterIconButton({
   );
 }
 
+function SortIconButton({
+  active,
+  onClick,
+  title,
+}: {
+  active?: boolean;
+  onClick?: () => void;
+  title?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      className={[
+        "inline-flex h-10 items-center justify-center gap-2 rounded-full border px-3 transition",
+        active ? "border-zinc-300 bg-zinc-50" : "border-zinc-200 bg-white hover:bg-zinc-50",
+        "text-zinc-700",
+      ].join(" ")}
+      aria-label="Sort"
+    >
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M7 6h14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        <path d="M7 12h10" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        <path d="M7 18h6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        <path d="M4 4v16" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      </svg>
+      <span className="hidden sm:inline text-sm">Sort</span>
+    </button>
+  );
+}
+
+function buildUrl(
+  tab: Tab,
+  opts?: {
+    open?: string | null;
+    work?: boolean;
+    q?: string;
+    sort?: SortKey;
+    domain?: string | null;
+    group?: string | null;
+    hasReview?: boolean;
+    reviewDue?: boolean;
+  }
+) {
+  const sp = new URLSearchParams();
+  sp.set("tab", tab);
+
+  if (opts?.open) sp.set("open", opts.open);
+  if (opts?.work) sp.set("work", "1");
+
+  const q = (opts?.q ?? "").trim();
+  if (q) sp.set("q", q);
+
+  if (opts?.sort && opts.sort !== "newest") sp.set("sort", opts.sort);
+
+  if (opts?.domain) sp.set("domain", opts.domain);
+  if (opts?.group) sp.set("group", opts.group);
+
+  if (opts?.hasReview) sp.set("hasReview", "1");
+  if (opts?.reviewDue) sp.set("reviewDue", "1");
+
+  const s = sp.toString();
+  return s ? `/decisions?${s}` : "/decisions";
+}
+
+const sortLabel: Record<SortKey, string> = {
+  newest: "Newest",
+  oldest: "Oldest",
+  reviewSoon: "Review soonest",
+  reviewLate: "Review latest",
+  titleAZ: "Title A–Z",
+  titleZA: "Title Z–A",
+};
+
 export default function DecisionsClient() {
   const router = useRouter();
   const { showToast } = useToast();
@@ -253,6 +316,14 @@ export default function DecisionsClient() {
 
   const openFromQuery = searchParams.get("open");
   const workFromQuery = searchParams.get("work") === "1";
+
+  // URL state (initial)
+  const initialQ = searchParams.get("q") ?? "";
+  const initialSort = (searchParams.get("sort") as SortKey | null) ?? "newest";
+  const initialDomain = searchParams.get("domain");
+  const initialGroup = searchParams.get("group");
+  const initialHasReview = searchParams.get("hasReview") === "1";
+  const initialReviewDue = searchParams.get("reviewDue") === "1";
 
   // Ensure /decisions defaults to tab=new
   useEffect(() => {
@@ -273,13 +344,16 @@ export default function DecisionsClient() {
   const [statusLine, setStatusLine] = useState<string>("Loading…");
 
   const [items, setItems] = useState<Decision[]>([]);
+  const [totalCount, setTotalCount] = useState<number>(0);
+
   const [domains, setDomains] = useState<Domain[]>([]);
   const [constellations, setConstellations] = useState<Constellation[]>([]);
 
-  // Filters (now driven via filter icon panel)
-  const [activeDomainId, setActiveDomainId] = useState<string | null>(null);
-  const [activeConstellationId, setActiveConstellationId] = useState<string | null>(null);
-  const [hasReviewDateOnly, setHasReviewDateOnly] = useState<boolean>(false);
+  // Filters (icon panel)
+  const [activeDomainId, setActiveDomainId] = useState<string | null>(initialDomain ?? null);
+  const [activeConstellationId, setActiveConstellationId] = useState<string | null>(initialGroup ?? null);
+  const [hasReviewDateOnly, setHasReviewDateOnly] = useState<boolean>(initialHasReview);
+  const [reviewDueOnly, setReviewDueOnly] = useState<boolean>(initialReviewDue);
 
   const [domainByDecision, setDomainByDecision] = useState<Record<string, string | null>>({});
   const [constellationsByDecision, setConstellationsByDecision] = useState<Record<string, string[]>>({});
@@ -294,12 +368,30 @@ export default function DecisionsClient() {
 
   const [confirmDeleteForId, setConfirmDeleteForId] = useState<string | null>(null);
 
-  // Search
-  const [searchText, setSearchText] = useState<string>("");
+  // Search (debounced)
+  const [searchText, setSearchText] = useState<string>(initialQ);
+  const [searchDebounced, setSearchDebounced] = useState<string>(initialQ);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Sort
+  const [sortKey, setSortKey] = useState<SortKey>(
+    initialSort === "newest" ||
+      initialSort === "oldest" ||
+      initialSort === "reviewSoon" ||
+      initialSort === "reviewLate" ||
+      initialSort === "titleAZ" ||
+      initialSort === "titleZA"
+      ? initialSort
+      : "newest"
+  );
 
   // Filter panel (icon)
   const [filterOpen, setFilterOpen] = useState<boolean>(false);
   const filterBoxRef = useRef<HTMLDivElement | null>(null);
+
+  // Sort panel
+  const [sortOpen, setSortOpen] = useState<boolean>(false);
+  const sortBoxRef = useRef<HTMLDivElement | null>(null);
 
   // Page 1 new decision input
   const newRef = useRef<HTMLTextAreaElement | null>(null);
@@ -321,6 +413,10 @@ export default function DecisionsClient() {
   const DEFAULT_LIMIT = 5;
   const [showAll, setShowAll] = useState(false);
 
+  // server pagination
+  const PAGE_SIZE = 50;
+  const [page, setPage] = useState(1);
+
   /** ✅ decision notes state (per open decision) */
   const [notesByDecisionId, setNotesByDecisionId] = useState<Record<string, DecisionNote[]>>({});
   const [notesLoadingByDecisionId, setNotesLoadingByDecisionId] = useState<Record<string, boolean>>({});
@@ -333,6 +429,77 @@ export default function DecisionsClient() {
     reloadTimerRef.current = window.setTimeout(() => void load({ silent: true }), 250);
   };
 
+  // debounce search
+  useEffect(() => {
+    const t = window.setTimeout(() => setSearchDebounced(searchText), 200);
+    return () => window.clearTimeout(t);
+  }, [searchText]);
+
+  // Cmd/Ctrl+K focuses search
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      const key = (e.key || "").toLowerCase();
+      const cmdOrCtrl = e.metaKey || e.ctrlKey;
+
+      if (cmdOrCtrl && key === "k") {
+        e.preventDefault();
+        searchInputRef.current?.focus?.();
+      }
+      if (key === "escape") {
+        setFilterOpen(false);
+        setSortOpen(false);
+      }
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  // Close popovers on outside click
+  useEffect(() => {
+    function onDocClick(e: MouseEvent) {
+      const t = e.target as Node;
+
+      if (filterBoxRef.current && !filterBoxRef.current.contains(t)) setFilterOpen(false);
+      if (sortBoxRef.current && !sortBoxRef.current.contains(t)) setSortOpen(false);
+    }
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, []);
+
+  // keep URL in sync (without changing anything else)
+  const desiredUrl = useMemo(() => {
+    return buildUrl(tab, {
+      open: openFromQuery ?? openId ?? null,
+      work: (openFromQuery ? workFromQuery : workForId === (openFromQuery ?? openId ?? "")) ? true : false,
+      q: searchDebounced,
+      sort: sortKey,
+      domain: activeDomainId,
+      group: activeConstellationId,
+      hasReview: hasReviewDateOnly,
+      reviewDue: reviewDueOnly,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    tab,
+    openFromQuery,
+    workFromQuery,
+    openId,
+    workForId,
+    searchDebounced,
+    sortKey,
+    activeDomainId,
+    activeConstellationId,
+    hasReviewDateOnly,
+    reviewDueOnly,
+  ]);
+
+  useEffect(() => {
+    // Avoid replace loops: only replace if params differ.
+    const current = `/decisions?${searchParams.toString()}`;
+    if (current !== desiredUrl) router.replace(desiredUrl);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [desiredUrl]);
+
   const load = async (opts?: { silent?: boolean }) => {
     const silent = !!opts?.silent;
     if (!silent) setStatusLine("Loading…");
@@ -341,6 +508,7 @@ export default function DecisionsClient() {
     if (authError || !auth?.user) {
       setUserId(null);
       setItems([]);
+      setTotalCount(0);
       setStatusLine("Not signed in.");
       return;
     }
@@ -348,18 +516,54 @@ export default function DecisionsClient() {
     const uid = auth.user.id;
     setUserId(uid);
 
-    // Load decisions for this tab
-    const q = supabase
+    // ✅ Decisions query: push search + sort + pagination into Supabase (filters remain client-side for now)
+    let q = supabase
       .from("decisions")
-      .select("id,user_id,title,context,status,created_at,decided_at,review_at,origin,framed_at,attachments")
-      .eq("user_id", uid)
-      .order("created_at", { ascending: false });
+      // count exact enables “Load more” correctly
+      .select("id,user_id,title,context,status,created_at,decided_at,review_at,origin,framed_at,attachments", { count: "exact" })
+      .eq("user_id", uid);
 
-    const { data, error } =
-      tab === "active" || tab === "new" ? await q.neq("status", "chapter") : await q.eq("status", "chapter");
+    // Tab scope
+    if (tab === "active" || tab === "new") q = q.neq("status", "chapter");
+    if (tab === "closed") q = q.eq("status", "chapter");
+
+    // Search (server-side)
+    const t = (searchDebounced ?? "").trim();
+    if (t) {
+      // match title OR context
+      const safe = t.replace(/[%_]/g, "\\$&"); // escape % and _ for ilike patterns
+      q = q.or(`title.ilike.%${safe}%,context.ilike.%${safe}%`);
+    }
+
+    // Sort (server-side)
+    // Notes:
+    // - review_at sorts use nulls last
+    // - secondary sort keeps stable ordering
+    if (sortKey === "newest") {
+      q = q.order("created_at", { ascending: false });
+    } else if (sortKey === "oldest") {
+      q = q.order("created_at", { ascending: true });
+    } else if (sortKey === "reviewSoon") {
+      q = q.order("review_at", { ascending: true, nullsFirst: false }).order("created_at", { ascending: false });
+    } else if (sortKey === "reviewLate") {
+      q = q.order("review_at", { ascending: false, nullsFirst: false }).order("created_at", { ascending: false });
+    } else if (sortKey === "titleAZ") {
+      q = q.order("title", { ascending: true }).order("created_at", { ascending: false });
+    } else if (sortKey === "titleZA") {
+      q = q.order("title", { ascending: false }).order("created_at", { ascending: false });
+    } else {
+      q = q.order("created_at", { ascending: false });
+    }
+
+    // Pagination range
+    const to = page * PAGE_SIZE - 1;
+    q = q.range(0, to);
+
+    const { data, error, count } = await q;
 
     if (error) {
       setItems([]);
+      setTotalCount(0);
       setStatusLine(`Error: ${error.message}`);
       return;
     }
@@ -380,16 +584,13 @@ export default function DecisionsClient() {
     }));
 
     setItems(list);
+    setTotalCount(typeof count === "number" ? count : list.length);
     setStatusLine(list.length === 0 ? "All clear." : "Loaded.");
 
     // Labels
     const [domRes, conRes] = await Promise.all([
       supabase.from("domains").select("id,name,sort_order").eq("user_id", uid).order("sort_order", { ascending: true }),
-      supabase
-        .from("constellations")
-        .select("id,name,sort_order")
-        .eq("user_id", uid)
-        .order("sort_order", { ascending: true }),
+      supabase.from("constellations").select("id,name,sort_order").eq("user_id", uid).order("sort_order", { ascending: true }),
     ]);
 
     if (!domRes.error) {
@@ -420,11 +621,7 @@ export default function DecisionsClient() {
     if (decisionIds.length > 0) {
       const [ddRes, ciRes] = await Promise.all([
         supabase.from("decision_domains").select("decision_id,domain_id").eq("user_id", uid).in("decision_id", decisionIds),
-        supabase
-          .from("constellation_items")
-          .select("decision_id,constellation_id")
-          .eq("user_id", uid)
-          .in("decision_id", decisionIds),
+        supabase.from("constellation_items").select("decision_id,constellation_id").eq("user_id", uid).in("decision_id", decisionIds),
       ]);
 
       if (!ddRes.error) {
@@ -448,6 +645,13 @@ export default function DecisionsClient() {
     }
   };
 
+  // reset paging when tab / search / sort change (server-side concerns)
+  useEffect(() => {
+    setPage(1);
+    setShowAll(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, searchDebounced, sortKey]);
+
   useEffect(() => {
     void load();
     return () => {
@@ -455,7 +659,7 @@ export default function DecisionsClient() {
       reloadTimerRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab]);
+  }, [tab, page, searchDebounced, sortKey]);
 
   // Realtime decisions
   useEffect(() => {
@@ -474,16 +678,6 @@ export default function DecisionsClient() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId, tab]);
 
-  // Close filter panel on outside click
-  useEffect(() => {
-    function onDocClick(e: MouseEvent) {
-      if (!filterBoxRef.current) return;
-      if (!filterBoxRef.current.contains(e.target as Node)) setFilterOpen(false);
-    }
-    document.addEventListener("mousedown", onDocClick);
-    return () => document.removeEventListener("mousedown", onDocClick);
-  }, []);
-
   // Apply query open/work
   useEffect(() => {
     if (tab !== "active") return;
@@ -500,7 +694,6 @@ export default function DecisionsClient() {
 
     if (workFromQuery && openFromQuery) {
       setWorkForId(openFromQuery);
-      // ✅ keep anchored at top of card (no scroll to chat)
       window.setTimeout(() => {
         const el = cardRefs.current[openFromQuery];
         el?.scrollIntoView?.({ behavior: "smooth", block: "start" });
@@ -662,47 +855,27 @@ export default function DecisionsClient() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId, tab, openDecision?.id]);
 
+  const filterCount = useMemo(() => {
+    return (activeDomainId ? 1 : 0) + (activeConstellationId ? 1 : 0) + (hasReviewDateOnly ? 1 : 0) + (reviewDueOnly ? 1 : 0);
+  }, [activeDomainId, activeConstellationId, hasReviewDateOnly, reviewDueOnly]);
+
+  const sortIsActive = sortKey !== "newest";
+
   const filteredItems = useMemo(() => {
+    // items are already server-searched + server-sorted + paged.
+    // Filters remain client-side for now.
     let list = items;
 
     if (tab === "closed") list = list.filter((d) => d.status === "chapter");
     if (tab === "active" || tab === "new") list = list.filter((d) => d.status !== "chapter");
 
-    const t = (searchText ?? "").trim().toLowerCase();
-    if (t) {
-      list = list.filter((d) => {
-        const ctx = (d.context ?? "").toLowerCase();
-        return d.title.toLowerCase().includes(t) || ctx.includes(t);
-      });
-    }
-
-    // Filters via icon panel (active + closed)
     if (activeDomainId) list = list.filter((d) => (domainByDecision[d.id] ?? null) === activeDomainId);
     if (activeConstellationId) list = list.filter((d) => (constellationsByDecision[d.id] ?? []).includes(activeConstellationId));
     if (hasReviewDateOnly) list = list.filter((d) => !!d.review_at);
-
-    // Sorting:
-    // - If "Has review date" is enabled: order by review_at (soonest first)
-    // - Otherwise: keep created_at desc (matches load order)
-    if (hasReviewDateOnly) {
-      list = [...list].sort((a, b) => {
-        const am = safeMs(a.review_at) ?? 0;
-        const bm = safeMs(b.review_at) ?? 0;
-        return am - bm;
-      });
-    }
+    if (reviewDueOnly) list = list.filter((d) => isReviewDue(d.review_at));
 
     return list;
-  }, [
-    items,
-    tab,
-    searchText,
-    activeDomainId,
-    activeConstellationId,
-    hasReviewDateOnly,
-    domainByDecision,
-    constellationsByDecision,
-  ]);
+  }, [items, tab, activeDomainId, activeConstellationId, hasReviewDateOnly, reviewDueOnly, domainByDecision, constellationsByDecision]);
 
   const openItem = tab === "active" && openId ? filteredItems.find((d) => d.id === openId) ?? null : null;
   const others = useMemo(() => filteredItems.filter((d) => d.id !== openId), [filteredItems, openId]);
@@ -712,7 +885,17 @@ export default function DecisionsClient() {
     return others.slice(0, DEFAULT_LIMIT);
   }, [others, showAll]);
 
-  const hasMore = others.length > DEFAULT_LIMIT;
+  const hasMoreInUI = others.length > DEFAULT_LIMIT;
+
+  const hasServerMore = useMemo(() => {
+    // if totalCount is exact from server: loaded fewer than total implies more
+    return items.length < totalCount;
+  }, [items.length, totalCount]);
+
+  const loadMore = () => {
+    if (!hasServerMore) return;
+    setPage((p) => p + 1);
+  };
 
   // (kept) simple createNewDecision - no longer used by Page 1 UI after framing patch, but harmless to keep
   const createNewDecision = async () => {
@@ -757,7 +940,7 @@ export default function DecisionsClient() {
       setNewText("");
       showToast({ message: "Saved to Active Decisions." }, 1800);
 
-      router.push(buildUrl("active", id, false));
+      router.push(buildUrl("active", { open: id, work: false, q: searchDebounced, sort: sortKey, domain: activeDomainId, group: activeConstellationId, hasReview: hasReviewDateOnly, reviewDue: reviewDueOnly }));
     } finally {
       setCreatingNew(false);
     }
@@ -859,7 +1042,7 @@ export default function DecisionsClient() {
       setNewStep("input");
 
       showToast({ message: "Saved to Active Decisions." }, 1500);
-      router.push(buildUrl("active", id, false));
+      router.push(buildUrl("active", { open: id, work: false, q: searchDebounced, sort: sortKey, domain: activeDomainId, group: activeConstellationId, hasReview: hasReviewDateOnly, reviewDue: reviewDueOnly }));
     } catch (e: any) {
       showToast({ message: e?.message ?? "Save failed." }, 3500);
     } finally {
@@ -916,7 +1099,7 @@ export default function DecisionsClient() {
     }
 
     showToast({ message: "Moved to Closed." }, 1800);
-    router.push(buildUrl("active"));
+    router.push(buildUrl("active", { q: searchDebounced, sort: sortKey, domain: activeDomainId, group: activeConstellationId, hasReview: hasReviewDateOnly, reviewDue: reviewDueOnly }));
   };
 
   const reopenDecision = async (d: Decision) => {
@@ -932,7 +1115,7 @@ export default function DecisionsClient() {
     }
 
     showToast({ message: "Re-opened." }, 1600);
-    router.push(buildUrl("active", d.id, false));
+    router.push(buildUrl("active", { open: d.id, work: false, q: searchDebounced, sort: sortKey, domain: activeDomainId, group: activeConstellationId, hasReview: hasReviewDateOnly, reviewDue: reviewDueOnly }));
   };
 
   const setReviewAt = async (d: Decision, review_at: string | null) => {
@@ -951,20 +1134,16 @@ export default function DecisionsClient() {
     showToast({ message: review_at ? "Review scheduled." : "Review cleared." }, 1600);
   };
 
-  const filterCount = useMemo(() => {
-    return (activeDomainId ? 1 : 0) + (activeConstellationId ? 1 : 0) + (hasReviewDateOnly ? 1 : 0);
-  }, [activeDomainId, activeConstellationId, hasReviewDateOnly]);
-
   const TopTabs = () => (
     <div className="flex justify-center">
       <div className="flex flex-wrap items-center gap-2">
         <Chip active={tab === "new"} onClick={() => router.push(buildUrl("new"))} title="New decision">
           New Decision
         </Chip>
-        <Chip active={tab === "active"} onClick={() => router.push(buildUrl("active"))} title="Active decisions">
+        <Chip active={tab === "active"} onClick={() => router.push(buildUrl("active", { q: searchDebounced, sort: sortKey, domain: activeDomainId, group: activeConstellationId, hasReview: hasReviewDateOnly, reviewDue: reviewDueOnly }))} title="Active decisions">
           Active Decisions
         </Chip>
-        <Chip active={tab === "closed"} onClick={() => router.push(buildUrl("closed"))} title="Closed decisions">
+        <Chip active={tab === "closed"} onClick={() => router.push(buildUrl("closed", { q: searchDebounced, sort: sortKey, domain: activeDomainId, group: activeConstellationId, hasReview: hasReviewDateOnly, reviewDue: reviewDueOnly }))} title="Closed decisions">
           Closed Decisions
         </Chip>
       </div>
@@ -988,7 +1167,20 @@ export default function DecisionsClient() {
               setOpenId(d.id);
               setWorkForId(null);
               setConfirmDeleteForId(null);
-              router.push(buildUrl("active", d.id, false));
+
+              router.push(
+                buildUrl("active", {
+                  open: d.id,
+                  work: false,
+                  q: searchDebounced,
+                  sort: sortKey,
+                  domain: activeDomainId,
+                  group: activeConstellationId,
+                  hasReview: hasReviewDateOnly,
+                  reviewDue: reviewDueOnly,
+                })
+              );
+
               window.setTimeout(() => {
                 const el = cardRefs.current[d.id];
                 el?.scrollIntoView?.({ behavior: "smooth", block: "start" });
@@ -1036,8 +1228,19 @@ export default function DecisionsClient() {
             <PrimaryActionButton
               onClick={() => {
                 setWorkForId(d.id);
-                router.push(buildUrl("active", d.id, true));
-                // ✅ anchored at top of card (no scroll to chat)
+                router.push(
+                  buildUrl("active", {
+                    open: d.id,
+                    work: true,
+                    q: searchDebounced,
+                    sort: sortKey,
+                    domain: activeDomainId,
+                    group: activeConstellationId,
+                    hasReview: hasReviewDateOnly,
+                    reviewDue: reviewDueOnly,
+                  })
+                );
+
                 window.setTimeout(() => {
                   const el = cardRefs.current[d.id];
                   el?.scrollIntoView?.({ behavior: "smooth", block: "start" });
@@ -1062,7 +1265,18 @@ export default function DecisionsClient() {
               autoStartToken={1}
               onClose={() => {
                 setWorkForId(null);
-                router.push(buildUrl("active", d.id, false));
+                router.push(
+                  buildUrl("active", {
+                    open: d.id,
+                    work: false,
+                    q: searchDebounced,
+                    sort: sortKey,
+                    domain: activeDomainId,
+                    group: activeConstellationId,
+                    hasReview: hasReviewDateOnly,
+                    reviewDue: reviewDueOnly,
+                  })
+                );
               }}
               onSummarySaved={() => void reloadSummaries(d.id)}
             />
@@ -1172,13 +1386,7 @@ export default function DecisionsClient() {
           {/* Files */}
           <div className="rounded-2xl border border-zinc-200 bg-white p-3">
             {userId ? (
-              <AttachmentsBlock
-                userId={userId}
-                decisionId={d.id}
-                title={allAtt.length ? `Files (${allAtt.length})` : "Files"}
-                bucket="captures"
-                initial={allAtt}
-              />
+              <AttachmentsBlock userId={userId} decisionId={d.id} title={allAtt.length ? `Files (${allAtt.length})` : "Files"} bucket="captures" initial={allAtt} />
             ) : (
               <div className="text-sm text-zinc-600">Files unavailable.</div>
             )}
@@ -1250,7 +1458,7 @@ export default function DecisionsClient() {
                   setWorkForId(null);
                   setConfirmDeleteForId(null);
                   cancelEditNote();
-                  router.push(buildUrl("active"));
+                  router.push(buildUrl("active", { q: searchDebounced, sort: sortKey, domain: activeDomainId, group: activeConstellationId, hasReview: hasReviewDateOnly, reviewDue: reviewDueOnly }));
                 }}
                 title="Hide decision"
               >
@@ -1272,15 +1480,68 @@ export default function DecisionsClient() {
   };
 
   const shouldShowStatusLine =
-    statusLine &&
-    (statusLine.startsWith("Error:") || statusLine === "Not signed in." || statusLine === "Loading…");
+    statusLine && (statusLine.startsWith("Error:") || statusLine === "Not signed in." || statusLine === "Loading…");
+
+  const ActiveFilterChips = () => {
+    const any = filterCount > 0 || sortIsActive || !!(searchDebounced ?? "").trim();
+    if (!any) return null;
+
+    const areaName = activeDomainId ? domains.find((d) => d.id === activeDomainId)?.name ?? "Area" : "";
+    const groupName = activeConstellationId ? constellations.find((c) => c.id === activeConstellationId)?.name ?? "Group" : "";
+
+    const ChipPill = ({ label, onClear }: { label: string; onClear: () => void }) => (
+      <button
+        type="button"
+        onClick={onClear}
+        className="inline-flex items-center gap-2 rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs text-zinc-700 hover:bg-zinc-50"
+        title="Clear"
+      >
+        <span className="truncate max-w-[220px]">{label}</span>
+        <span className="text-zinc-400">×</span>
+      </button>
+    );
+
+    return (
+      <div className="flex flex-wrap items-center gap-2 px-1">
+        {(searchDebounced ?? "").trim() ? <ChipPill label={`Search: ${(searchDebounced ?? "").trim()}`} onClear={() => setSearchText("")} /> : null}
+        {sortIsActive ? <ChipPill label={`Sort: ${sortLabel[sortKey]}`} onClear={() => setSortKey("newest")} /> : null}
+        {activeDomainId ? <ChipPill label={`Area: ${areaName}`} onClear={() => setActiveDomainId(null)} /> : null}
+        {activeConstellationId ? <ChipPill label={`Group: ${groupName}`} onClear={() => setActiveConstellationId(null)} /> : null}
+        {hasReviewDateOnly ? <ChipPill label="Has review date" onClear={() => setHasReviewDateOnly(false)} /> : null}
+        {reviewDueOnly ? <ChipPill label="Review due" onClear={() => setReviewDueOnly(false)} /> : null}
+
+        {(filterCount > 0 || sortIsActive || (searchDebounced ?? "").trim()) ? (
+          <button
+            type="button"
+            onClick={() => {
+              setSearchText("");
+              setSortKey("newest");
+              setActiveDomainId(null);
+              setActiveConstellationId(null);
+              setHasReviewDateOnly(false);
+              setReviewDueOnly(false);
+              setFilterOpen(false);
+              setSortOpen(false);
+            }}
+            className="ml-1 inline-flex items-center rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs text-zinc-700 hover:bg-zinc-50"
+            title="Clear all"
+          >
+            Clear all
+          </button>
+        ) : null}
+      </div>
+    );
+  };
 
   const FilterPanel = () => (
     <div ref={filterBoxRef} className="relative">
       <FilterIconButton
         active={filterOpen || filterCount > 0}
         count={filterCount > 0 ? filterCount : undefined}
-        onClick={() => setFilterOpen((v) => !v)}
+        onClick={() => {
+          setFilterOpen((v) => !v);
+          setSortOpen(false);
+        }}
         title="Filters"
       />
 
@@ -1295,6 +1556,7 @@ export default function DecisionsClient() {
                     setActiveDomainId(null);
                     setActiveConstellationId(null);
                     setHasReviewDateOnly(false);
+                    setReviewDueOnly(false);
                   }}
                   title="Clear filters"
                 >
@@ -1308,6 +1570,27 @@ export default function DecisionsClient() {
           </div>
 
           <div className="px-4 pb-4 space-y-4">
+            {/* quick toggles */}
+            <div className="space-y-2">
+              <div className="text-xs font-semibold text-zinc-500">Quick</div>
+              <div className="flex flex-wrap gap-2">
+                <Chip
+                  active={reviewDueOnly}
+                  onClick={() => setReviewDueOnly((v) => !v)}
+                  title="Show only decisions that are due for review"
+                >
+                  Review due
+                </Chip>
+                <Chip
+                  active={hasReviewDateOnly}
+                  onClick={() => setHasReviewDateOnly((v) => !v)}
+                  title="Show only decisions with a review date"
+                >
+                  Has review date
+                </Chip>
+              </div>
+            </div>
+
             <div className="space-y-2">
               <div className="text-xs font-semibold text-zinc-500">Area</div>
               <div className="flex flex-wrap gap-2">
@@ -1329,41 +1612,84 @@ export default function DecisionsClient() {
                   All
                 </Chip>
                 {constellations.map((c) => (
-                  <Chip
-                    key={c.id}
-                    active={activeConstellationId === c.id}
-                    onClick={() => setActiveConstellationId(c.id)}
-                    title={c.name}
-                  >
+                  <Chip key={c.id} active={activeConstellationId === c.id} onClick={() => setActiveConstellationId(c.id)} title={c.name}>
                     {c.name}
                   </Chip>
                 ))}
               </div>
             </div>
 
-            <div className="space-y-2">
-              <div className="text-xs font-semibold text-zinc-500">Review</div>
-              <div className="flex flex-wrap gap-2">
-                <Chip
-                  active={hasReviewDateOnly}
-                  onClick={() => setHasReviewDateOnly((v) => !v)}
-                  title="Show only decisions with a review date"
-                >
-                  Has review date
-                </Chip>
+            {(hasReviewDateOnly || reviewDueOnly) ? (
+              <div className="text-xs text-zinc-500">
+                Tip: Use Sort → <span className="font-medium">Review soonest</span> to line them up.
               </div>
-
-              {hasReviewDateOnly ? (
-                <div className="text-xs text-zinc-500">
-                  Sorted by review date (soonest first).
-                </div>
-              ) : null}
-            </div>
+            ) : null}
           </div>
         </div>
       ) : null}
     </div>
   );
+
+  const SortPanel = () => (
+    <div ref={sortBoxRef} className="relative">
+      <SortIconButton
+        active={sortOpen || sortIsActive}
+        onClick={() => {
+          setSortOpen((v) => !v);
+          setFilterOpen(false);
+        }}
+        title="Sort"
+      />
+
+      {sortOpen ? (
+        <div className="absolute right-0 z-50 mt-2 w-[260px] overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm">
+          <div className="flex items-center justify-between gap-2 px-4 py-3">
+            <div className="text-sm font-semibold text-zinc-900">Sort</div>
+            <div className="flex items-center gap-2">
+              {sortIsActive ? (
+                <Chip onClick={() => setSortKey("newest")} title="Reset sort">
+                  Reset
+                </Chip>
+              ) : null}
+              <Chip onClick={() => setSortOpen(false)} title="Close sort">
+                Done
+              </Chip>
+            </div>
+          </div>
+
+          <div className="px-4 pb-4 space-y-2">
+            {(
+              [
+                ["newest", "Newest"],
+                ["oldest", "Oldest"],
+                ["reviewSoon", "Review soonest"],
+                ["reviewLate", "Review latest"],
+                ["titleAZ", "Title A–Z"],
+                ["titleZA", "Title Z–A"],
+              ] as Array<[SortKey, string]>
+            ).map(([k, label]) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => setSortKey(k)}
+                className={[
+                  "w-full rounded-2xl border px-3 py-2 text-left text-sm transition",
+                  sortKey === k ? "border-zinc-300 bg-zinc-50 text-zinc-900" : "border-zinc-200 bg-white hover:bg-zinc-50 text-zinc-700",
+                ].join(" ")}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+
+  const searchPlaceholder = useMemo(() => {
+    const within = filterCount > 0 ? "Search within results…" : tab === "closed" ? "Search closed decisions…" : "Search decisions…";
+    return within;
+  }, [filterCount, tab]);
 
   return (
     <Page title={pageTitle} subtitle={pageSubtitle} right={null}>
@@ -1482,7 +1808,7 @@ export default function DecisionsClient() {
                   {framingBusy ? "Clarifying…" : "Next"}
                 </PrimaryActionButton>
 
-                <Chip onClick={() => router.push(buildUrl("active"))} title="Go to Active Decisions">
+                <Chip onClick={() => router.push(buildUrl("active", { q: searchDebounced, sort: sortKey, domain: activeDomainId, group: activeConstellationId, hasReview: hasReviewDateOnly, reviewDue: reviewDueOnly }))} title="Go to Active Decisions">
                   Active Decisions
                 </Chip>
               </div>
@@ -1492,19 +1818,23 @@ export default function DecisionsClient() {
 
         {/* Page 2: Active Decisions */}
         {tab === "active" ? (
-          <div className="space-y-4">
+          <div className="space-y-3">
             <div className="rounded-2xl border border-zinc-200 bg-white p-3">
               <div className="flex items-center gap-2">
                 <input
+                  ref={searchInputRef}
                   value={searchText}
                   onChange={(e) => setSearchText(e.target.value)}
-                  placeholder="Search decisions…"
+                  placeholder={searchPlaceholder}
                   className="h-10 w-full rounded-full border border-zinc-200 bg-white px-4 text-sm text-zinc-800 outline-none focus:ring-2 focus:ring-zinc-200"
                 />
 
+                <SortPanel />
                 <FilterPanel />
               </div>
             </div>
+
+            <ActiveFilterChips />
 
             {shouldShowStatusLine ? <div className="text-xs text-zinc-500">{statusLine}</div> : null}
 
@@ -1528,7 +1858,7 @@ export default function DecisionsClient() {
                   <div className="flex items-center justify-between gap-3">
                     <div className="text-xs font-semibold text-zinc-500">{openItem ? "Other decisions" : "Decisions"}</div>
 
-                    {hasMore ? (
+                    {hasMoreInUI ? (
                       <div className="flex items-center gap-2">
                         <Chip onClick={() => setShowAll((v) => !v)}>{showAll ? "Show less" : "Show all"}</Chip>
                         {!showAll ? (
@@ -1540,7 +1870,19 @@ export default function DecisionsClient() {
                     ) : null}
                   </div>
 
-                  <div className="rounded-2xl border border-zinc-200 bg-white">{visibleOthers.map((d) => <DecisionRow key={d.id} d={d} />)}</div>
+                  <div className="rounded-2xl border border-zinc-200 bg-white">
+                    {visibleOthers.map((d) => (
+                      <DecisionRow key={d.id} d={d} />
+                    ))}
+                  </div>
+
+                  {showAll && hasServerMore ? (
+                    <div className="flex items-center justify-center pt-2">
+                      <Chip onClick={loadMore} title="Load more decisions">
+                        Load more
+                      </Chip>
+                    </div>
+                  ) : null}
                 </div>
               </div>
             )}
@@ -1549,18 +1891,23 @@ export default function DecisionsClient() {
 
         {/* Page 3: Closed Decisions */}
         {tab === "closed" ? (
-          <div className="space-y-4">
+          <div className="space-y-3">
             <div className="rounded-2xl border border-zinc-200 bg-white p-3">
               <div className="flex items-center gap-2">
                 <input
+                  ref={searchInputRef}
                   value={searchText}
                   onChange={(e) => setSearchText(e.target.value)}
-                  placeholder="Search closed decisions…"
+                  placeholder={searchPlaceholder}
                   className="h-10 w-full rounded-full border border-zinc-200 bg-white px-4 text-sm text-zinc-800 outline-none focus:ring-2 focus:ring-zinc-200"
                 />
+
+                <SortPanel />
                 <FilterPanel />
               </div>
             </div>
+
+            <ActiveFilterChips />
 
             {shouldShowStatusLine ? <div className="text-xs text-zinc-500">{statusLine}</div> : null}
 
@@ -1588,9 +1935,25 @@ export default function DecisionsClient() {
                 ))}
               </div>
             )}
+
+            {hasServerMore ? (
+              <div className="flex items-center justify-center pt-2">
+                <Chip onClick={loadMore} title="Load more decisions">
+                  Load more
+                </Chip>
+              </div>
+            ) : null}
           </div>
         ) : null}
       </div>
     </Page>
   );
 }
+
+/**
+ * SQL needed: none.
+ *
+ * Notes:
+ * - Search + Sort + Pagination now happen in the Supabase decisions query.
+ * - Domain/Group/Review filters remain client-side (as requested).
+ */
