@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ReactNode } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { Page } from "@/components/Page";
@@ -47,6 +46,16 @@ type Constellation = { id: string; name: string; sort_order?: number | null };
 
 type Tab = "new" | "active" | "closed";
 
+/** ✅ NEW: decision notes table rows */
+type DecisionNote = {
+  id: string;
+  user_id: string;
+  decision_id: string;
+  body: string;
+  created_at: string;
+  updated_at: string | null;
+};
+
 function safeMs(iso: string | null | undefined) {
   if (!iso) return null;
   const ms = Date.parse(iso);
@@ -57,6 +66,19 @@ function softWhen(iso: string | null | undefined) {
   const ms = safeMs(iso);
   if (!ms) return "";
   return new Date(ms).toLocaleDateString();
+}
+
+function softWhenDateTime(iso: string | null | undefined) {
+  const ms = safeMs(iso);
+  if (!ms) return "";
+  // compact, readable
+  return new Date(ms).toLocaleString(undefined, {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 function isoFromDateInput(dateStr: string) {
@@ -102,6 +124,9 @@ function titleFromStatement(statement: string) {
  * ---
  * Draft:
  * <notes>
+ *
+ * ✅ We keep Captured in context for provenance,
+ * but decision NOTES are now stored in decision_notes table.
  */
 function splitContext(context: string | null) {
   const raw = (context ?? "").trim();
@@ -139,7 +164,7 @@ function composeContext(captured: string, notes: string) {
 }
 
 function PrimaryActionButton(props: {
-  children: ReactNode;
+  children: React.ReactNode;
   onClick?: () => void;
   title?: string;
   disabled?: boolean;
@@ -225,9 +250,6 @@ export default function DecisionsClient() {
   const reloadTimerRef = useRef<number | null>(null);
   const cardRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
-  const [notesEditingById, setNotesEditingById] = useState<Record<string, boolean>>({});
-  const [notesDraftById, setNotesDraftById] = useState<Record<string, string>>({});
-
   const [confirmDeleteForId, setConfirmDeleteForId] = useState<string | null>(null);
 
   // Page 2 search + review filter
@@ -253,6 +275,13 @@ export default function DecisionsClient() {
 
   const DEFAULT_LIMIT = 5;
   const [showAll, setShowAll] = useState(false);
+
+  /** ✅ NEW: decision notes state (per open decision) */
+  const [notesByDecisionId, setNotesByDecisionId] = useState<Record<string, DecisionNote[]>>({});
+  const [notesLoadingByDecisionId, setNotesLoadingByDecisionId] = useState<Record<string, boolean>>({});
+  const [noteDraftByDecisionId, setNoteDraftByDecisionId] = useState<Record<string, string>>({});
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+  const [editingNoteDraft, setEditingNoteDraft] = useState<string>("");
 
   const scheduleReload = () => {
     if (reloadTimerRef.current) window.clearTimeout(reloadTimerRef.current);
@@ -427,6 +456,124 @@ export default function DecisionsClient() {
     setSummaries((data ?? []) as DecisionSummary[]);
   };
 
+  /** ✅ NEW: load notes for a decision */
+  const loadNotes = async (decisionId: string) => {
+    if (!userId) return;
+
+    setNotesLoadingByDecisionId((p) => ({ ...p, [decisionId]: true }));
+
+    const { data, error } = await supabase
+      .from("decision_notes")
+      .select("id,user_id,decision_id,body,created_at,updated_at")
+      .eq("user_id", userId)
+      .eq("decision_id", decisionId)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      showToast({ message: `Couldn’t load notes: ${error.message}` }, 3500);
+      setNotesByDecisionId((p) => ({ ...p, [decisionId]: [] }));
+      setNotesLoadingByDecisionId((p) => ({ ...p, [decisionId]: false }));
+      return;
+    }
+
+    const rows = (data ?? []) as any[];
+    const safe: DecisionNote[] = rows
+      .filter((r) => r && r.id && typeof r.body === "string")
+      .map((r) => ({
+        id: String(r.id),
+        user_id: String(r.user_id),
+        decision_id: String(r.decision_id),
+        body: String(r.body),
+        created_at: String(r.created_at ?? new Date().toISOString()),
+        updated_at: r.updated_at ? String(r.updated_at) : null,
+      }));
+
+    setNotesByDecisionId((p) => ({ ...p, [decisionId]: safe }));
+    setNotesLoadingByDecisionId((p) => ({ ...p, [decisionId]: false }));
+  };
+
+  const addNote = async (decisionId: string) => {
+    if (!userId) {
+      showToast({ message: "Not signed in." }, 2500);
+      return;
+    }
+
+    const text = (noteDraftByDecisionId[decisionId] ?? "").trim();
+    if (!text) {
+      showToast({ message: "Type a note first." }, 1800);
+      return;
+    }
+
+    // optimistic clear input
+    setNoteDraftByDecisionId((p) => ({ ...p, [decisionId]: "" }));
+
+    const { error } = await supabase.from("decision_notes").insert({
+      user_id: userId,
+      decision_id: decisionId,
+      body: text,
+    });
+
+    if (error) {
+      showToast({ message: `Couldn’t save note: ${error.message}` }, 3500);
+      // restore draft
+      setNoteDraftByDecisionId((p) => ({ ...p, [decisionId]: text }));
+      return;
+    }
+
+    showToast({ message: "Note saved." }, 1400);
+    void loadNotes(decisionId);
+  };
+
+  const startEditNote = (n: DecisionNote) => {
+    setEditingNoteId(n.id);
+    setEditingNoteDraft(n.body);
+  };
+
+  const cancelEditNote = () => {
+    setEditingNoteId(null);
+    setEditingNoteDraft("");
+  };
+
+  const saveEditNote = async (decisionId: string, noteId: string) => {
+    if (!userId) return;
+
+    const next = (editingNoteDraft ?? "").trim();
+    if (!next) {
+      showToast({ message: "Note can’t be empty." }, 2000);
+      return;
+    }
+
+    const { error } = await supabase
+      .from("decision_notes")
+      .update({ body: next, updated_at: new Date().toISOString() })
+      .eq("user_id", userId)
+      .eq("id", noteId);
+
+    if (error) {
+      showToast({ message: `Couldn’t update note: ${error.message}` }, 3500);
+      return;
+    }
+
+    setEditingNoteId(null);
+    setEditingNoteDraft("");
+    showToast({ message: "Updated." }, 1400);
+    void loadNotes(decisionId);
+  };
+
+  const deleteNote = async (decisionId: string, noteId: string) => {
+    if (!userId) return;
+
+    const { error } = await supabase.from("decision_notes").delete().eq("user_id", userId).eq("id", noteId);
+
+    if (error) {
+      showToast({ message: `Couldn’t delete note: ${error.message}` }, 3500);
+      return;
+    }
+
+    showToast({ message: "Deleted." }, 1200);
+    void loadNotes(decisionId);
+  };
+
   const openDecision = useMemo(() => items.find((d) => d.id === openId) ?? null, [items, openId]);
 
   useEffect(() => {
@@ -438,14 +585,22 @@ export default function DecisionsClient() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId, openDecision?.id]);
 
+  // ✅ when open decision changes, load its notes
+  useEffect(() => {
+    if (!userId) return;
+    if (tab !== "active") return;
+    if (!openDecision?.id) return;
+
+    void loadNotes(openDecision.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId, tab, openDecision?.id]);
+
   const filteredItems = useMemo(() => {
     let list = items;
 
-    // tab filter already handled in load; still safe here
     if (tab === "closed") list = list.filter((d) => d.status === "chapter");
     if (tab === "active" || tab === "new") list = list.filter((d) => d.status !== "chapter");
 
-    // Page 2 filters
     if (tab === "active") {
       if (reviewOnly) list = list.filter((d) => isReviewDue(d.review_at));
       const t = (searchText ?? "").trim().toLowerCase();
@@ -457,7 +612,6 @@ export default function DecisionsClient() {
       }
     }
 
-    // label filters (only meaningful on list surfaces)
     if (tab === "active") {
       if (activeDomainId) list = list.filter((d) => (domainByDecision[d.id] ?? null) === activeDomainId);
       if (activeConstellationId) list = list.filter((d) => (constellationsByDecision[d.id] ?? []).includes(activeConstellationId));
@@ -594,7 +748,6 @@ export default function DecisionsClient() {
     setCreatingNew(true);
 
     try {
-      // captured = original (messy); title = framed
       const context = composeContext(original, "");
 
       const { data, error } = await supabase
@@ -617,7 +770,6 @@ export default function DecisionsClient() {
 
       const id = String(data.id);
 
-      // reset page 1 state
       setNewText("");
       setFrameDraft(null);
       setNewStep("input");
@@ -648,6 +800,9 @@ export default function DecisionsClient() {
     try {
       await supabase.from("decision_summaries").delete().eq("user_id", userId).eq("decision_id", d.id);
     } catch {}
+    try {
+      await supabase.from("decision_notes").delete().eq("user_id", userId).eq("decision_id", d.id);
+    } catch {}
 
     const { data, error } = await supabase.from("decisions").delete().eq("id", d.id).eq("user_id", userId).select("id");
     const deletedCount = Array.isArray(data) ? data.length : 0;
@@ -661,23 +816,6 @@ export default function DecisionsClient() {
     }
 
     showToast({ message: "Deleted." }, 2500);
-  };
-
-  const saveNotes = async (d: Decision, captured: string, draftNotes: string) => {
-    if (!userId) return;
-
-    const nextContext = composeContext(captured, draftNotes);
-
-    setItems((prev) => prev.map((x) => (x.id === d.id ? { ...x, context: nextContext } : x)));
-    setNotesEditingById((p) => ({ ...p, [d.id]: false }));
-
-    const { error } = await supabase.from("decisions").update({ context: nextContext }).eq("id", d.id).eq("user_id", userId);
-    if (error) {
-      showToast({ message: `Couldn’t save: ${error.message}` }, 3500);
-      scheduleReload();
-      return;
-    }
-    showToast({ message: "Saved." }, 1600);
   };
 
   const closeDecision = async (d: Decision) => {
@@ -694,7 +832,7 @@ export default function DecisionsClient() {
     }
 
     showToast({ message: "Closed." }, 1800);
-    router.push(buildUrl("active")); // remain on Active
+    router.push(buildUrl("active"));
   };
 
   const setReviewAt = async (d: Decision, review_at: string | null) => {
@@ -745,6 +883,7 @@ export default function DecisionsClient() {
             onClick={() => {
               setOpenId(d.id);
               setWorkForId(null);
+              setConfirmDeleteForId(null);
               router.push(buildUrl("active", d.id, false));
               window.setTimeout(() => {
                 const el = cardRefs.current[d.id];
@@ -761,12 +900,13 @@ export default function DecisionsClient() {
 
   const renderOpenDecision = (d: Decision) => {
     const parts = splitContext(d.context);
-    const editing = !!notesEditingById[d.id];
-    const draftNotes = notesDraftById[d.id] ?? parts.notes ?? "";
 
     const allAtt = normalizeAttachments(d.attachments) as AttachmentMeta[];
-
     const isWorking = workForId === d.id;
+
+    const notes = notesByDecisionId[d.id] ?? [];
+    const notesLoading = !!notesLoadingByDecisionId[d.id];
+    const composerValue = noteDraftByDecisionId[d.id] ?? "";
 
     return (
       <div
@@ -791,6 +931,7 @@ export default function DecisionsClient() {
                 setOpenId(null);
                 setWorkForId(null);
                 setConfirmDeleteForId(null);
+                cancelEditNote();
                 router.push(buildUrl("active"));
               }}
             >
@@ -799,7 +940,7 @@ export default function DecisionsClient() {
           </div>
         </div>
 
-        {/* ✅ Green button (2b trigger) */}
+        {/* Green button */}
         {!isWorking ? (
           <div className="mt-4">
             <PrimaryActionButton
@@ -818,7 +959,7 @@ export default function DecisionsClient() {
           </div>
         ) : null}
 
-        {/* ✅ Conversation appears, everything else stays below and scrollable */}
+        {/* Conversation */}
         {isWorking ? (
           <div id="work-through-panel" className="mt-4">
             <ConversationPanel
@@ -839,52 +980,127 @@ export default function DecisionsClient() {
 
         {/* Workspace */}
         <div className="mt-5 space-y-4">
-          {/* Notes (single section) */}
+          {/* ✅ NOTES (new model) */}
           <div className="rounded-2xl border border-zinc-200 bg-white p-4 space-y-3">
             <div className="flex items-center justify-between gap-2">
               <div className="text-sm font-semibold text-zinc-900">Notes</div>
-
-              {!editing ? (
-                <Chip
-                  onClick={() => {
-                    setNotesEditingById((p) => ({ ...p, [d.id]: true }));
-                    setNotesDraftById((p) => ({ ...p, [d.id]: parts.notes ?? "" }));
-                  }}
-                >
-                  Edit
+              <div className="flex items-center gap-2">
+                <Chip onClick={() => void loadNotes(d.id)} title="Refresh notes">
+                  Refresh
                 </Chip>
-              ) : (
-                <div className="flex items-center gap-2">
-                  <Chip onClick={() => setNotesEditingById((p) => ({ ...p, [d.id]: false }))}>Cancel</Chip>
-                  <Chip onClick={() => void saveNotes(d, parts.captured, draftNotes)}>Save</Chip>
-                </div>
-              )}
+              </div>
             </div>
 
-            {!editing ? (
-              <div className="whitespace-pre-wrap rounded-2xl border border-zinc-100 bg-zinc-50 px-4 py-3 text-[15px] leading-relaxed text-zinc-800">
-                {parts.notes?.trim() ? parts.notes : <span className="text-zinc-500">Add a note…</span>}
-              </div>
-            ) : (
+            {/* Composer: always editable */}
+            <div className="space-y-2">
               <textarea
-                value={draftNotes}
-                onChange={(e) => setNotesDraftById((p) => ({ ...p, [d.id]: e.target.value }))}
+                value={composerValue}
+                onChange={(e) => setNoteDraftByDecisionId((p) => ({ ...p, [d.id]: e.target.value }))}
                 placeholder="Add a note…"
-                className="w-full min-h-[140px] resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[15px] leading-relaxed text-zinc-900 outline-none focus:ring-2 focus:ring-zinc-200"
+                className="w-full min-h-[90px] resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[15px] leading-relaxed text-zinc-900 outline-none focus:ring-2 focus:ring-zinc-200"
+                onKeyDown={(e) => {
+                  // Cmd/Ctrl+Enter saves note
+                  const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+                  const cmdOrCtrl = isMac ? e.metaKey : e.ctrlKey;
+                  if (cmdOrCtrl && e.key === "Enter") {
+                    e.preventDefault();
+                    void addNote(d.id);
+                  }
+                }}
               />
-            )}
+
+              <div className="flex flex-wrap items-center gap-2">
+                <PrimaryActionButton onClick={() => void addNote(d.id)} title="Save note">
+                  Save note
+                </PrimaryActionButton>
+
+                {editingNoteId ? (
+                  <div className="text-xs text-zinc-500">Editing a note below — save/cancel there.</div>
+                ) : null}
+              </div>
+            </div>
+
+            {/* List */}
+            <div className="pt-1 space-y-3">
+              {notesLoading ? <div className="text-sm text-zinc-500">Loading notes…</div> : null}
+
+              {!notesLoading && notes.length === 0 ? (
+                <div className="rounded-2xl border border-zinc-100 bg-zinc-50 px-4 py-3 text-sm text-zinc-600">
+                  No notes yet.
+                </div>
+              ) : null}
+
+              {!notesLoading
+                ? notes.map((n) => {
+                    const isEditing = editingNoteId === n.id;
+                    const stamp = softWhenDateTime(n.created_at);
+                    const edited = n.updated_at ? ` • edited ${softWhenDateTime(n.updated_at)}` : "";
+
+                    return (
+                      <div key={n.id} className="rounded-2xl border border-zinc-200 bg-white px-4 py-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="text-xs text-zinc-500">
+                              {stamp}
+                              {edited}
+                            </div>
+                          </div>
+
+                          <div className="shrink-0 flex items-center gap-2">
+                            {!isEditing ? (
+                              <>
+                                <Chip onClick={() => startEditNote(n)} title="Edit note">
+                                  Edit
+                                </Chip>
+                                <Chip onClick={() => void deleteNote(d.id, n.id)} title="Delete note">
+                                  Delete
+                                </Chip>
+                              </>
+                            ) : (
+                              <>
+                                <Chip onClick={() => void saveEditNote(d.id, n.id)} title="Save changes">
+                                  Save
+                                </Chip>
+                                <Chip onClick={cancelEditNote} title="Cancel edit">
+                                  Cancel
+                                </Chip>
+                              </>
+                            )}
+                          </div>
+                        </div>
+
+                        {!isEditing ? (
+                          <div className="mt-2 whitespace-pre-wrap text-[15px] leading-relaxed text-zinc-800">{n.body}</div>
+                        ) : (
+                          <textarea
+                            value={editingNoteDraft}
+                            onChange={(e) => setEditingNoteDraft(e.target.value)}
+                            className="mt-2 w-full min-h-[90px] resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[15px] leading-relaxed text-zinc-900 outline-none focus:ring-2 focus:ring-zinc-200"
+                          />
+                        )}
+                      </div>
+                    );
+                  })
+                : null}
+            </div>
           </div>
 
           {/* Files */}
           <div className="rounded-2xl border border-zinc-200 bg-white p-3">
             {userId ? (
-              <AttachmentsBlock userId={userId} decisionId={d.id} title={allAtt.length ? `Files (${allAtt.length})` : "Files"} bucket="captures" initial={allAtt} />
+              <AttachmentsBlock
+                userId={userId}
+                decisionId={d.id}
+                title={allAtt.length ? `Files (${allAtt.length})` : "Files"}
+                bucket="captures"
+                initial={allAtt}
+              />
             ) : (
               <div className="text-sm text-zinc-600">Files unavailable.</div>
             )}
           </div>
 
-          {/* Review (optional) */}
+          {/* Review */}
           <div className="rounded-2xl border border-zinc-200 bg-white p-4 space-y-2">
             <div className="text-sm font-semibold text-zinc-900">Review</div>
             <div className="flex flex-wrap items-center gap-2">
@@ -967,7 +1183,7 @@ export default function DecisionsClient() {
       <div className="mx-auto w-full max-w-[760px] space-y-6">
         <TopTabs />
 
-        {/* ✅ Page 1: New Decision (AI clarify flow) */}
+        {/* Page 1: New Decision */}
         {tab === "new" ? (
           <div className="rounded-2xl border border-zinc-200 bg-white p-4 space-y-4">
             <div className="space-y-1">
@@ -1090,7 +1306,6 @@ export default function DecisionsClient() {
         {/* Page 2: Active Decisions */}
         {tab === "active" ? (
           <div className="space-y-4">
-            {/* Search bar + review filter (your sketch) */}
             <div className="rounded-2xl border border-zinc-200 bg-white p-3">
               <div className="flex items-center gap-2">
                 <input
@@ -1117,10 +1332,14 @@ export default function DecisionsClient() {
               ) : null}
             </div>
 
-            {/* Optional label tiles */}
             <div className="space-y-4">
               <TilesRow title="Filter by area" items={domains} activeId={activeDomainId} onSelect={(id) => setActiveDomainId(id)} />
-              <TilesRow title="Filter by group" items={constellations} activeId={activeConstellationId} onSelect={(id) => setActiveConstellationId(id)} />
+              <TilesRow
+                title="Filter by group"
+                items={constellations}
+                activeId={activeConstellationId}
+                onSelect={(id) => setActiveConstellationId(id)}
+              />
             </div>
 
             <div className="text-xs text-zinc-500">{statusLine}</div>
@@ -1134,7 +1353,6 @@ export default function DecisionsClient() {
               </div>
             ) : (
               <div className="space-y-6">
-                {/* Open decision (separate from list) */}
                 {openItem ? (
                   <div className="space-y-3">
                     <div className="text-xs font-semibold text-zinc-500">Open decision</div>
@@ -1142,7 +1360,6 @@ export default function DecisionsClient() {
                   </div>
                 ) : null}
 
-                {/* List */}
                 <div className="space-y-3">
                   <div className="flex items-center justify-between gap-3">
                     <div className="text-xs font-semibold text-zinc-500">{openItem ? "Other decisions" : "Decisions"}</div>
