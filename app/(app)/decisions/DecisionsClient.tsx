@@ -7,19 +7,10 @@ import { Page } from "@/components/Page";
 import { Chip, useToast } from "@/components/ui";
 import { ConversationPanel } from "./ConversationPanel";
 
-import { AssistedSearch } from "@/components/AssistedSearch";
 import { TilesRow } from "@/components/TilesRow";
 import { AttachmentsBlock } from "@/components/AttachmentsBlock";
 
 export const dynamic = "force-dynamic";
-
-/**
- * ✅ Locked behavior:
- * - Decisions = Active only (status !== "chapter")
- * - Review = filter view (review_at), not a status
- * - Chapters route = Closed decisions (status === "chapter") but called "Closed Decisions"
- * - Clean white hierarchy (no heavy card stacks)
- */
 
 type AttachmentMeta = {
   name: string;
@@ -53,7 +44,7 @@ type DecisionSummary = {
 type Domain = { id: string; name: string; sort_order?: number | null };
 type Constellation = { id: string; name: string; sort_order?: number | null };
 
-type DecisionsSurface = "decisions" | "revisit" | "chapters";
+type Tab = "new" | "active" | "closed";
 
 function safeMs(iso: string | null | undefined) {
   if (!iso) return null;
@@ -65,11 +56,6 @@ function softWhen(iso: string | null | undefined) {
   const ms = safeMs(iso);
   if (!ms) return "";
   return new Date(ms).toLocaleDateString();
-}
-
-function isoNowPlusDays(days: number) {
-  const d = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
-  return d.toISOString();
 }
 
 function isoFromDateInput(dateStr: string) {
@@ -115,8 +101,6 @@ function titleFromStatement(statement: string) {
  * ---
  * Draft:
  * <notes>
- *
- * We now use Draft purely as Notes (single editable section).
  */
 function splitContext(context: string | null) {
   const raw = (context ?? "").trim();
@@ -178,96 +162,100 @@ function PrimaryActionButton(props: {
   );
 }
 
-export default function DecisionsClient({ surface = "decisions" }: { surface?: DecisionsSurface }) {
+function buildUrl(tab: Tab, open?: string | null, work?: boolean) {
+  const sp = new URLSearchParams();
+  sp.set("tab", tab);
+  if (open) sp.set("open", open);
+  if (work) sp.set("work", "1");
+  const s = sp.toString();
+  return s ? `/decisions?${s}` : "/decisions";
+}
+
+function isReviewDue(review_at: string | null) {
+  const ms = safeMs(review_at);
+  if (!ms) return false;
+  return ms <= Date.now();
+}
+
+export default function DecisionsClient() {
   const router = useRouter();
   const { showToast } = useToast();
   const searchParams = useSearchParams();
+
+  const tabParam = (searchParams.get("tab") as Tab | null) ?? "new";
+  const tab: Tab = tabParam === "active" || tabParam === "closed" || tabParam === "new" ? tabParam : "new";
+
   const openFromQuery = searchParams.get("open");
+  const workFromQuery = searchParams.get("work") === "1";
 
-  const pageTitle = surface === "decisions" ? "Decisions" : surface === "chapters" ? "Closed Decisions" : "Review";
+  // Ensure /decisions defaults to tab=new
+  useEffect(() => {
+    const hasTab = searchParams.get("tab");
+    if (!hasTab) router.replace(buildUrl("new"));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const pageTitle = "Decisions";
   const pageSubtitle =
-    surface === "decisions"
-      ? "Bring a money decision here. Talk it through, then save the conclusion."
-      : surface === "chapters"
-      ? "Closed decisions live here quietly — still searchable whenever you need them."
-      : "A light review view — only what needs attention.";
-
-  const [highlightId, setHighlightId] = useState<string | null>(null);
+    tab === "new"
+      ? "What needs deciding? Start messy — we’ll clarify it as we go."
+      : tab === "active"
+      ? "Active decisions you’re working through."
+      : "Closed decisions live here quietly — still searchable whenever you need them.";
 
   const [userId, setUserId] = useState<string | null>(null);
   const [statusLine, setStatusLine] = useState<string>("Loading…");
+
   const [items, setItems] = useState<Decision[]>([]);
-  const [openId, setOpenId] = useState<string | null>(null);
-
-  const DEFAULT_LIMIT = 5;
-  const [showAll, setShowAll] = useState(false);
-
-  const [summaries, setSummaries] = useState<DecisionSummary[]>([]);
-
   const [domains, setDomains] = useState<Domain[]>([]);
   const [constellations, setConstellations] = useState<Constellation[]>([]);
+
   const [activeDomainId, setActiveDomainId] = useState<string | null>(null);
   const [activeConstellationId, setActiveConstellationId] = useState<string | null>(null);
 
   const [domainByDecision, setDomainByDecision] = useState<Record<string, string | null>>({});
   const [constellationsByDecision, setConstellationsByDecision] = useState<Record<string, string[]>>({});
 
-  const loadRef = useRef<(opts?: { silent?: boolean }) => void>(() => {});
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [workForId, setWorkForId] = useState<string | null>(null);
+
+  const [summaries, setSummaries] = useState<DecisionSummary[]>([]);
+
   const reloadTimerRef = useRef<number | null>(null);
-
   const cardRefs = useRef<Record<string, HTMLDivElement | null>>({});
-
-  const [revisitModeById, setRevisitModeById] = useState<Record<string, "7" | "30" | "90" | "custom" | "">>({});
-  const [customDateById, setCustomDateById] = useState<Record<string, string>>({});
 
   const [notesEditingById, setNotesEditingById] = useState<Record<string, boolean>>({});
   const [notesDraftById, setNotesDraftById] = useState<Record<string, string>>({});
 
   const [confirmDeleteForId, setConfirmDeleteForId] = useState<string | null>(null);
-  const [showDetailsById, setShowDetailsById] = useState<Record<string, boolean>>({});
 
-  // Composer (Active Decisions only)
-  const composerRef = useRef<HTMLDivElement | null>(null);
-  const composerInputRef = useRef<HTMLTextAreaElement | null>(null);
+  // Page 2 search + review filter
+  const [searchText, setSearchText] = useState<string>("");
+  const [reviewOnly, setReviewOnly] = useState<boolean>(false);
+
+  // Page 1 new decision input
+  const newRef = useRef<HTMLTextAreaElement | null>(null);
   const [newText, setNewText] = useState<string>("");
-  const [newDecisionId, setNewDecisionId] = useState<string | null>(null);
   const [creatingNew, setCreatingNew] = useState<boolean>(false);
 
-  const [chatFocusTokenById, setChatFocusTokenById] = useState<Record<string, number>>({});
-  const [chatForId, setChatForId] = useState<string | null>(null);
-  const [composerChatForId, setComposerChatForId] = useState<string | null>(null);
+  // ✅ Page 1 framing step (PATCH)
+  type FrameDraft = {
+    title: string;
+    statement: string;
+    what_im_hearing: string;
+    questions: string[];
+  };
 
-  const [composerShowFiles, setComposerShowFiles] = useState<boolean>(false);
+  const [newStep, setNewStep] = useState<"input" | "framing" | "confirm" | "edit">("input");
+  const [frameDraft, setFrameDraft] = useState<FrameDraft | null>(null);
+  const [framingBusy, setFramingBusy] = useState(false);
 
-  const [pendingFirstMsgById, setPendingFirstMsgById] = useState<Record<string, string>>({});
-  const [pendingFirstMsgTokenById, setPendingFirstMsgTokenById] = useState<Record<string, number>>({});
-
-  const autoCreateTimerRef = useRef<number | null>(null);
+  const DEFAULT_LIMIT = 5;
+  const [showAll, setShowAll] = useState(false);
 
   const scheduleReload = () => {
     if (reloadTimerRef.current) window.clearTimeout(reloadTimerRef.current);
-    reloadTimerRef.current = window.setTimeout(() => loadRef.current({ silent: true }), 250);
-  };
-
-  const openDecision = useMemo(() => items.find((d) => d.id === openId) ?? null, [items, openId]);
-
-  const reloadSummaries = async (decisionId: string) => {
-    if (!userId) return;
-
-    const { data, error } = await supabase
-      .from("decision_summaries")
-      .select("id,decision_id,summary_text,created_at")
-      .eq("user_id", userId)
-      .eq("decision_id", decisionId)
-      .order("created_at", { ascending: false })
-      .limit(3);
-
-    if (error) {
-      setSummaries([]);
-      return;
-    }
-
-    setSummaries((data ?? []) as DecisionSummary[]);
+    reloadTimerRef.current = window.setTimeout(() => void load({ silent: true }), 250);
   };
 
   const load = async (opts?: { silent?: boolean }) => {
@@ -285,19 +273,14 @@ export default function DecisionsClient({ surface = "decisions" }: { surface?: D
     const uid = auth.user.id;
     setUserId(uid);
 
+    // Load decisions for this tab
     const q = supabase
       .from("decisions")
       .select("id,user_id,title,context,status,created_at,decided_at,review_at,origin,framed_at,attachments")
       .eq("user_id", uid)
       .order("created_at", { ascending: false });
 
-    const { data, error } =
-      surface === "decisions"
-        ? await q.neq("status", "chapter")
-        : surface === "chapters"
-        ? await q.eq("status", "chapter")
-        : // revisit filter view
-          await q.neq("status", "chapter").not("review_at", "is", null);
+    const { data, error } = tab === "active" || tab === "new" ? await q.neq("status", "chapter") : await q.eq("status", "chapter");
 
     if (error) {
       setItems([]);
@@ -321,7 +304,9 @@ export default function DecisionsClient({ surface = "decisions" }: { surface?: D
     }));
 
     setItems(list);
+    setStatusLine(list.length === 0 ? "All clear." : "Loaded.");
 
+    // Labels
     const [domRes, conRes] = await Promise.all([
       supabase.from("domains").select("id,name,sort_order").eq("user_id", uid).order("sort_order", { ascending: true }),
       supabase.from("constellations").select("id,name,sort_order").eq("user_id", uid).order("sort_order", { ascending: true }),
@@ -369,14 +354,7 @@ export default function DecisionsClient({ surface = "decisions" }: { surface?: D
       setDomainByDecision({});
       setConstellationsByDecision({});
     }
-
-    setStatusLine(list.length === 0 ? "All clear." : "Loaded.");
   };
-
-  useEffect(() => {
-    loadRef.current = (opts?: { silent?: boolean }) => void load(opts);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   useEffect(() => {
     void load();
@@ -385,49 +363,14 @@ export default function DecisionsClient({ surface = "decisions" }: { surface?: D
       reloadTimerRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [surface]);
-
-  // Auto-open from query (?open=...) + scroll + clear param
-  useEffect(() => {
-    if (!openFromQuery) return;
-    if (items.length === 0) return;
-
-    const match = items.find((d) => d.id === openFromQuery);
-    if (!match) return;
-
-    setOpenId(match.id);
-    setHighlightId(match.id);
-
-    setChatForId(match.id);
-    setChatFocusTokenById((p) => ({ ...p, [match.id]: (p[match.id] ?? 0) + 1 }));
-
-    window.setTimeout(() => {
-      const el = cardRefs.current[match.id];
-      el?.scrollIntoView?.({ behavior: "smooth", block: "start" });
-    }, 60);
-
-    router.replace(surface === "decisions" ? "/decisions" : surface === "chapters" ? "/chapters" : "/revisit");
-
-    const t = window.setTimeout(() => setHighlightId(null), 1600);
-    return () => window.clearTimeout(t);
-  }, [openFromQuery, items, router, surface]);
-
-  // Summaries for open decision
-  useEffect(() => {
-    if (!userId || !openDecision) {
-      setSummaries([]);
-      return;
-    }
-    void reloadSummaries(openDecision.id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userId, openDecision?.id]);
+  }, [tab]);
 
   // Realtime decisions
   useEffect(() => {
     if (!userId) return;
 
     const channel = supabase
-      .channel(`decisions-${surface}-${userId}`)
+      .channel(`decisions-${tab}-${userId}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "decisions", filter: `user_id=eq.${userId}` }, () => {
         scheduleReload();
       })
@@ -437,74 +380,254 @@ export default function DecisionsClient({ surface = "decisions" }: { surface?: D
       supabase.removeChannel(channel);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userId, surface]);
+  }, [userId, tab]);
 
-  const saveConclusionNow = async (d: Decision) => {
+  // Apply query open/work
+  useEffect(() => {
+    if (tab !== "active") return;
+
+    if (openFromQuery) {
+      setOpenId(openFromQuery);
+      window.setTimeout(() => {
+        const el = cardRefs.current[openFromQuery];
+        el?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+      }, 60);
+    } else {
+      setOpenId(null);
+    }
+
+    if (workFromQuery && openFromQuery) {
+      setWorkForId(openFromQuery);
+      window.setTimeout(() => {
+        const el = document.getElementById("work-through-panel");
+        el?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+      }, 80);
+    } else {
+      setWorkForId(null);
+    }
+  }, [tab, openFromQuery, workFromQuery]);
+
+  const reloadSummaries = async (decisionId: string) => {
     if (!userId) return;
 
-    const prevDecidedAt = d.decided_at;
-    const nextStamp = new Date().toISOString();
-
-    setItems((prev) => prev.map((x) => (x.id === d.id ? { ...x, decided_at: nextStamp } : x)));
-
-    const { error } = await supabase.from("decisions").update({ decided_at: nextStamp }).eq("id", d.id).eq("user_id", userId);
+    const { data, error } = await supabase
+      .from("decision_summaries")
+      .select("id,decision_id,summary_text,created_at")
+      .eq("user_id", userId)
+      .eq("decision_id", decisionId)
+      .order("created_at", { ascending: false })
+      .limit(3);
 
     if (error) {
-      showToast({ message: `Couldn’t save: ${error.message}` }, 3500);
-      setItems((prev) => prev.map((x) => (x.id === d.id ? { ...x, decided_at: prevDecidedAt ?? null } : x)));
-      loadRef.current({ silent: true });
+      setSummaries([]);
       return;
     }
 
-    showToast(
-      {
-        message: "Conclusion saved.",
-        undoLabel: "Undo",
-        onUndo: async () => {
-          const { error: undoErr } = await supabase
-            .from("decisions")
-            .update({ decided_at: prevDecidedAt ?? null })
-            .eq("id", d.id)
-            .eq("user_id", userId);
-
-          if (undoErr) showToast({ message: `Undo failed: ${undoErr.message}` }, 3500);
-          loadRef.current({ silent: true });
-        },
-      },
-      7000
-    );
+    setSummaries((data ?? []) as DecisionSummary[]);
   };
 
-  const scheduleRevisitAt = async (d: Decision, review_at: string) => {
-    if (!userId) return;
+  const openDecision = useMemo(() => items.find((d) => d.id === openId) ?? null, [items, openId]);
 
-    setItems((prev) => prev.map((x) => (x.id === d.id ? { ...x, review_at } : x)));
+  useEffect(() => {
+    if (!userId || !openDecision) {
+      setSummaries([]);
+      return;
+    }
+    void reloadSummaries(openDecision.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId, openDecision?.id]);
 
-    const { error } = await supabase.from("decisions").update({ review_at, reviewed_at: null }).eq("id", d.id).eq("user_id", userId);
+  const filteredItems = useMemo(() => {
+    let list = items;
 
-    if (error) {
-      showToast({ message: `Couldn’t schedule: ${error.message}` }, 3500);
-      loadRef.current({ silent: true });
+    // tab filter already handled in load; still safe here
+    if (tab === "closed") list = list.filter((d) => d.status === "chapter");
+    if (tab === "active" || tab === "new") list = list.filter((d) => d.status !== "chapter");
+
+    // Page 2 filters
+    if (tab === "active") {
+      if (reviewOnly) list = list.filter((d) => isReviewDue(d.review_at));
+      const t = (searchText ?? "").trim().toLowerCase();
+      if (t) {
+        list = list.filter((d) => {
+          const ctx = (d.context ?? "").toLowerCase();
+          return d.title.toLowerCase().includes(t) || ctx.includes(t);
+        });
+      }
+    }
+
+    // label filters (only meaningful on list surfaces)
+    if (tab === "active") {
+      if (activeDomainId) list = list.filter((d) => (domainByDecision[d.id] ?? null) === activeDomainId);
+      if (activeConstellationId) list = list.filter((d) => (constellationsByDecision[d.id] ?? []).includes(activeConstellationId));
+    }
+
+    return list;
+  }, [items, tab, reviewOnly, searchText, activeDomainId, activeConstellationId, domainByDecision, constellationsByDecision]);
+
+  const openItem = tab === "active" && openId ? filteredItems.find((d) => d.id === openId) ?? null : null;
+  const others = useMemo(() => filteredItems.filter((d) => d.id !== openId), [filteredItems, openId]);
+
+  const visibleOthers = useMemo(() => {
+    if (showAll) return others;
+    return others.slice(0, DEFAULT_LIMIT);
+  }, [others, showAll]);
+
+  const hasMore = others.length > DEFAULT_LIMIT;
+
+  // (kept) simple createNewDecision - no longer used by Page 1 UI after patch, but harmless to keep
+  const createNewDecision = async () => {
+    if (!userId) {
+      showToast({ message: "Not signed in." }, 2500);
       return;
     }
 
-    showToast({ message: "Review scheduled." }, 2200);
+    const statement = (newText ?? "").trim();
+    if (!statement) {
+      showToast({ message: "Type your decision first." }, 2000);
+      newRef.current?.focus?.();
+      return;
+    }
+
+    if (creatingNew) return;
+    setCreatingNew(true);
+
+    try {
+      const title = titleFromStatement(statement);
+      const context = composeContext(statement, "");
+
+      const { data, error } = await supabase
+        .from("decisions")
+        .insert({
+          user_id: userId,
+          title,
+          context,
+          status: "open",
+          origin: "decisions",
+          decided_at: null,
+        })
+        .select("id")
+        .single();
+
+      if (error || !data?.id) {
+        showToast({ message: `Couldn’t save: ${error?.message ?? "Unknown error"}` }, 3500);
+        return;
+      }
+
+      const id = String(data.id);
+      setNewText("");
+      showToast({ message: "Saved to Active Decisions." }, 1800);
+
+      router.push(buildUrl("active", id, false));
+    } finally {
+      setCreatingNew(false);
+    }
   };
 
-  const clearRevisit = async (d: Decision) => {
-    if (!userId) return;
-
-    setItems((prev) => prev.map((x) => (x.id === d.id ? { ...x, review_at: null } : x)));
-
-    const { error } = await supabase.from("decisions").update({ review_at: null }).eq("id", d.id).eq("user_id", userId);
-
-    if (error) {
-      showToast({ message: `Couldn’t clear: ${error.message}` }, 3500);
-      loadRef.current({ silent: true });
+  // ✅ PATCH: Page 1 requestFrame + saveFramedDecision
+  const requestFrame = async () => {
+    const text = (newText ?? "").trim();
+    if (!text) {
+      showToast({ message: "Type your decision first." }, 2000);
+      newRef.current?.focus?.();
       return;
     }
 
-    showToast({ message: "Review cleared." }, 2000);
+    setFramingBusy(true);
+    setNewStep("framing");
+
+    try {
+      const res = await fetch("/api/ai/decision-frame", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(json?.error ? String(json.error) : "Couldn’t clarify right now.");
+      }
+
+      const f = json?.frame ?? null;
+      if (!f) throw new Error("No frame returned.");
+
+      const next: FrameDraft = {
+        title: String(f.title ?? "").trim() || titleFromStatement(text),
+        statement: String(f.statement ?? "").trim() || text,
+        what_im_hearing: String(f.what_im_hearing ?? "").trim(),
+        questions: Array.isArray(f.questions) ? f.questions.map((q: any) => String(q)).filter(Boolean).slice(0, 5) : [],
+      };
+
+      setFrameDraft(next);
+      setNewStep("confirm");
+    } catch (e: any) {
+      showToast({ message: e?.message ?? "Couldn’t clarify right now." }, 3500);
+      setNewStep("input");
+    } finally {
+      setFramingBusy(false);
+    }
+  };
+
+  const saveFramedDecision = async () => {
+    if (!userId) {
+      showToast({ message: "Not signed in." }, 2500);
+      return;
+    }
+    if (!frameDraft) return;
+
+    const original = (newText ?? "").trim();
+    if (!original) {
+      showToast({ message: "Type your decision first." }, 2000);
+      setNewStep("input");
+      newRef.current?.focus?.();
+      return;
+    }
+
+    const title = (frameDraft.title ?? "").trim();
+    const statement = (frameDraft.statement ?? "").trim();
+    if (!title || !statement) {
+      showToast({ message: "Please confirm the decision statement." }, 2200);
+      return;
+    }
+
+    setCreatingNew(true);
+
+    try {
+      // captured = original (messy); title = framed
+      const context = composeContext(original, "");
+
+      const { data, error } = await supabase
+        .from("decisions")
+        .insert({
+          user_id: userId,
+          title,
+          context,
+          status: "open",
+          origin: "decisions",
+          decided_at: null,
+          framed_at: new Date().toISOString(),
+        })
+        .select("id")
+        .single();
+
+      if (error || !data?.id) {
+        throw new Error(error?.message ?? "Save failed.");
+      }
+
+      const id = String(data.id);
+
+      // reset page 1 state
+      setNewText("");
+      setFrameDraft(null);
+      setNewStep("input");
+
+      showToast({ message: "Saved to Active Decisions." }, 1500);
+      router.push(buildUrl("active", id, false));
+    } catch (e: any) {
+      showToast({ message: e?.message ?? "Save failed." }, 3500);
+    } finally {
+      setCreatingNew(false);
+    }
   };
 
   const performDelete = async (d: Decision) => {
@@ -513,7 +636,6 @@ export default function DecisionsClient({ surface = "decisions" }: { surface?: D
     const prev = items;
     setItems((p) => p.filter((x) => x.id !== d.id));
     if (openId === d.id) setOpenId(null);
-    if (chatForId === d.id) setChatForId(null);
     if (confirmDeleteForId === d.id) setConfirmDeleteForId(null);
 
     try {
@@ -533,395 +655,280 @@ export default function DecisionsClient({ surface = "decisions" }: { surface?: D
       const msg = error?.message ? `Couldn’t delete: ${error.message}` : "Couldn’t delete right now.";
       showToast({ message: msg }, 3500);
       setItems(prev);
-      loadRef.current({ silent: true });
+      scheduleReload();
       return;
     }
 
     showToast({ message: "Deleted." }, 2500);
   };
 
-  const setDecisionDomain = async (decisionId: string, domainId: string | null) => {
+  const saveNotes = async (d: Decision, captured: string, draftNotes: string) => {
     if (!userId) return;
 
-    setDomainByDecision((prev) => ({ ...prev, [decisionId]: domainId }));
+    const nextContext = composeContext(captured, draftNotes);
 
-    try {
-      if (!domainId) {
-        const { error } = await supabase.from("decision_domains").delete().eq("user_id", userId).eq("decision_id", decisionId);
-        if (error) throw error;
-        showToast({ message: "Cleared." }, 1600);
-        return;
-      }
+    setItems((prev) => prev.map((x) => (x.id === d.id ? { ...x, context: nextContext } : x)));
+    setNotesEditingById((p) => ({ ...p, [d.id]: false }));
 
-      const { error } = await supabase
-        .from("decision_domains")
-        .upsert({ user_id: userId, decision_id: decisionId, domain_id: domainId }, { onConflict: "user_id,decision_id" });
-
-      if (error) throw error;
-      showToast({ message: "Saved." }, 1600);
-    } catch {
-      showToast({ message: "Couldn’t update." }, 2200);
-      loadRef.current({ silent: true });
+    const { error } = await supabase.from("decisions").update({ context: nextContext }).eq("id", d.id).eq("user_id", userId);
+    if (error) {
+      showToast({ message: `Couldn’t save: ${error.message}` }, 3500);
+      scheduleReload();
+      return;
     }
+    showToast({ message: "Saved." }, 1600);
   };
 
-  const toggleConstellation = async (decisionId: string, constellationId: string) => {
+  const closeDecision = async (d: Decision) => {
     if (!userId) return;
+    const prev = d.status;
 
-    const current = constellationsByDecision[decisionId] ?? [];
-    const has = current.includes(constellationId);
-    const next = has ? current.filter((x) => x !== constellationId) : [...current, constellationId];
+    setItems((p) => p.map((x) => (x.id === d.id ? { ...x, status: "chapter" } : x)));
 
-    setConstellationsByDecision((prev) => ({ ...prev, [decisionId]: next }));
-
-    try {
-      if (has) {
-        const { error } = await supabase
-          .from("constellation_items")
-          .delete()
-          .eq("user_id", userId)
-          .eq("decision_id", decisionId)
-          .eq("constellation_id", constellationId);
-
-        if (error) throw error;
-        showToast({ message: "Removed." }, 1600);
-        return;
-      }
-
-      const { error } = await supabase.from("constellation_items").insert({
-        user_id: userId,
-        decision_id: decisionId,
-        constellation_id: constellationId,
-      });
-
-      if (error) throw error;
-      showToast({ message: "Saved." }, 1600);
-    } catch {
-      showToast({ message: "Couldn’t update." }, 2200);
-      loadRef.current({ silent: true });
-    }
-  };
-
-  const filteredItems = useMemo(() => {
-    let list = items;
-
-    if (activeDomainId) list = list.filter((d) => (domainByDecision[d.id] ?? null) === activeDomainId);
-    if (activeConstellationId) list = list.filter((d) => (constellationsByDecision[d.id] ?? []).includes(activeConstellationId));
-
-    return list;
-  }, [items, activeDomainId, activeConstellationId, domainByDecision, constellationsByDecision]);
-
-  const openItem = openId ? filteredItems.find((d) => d.id === openId) ?? null : null;
-  const others = useMemo(() => filteredItems.filter((d) => d.id !== openId), [filteredItems, openId]);
-
-  const visibleOthers = useMemo(() => {
-    if (showAll) return others;
-    return others.slice(0, DEFAULT_LIMIT);
-  }, [others, showAll]);
-
-  const hasMore = others.length > DEFAULT_LIMIT;
-  const hasAnyLabelOptions = domains.length > 0 || constellations.length > 0;
-
-  const createNewDecisionIfNeeded = async (statementOverride?: string, opts?: { silent?: boolean }) => {
-    if (!userId) {
-      if (!opts?.silent) showToast({ message: "Not signed in." }, 2500);
-      return null;
-    }
-
-    if (newDecisionId) return newDecisionId;
-
-    const statement = (statementOverride ?? newText ?? "").trim();
-    if (!statement) {
-      if (!opts?.silent) {
-        showToast({ message: "Type your decision first." }, 2200);
-        try {
-          composerInputRef.current?.focus?.();
-        } catch {}
-      }
-      return null;
-    }
-
-    if (creatingNew) return null;
-    setCreatingNew(true);
-
-    try {
-      const title = titleFromStatement(statement);
-      const context = composeContext(statement, "");
-
-      const { data, error } = await supabase
-        .from("decisions")
-        .insert({
-          user_id: userId,
-          title,
-          context,
-          status: "open",
-          origin: "decisions",
-          decided_at: null,
-        })
-        .select("id,user_id,title,context,status,created_at,decided_at,review_at,origin,framed_at,attachments")
-        .single();
-
-      if (error || !data?.id) {
-        if (!opts?.silent) showToast({ message: `Couldn’t create: ${error?.message ?? "Unknown error"}` }, 3500);
-        return null;
-      }
-
-      const row: any = data;
-      const created: Decision = {
-        id: row.id,
-        user_id: row.user_id,
-        title: row.title ?? title,
-        context: row.context ?? context,
-        status: row.status ?? "open",
-        created_at: row.created_at ?? new Date().toISOString(),
-        decided_at: row.decided_at ?? null,
-        review_at: row.review_at ?? null,
-        origin: row.origin ?? "decisions",
-        framed_at: row.framed_at ?? null,
-        attachments: normalizeAttachments(row.attachments),
-      };
-
-      setItems((prev) => [created, ...prev]);
-      setNewDecisionId(created.id);
-
-      setComposerShowFiles(false);
-      return created.id;
-    } catch (e: any) {
-      if (!opts?.silent) showToast({ message: e?.message ?? "Couldn’t create." }, 3500);
-      return null;
-    } finally {
-      setCreatingNew(false);
-    }
-  };
-
-  const openCardAtTop = (id: string) => {
-    setOpenId(id);
-    setHighlightId(id);
-
-    setChatForId(id);
-    setChatFocusTokenById((p) => ({ ...p, [id]: (p[id] ?? 0) + 1 }));
-
-    window.setTimeout(() => {
-      const el = cardRefs.current[id];
-      el?.scrollIntoView?.({ behavior: "smooth", block: "start" });
-    }, 80);
-
-    window.setTimeout(() => setHighlightId(null), 1600);
-  };
-
-  const resetComposer = () => {
-    setNewText("");
-    setNewDecisionId(null);
-    setCreatingNew(false);
-    setComposerChatForId(null);
-    setComposerShowFiles(false);
-    try {
-      composerInputRef.current?.focus?.({ preventScroll: true } as any);
-    } catch {
-      try {
-        composerInputRef.current?.focus?.();
-      } catch {}
-    }
-  };
-
-  const assistedScope = "decisions";
-
-  const sendFromComposer = async () => {
-    const text = (newText ?? "").trim();
-    if (!text) {
-      showToast({ message: "Type your decision first." }, 2000);
+    const { error } = await supabase.from("decisions").update({ status: "chapter" }).eq("id", d.id).eq("user_id", userId);
+    if (error) {
+      showToast({ message: `Couldn’t close: ${error.message}` }, 3500);
+      setItems((p) => p.map((x) => (x.id === d.id ? { ...x, status: prev } : x)));
       return;
     }
 
-    const id = await createNewDecisionIfNeeded(text);
-    if (!id) return;
-
-    setComposerChatForId(id);
-
-    setPendingFirstMsgById((p) => ({ ...p, [id]: text }));
-    setPendingFirstMsgTokenById((p) => ({ ...p, [id]: (p[id] ?? 0) + 1 }));
-
-    setChatFocusTokenById((p) => ({ ...p, [id]: (p[id] ?? 0) + 1 }));
-
-    setNewText("");
-
-    window.setTimeout(() => {
-      const el = document.getElementById("composer-chat");
-      el?.scrollIntoView?.({ behavior: "smooth", block: "start" });
-    }, 60);
+    showToast({ message: "Closed." }, 1800);
+    router.push(buildUrl("active")); // remain on Active
   };
 
-  // Auto-create when typing starts (Active only)
-  useEffect(() => {
-    if (surface !== "decisions") return;
+  const setReviewAt = async (d: Decision, review_at: string | null) => {
     if (!userId) return;
-    if (composerChatForId) return;
-    if (newDecisionId) return;
 
-    const t = (newText ?? "").trim();
-    if (t.length < 3) {
-      if (autoCreateTimerRef.current) window.clearTimeout(autoCreateTimerRef.current);
-      autoCreateTimerRef.current = null;
+    setItems((prev) => prev.map((x) => (x.id === d.id ? { ...x, review_at } : x)));
+
+    const { error } = await supabase.from("decisions").update({ review_at }).eq("id", d.id).eq("user_id", userId);
+
+    if (error) {
+      showToast({ message: `Couldn’t update: ${error.message}` }, 3500);
+      scheduleReload();
       return;
     }
 
-    if (autoCreateTimerRef.current) window.clearTimeout(autoCreateTimerRef.current);
-    autoCreateTimerRef.current = window.setTimeout(() => void createNewDecisionIfNeeded(t, { silent: true }), 550);
-
-    return () => {
-      if (autoCreateTimerRef.current) window.clearTimeout(autoCreateTimerRef.current);
-      autoCreateTimerRef.current = null;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [newText, userId, surface, composerChatForId, newDecisionId]);
+    showToast({ message: review_at ? "Review scheduled." : "Review cleared." }, 1600);
+  };
 
   const TopTabs = () => (
     <div className="flex justify-center">
       <div className="flex flex-wrap items-center gap-2">
-        <Chip active={surface === "decisions"} onClick={() => router.push("/decisions")} title="Active decisions">
+        <Chip active={tab === "new"} onClick={() => router.push(buildUrl("new"))} title="New decision">
+          New Decision
+        </Chip>
+        <Chip active={tab === "active"} onClick={() => router.push(buildUrl("active"))} title="Active decisions">
           Active Decisions
         </Chip>
-        <Chip active={surface === "chapters"} onClick={() => router.push("/chapters")} title="Closed decisions">
+        <Chip active={tab === "closed"} onClick={() => router.push(buildUrl("closed"))} title="Closed decisions">
           Closed Decisions
-        </Chip>
-        <Chip active={surface === "revisit"} onClick={() => router.push("/revisit")} title="Review (filter view)">
-          Review
         </Chip>
       </div>
     </div>
   );
 
-  const DecisionHeaderRow = ({
-    d,
-    isOpen,
-    onToggle,
-  }: {
-    d: Decision;
-    isOpen: boolean;
-    onToggle: () => void;
-  }) => {
-    const domainId = domainByDecision[d.id] ?? null;
-    const domainName = domainId ? domains.find((x) => x.id === domainId)?.name ?? null : null;
-
-    const memberIds = constellationsByDecision[d.id] ?? [];
-    const memberNames = memberIds
-      .map((cid) => constellations.find((c) => c.id === cid)?.name)
-      .filter(Boolean) as string[];
-
-    const filedUnder = [domainName, ...memberNames].filter(Boolean) as string[];
-
-    return (
-      <button type="button" onClick={onToggle} className="w-full text-left" aria-expanded={isOpen} title={isOpen ? "Hide" : "Open"}>
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0 flex-1">
-            <div className="text-base font-semibold text-zinc-900">{d.title}</div>
-            <div className="mt-1 text-xs text-zinc-500">
-              Started {softWhen(d.created_at)}
-              {d.decided_at ? ` • Conclusion saved ${softWhen(d.decided_at)}` : ""}
-              {d.review_at ? ` • Review ${softWhen(d.review_at)}` : ""}
-            </div>
-
-            {filedUnder.length > 0 ? (
-              <div className="mt-2 flex flex-wrap gap-2">
-                {filedUnder.slice(0, 3).map((n) => (
-                  <Chip key={n} title="Filed under">
-                    {n}
-                  </Chip>
-                ))}
-                {filedUnder.length > 3 ? <Chip title="More">+{filedUnder.length - 3}</Chip> : null}
-              </div>
-            ) : null}
-          </div>
-
-          <div className="shrink-0">
-            <Chip>{isOpen ? "Hide" : "Open"}</Chip>
+  const DecisionRow = ({ d }: { d: Decision }) => (
+    <div className="px-4 py-4 border-b border-zinc-200 last:border-b-0">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="text-base font-semibold text-zinc-900">{d.title}</div>
+          <div className="mt-1 text-xs text-zinc-500">
+            Started {softWhen(d.created_at)}
+            {d.review_at ? ` • Review ${softWhen(d.review_at)}` : ""}
           </div>
         </div>
-      </button>
-    );
-  };
+
+        <div className="shrink-0">
+          <Chip
+            onClick={() => {
+              setOpenId(d.id);
+              setWorkForId(null);
+              router.push(buildUrl("active", d.id, false));
+              window.setTimeout(() => {
+                const el = cardRefs.current[d.id];
+                el?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+              }, 60);
+            }}
+          >
+            Open
+          </Chip>
+        </div>
+      </div>
+    </div>
+  );
 
   const renderOpenDecision = (d: Decision) => {
-    const isChatOpen = chatForId === d.id;
-    const showDetails = !!showDetailsById[d.id];
-    const revisitMode = revisitModeById[d.id] ?? "";
-    const customDate = customDateById[d.id] ?? "";
     const parts = splitContext(d.context);
-
-    const allAtt = normalizeAttachments(d.attachments) as AttachmentMeta[];
-    const attachmentsTitle = allAtt.length > 0 ? `Files (${allAtt.length})` : "Files";
-
-    const editingNotes = !!notesEditingById[d.id];
+    const editing = !!notesEditingById[d.id];
     const draftNotes = notesDraftById[d.id] ?? parts.notes ?? "";
 
-    const saveNotes = async () => {
-      if (!userId) return;
+    const allAtt = normalizeAttachments(d.attachments) as AttachmentMeta[];
 
-      const nextContext = composeContext(parts.captured, draftNotes);
-
-      setItems((prev) => prev.map((x) => (x.id === d.id ? { ...x, context: nextContext } : x)));
-      setNotesEditingById((p) => ({ ...p, [d.id]: false }));
-
-      const { error } = await supabase.from("decisions").update({ context: nextContext }).eq("id", d.id).eq("user_id", userId);
-      if (error) {
-        showToast({ message: `Couldn’t save: ${error.message}` }, 3500);
-        loadRef.current({ silent: true });
-        return;
-      }
-      showToast({ message: "Saved." }, 1600);
-    };
+    const isWorking = workForId === d.id;
 
     return (
       <div
         ref={(el) => {
           cardRefs.current[d.id] = el;
         }}
-        className={[
-          "rounded-2xl border border-zinc-200 bg-white p-4",
-          highlightId === d.id ? "ring-2 ring-zinc-200" : "",
-        ].join(" ")}
+        className="rounded-2xl border border-zinc-200 bg-white p-4"
       >
-        <DecisionHeaderRow
-          d={d}
-          isOpen={true}
-          onToggle={() => {
-            setOpenId(null);
-            setChatForId(null);
-            setConfirmDeleteForId(null);
-          }}
-        />
+        {/* Header */}
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-base font-semibold text-zinc-900">{d.title}</div>
+            <div className="mt-1 text-xs text-zinc-500">
+              Started {softWhen(d.created_at)}
+              {d.review_at ? ` • Review ${softWhen(d.review_at)}` : ""}
+            </div>
+          </div>
 
-        <div className="mt-4 space-y-4">
-          {/* Conversation (primary) */}
-          {isChatOpen ? (
+          <div className="shrink-0 flex items-center gap-2">
+            <Chip
+              onClick={() => {
+                setOpenId(null);
+                setWorkForId(null);
+                setConfirmDeleteForId(null);
+                router.push(buildUrl("active"));
+              }}
+            >
+              Hide
+            </Chip>
+          </div>
+        </div>
+
+        {/* ✅ Green button (2b trigger) */}
+        {!isWorking ? (
+          <div className="mt-4">
+            <PrimaryActionButton
+              onClick={() => {
+                setWorkForId(d.id);
+                router.push(buildUrl("active", d.id, true));
+                window.setTimeout(() => {
+                  const el = document.getElementById("work-through-panel");
+                  el?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+                }, 60);
+              }}
+              title="Open the conversation"
+            >
+              Let’s work this through
+            </PrimaryActionButton>
+          </div>
+        ) : null}
+
+        {/* ✅ Conversation appears, everything else stays below and scrollable */}
+        {isWorking ? (
+          <div id="work-through-panel" className="mt-4">
             <ConversationPanel
               decisionId={d.id}
               decisionTitle={d.title}
               askedText={d.title}
               frame={{ decision_statement: d.title }}
-              autoFocusToken={chatFocusTokenById[d.id] ?? 0}
-              autoStartToken={chatFocusTokenById[d.id] ?? 0}
-              onClose={() => setChatForId(null)}
+              autoFocusToken={1}
+              autoStartToken={1}
+              onClose={() => {
+                setWorkForId(null);
+                router.push(buildUrl("active", d.id, false));
+              }}
               onSummarySaved={() => void reloadSummaries(d.id)}
             />
-          ) : (
-            <div className="rounded-2xl border border-zinc-200 bg-white p-3">
-              <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-sm font-semibold text-zinc-900">Conversation</div>
-                  <div className="mt-0.5 text-xs text-zinc-500 truncate">{d.title}</div>
-                </div>
+          </div>
+        ) : null}
+
+        {/* Workspace */}
+        <div className="mt-5 space-y-4">
+          {/* Notes (single section) */}
+          <div className="rounded-2xl border border-zinc-200 bg-white p-4 space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-sm font-semibold text-zinc-900">Notes</div>
+
+              {!editing ? (
                 <Chip
                   onClick={() => {
-                    setChatForId(d.id);
-                    setChatFocusTokenById((p) => ({ ...p, [d.id]: (p[d.id] ?? 0) + 1 }));
+                    setNotesEditingById((p) => ({ ...p, [d.id]: true }));
+                    setNotesDraftById((p) => ({ ...p, [d.id]: parts.notes ?? "" }));
                   }}
                 >
-                  Open
+                  Edit
                 </Chip>
-              </div>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <Chip onClick={() => setNotesEditingById((p) => ({ ...p, [d.id]: false }))}>Cancel</Chip>
+                  <Chip onClick={() => void saveNotes(d, parts.captured, draftNotes)}>Save</Chip>
+                </div>
+              )}
             </div>
-          )}
+
+            {!editing ? (
+              <div className="whitespace-pre-wrap rounded-2xl border border-zinc-100 bg-zinc-50 px-4 py-3 text-[15px] leading-relaxed text-zinc-800">
+                {parts.notes?.trim() ? parts.notes : <span className="text-zinc-500">Add a note…</span>}
+              </div>
+            ) : (
+              <textarea
+                value={draftNotes}
+                onChange={(e) => setNotesDraftById((p) => ({ ...p, [d.id]: e.target.value }))}
+                placeholder="Add a note…"
+                className="w-full min-h-[140px] resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[15px] leading-relaxed text-zinc-900 outline-none focus:ring-2 focus:ring-zinc-200"
+              />
+            )}
+          </div>
+
+          {/* Files */}
+          <div className="rounded-2xl border border-zinc-200 bg-white p-3">
+            {userId ? (
+              <AttachmentsBlock
+                userId={userId}
+                decisionId={d.id}
+                title={allAtt.length ? `Files (${allAtt.length})` : "Files"}
+                bucket="captures"
+                initial={allAtt}
+              />
+            ) : (
+              <div className="text-sm text-zinc-600">Files unavailable.</div>
+            )}
+          </div>
+
+          {/* Review (optional) */}
+          <div className="rounded-2xl border border-zinc-200 bg-white p-4 space-y-2">
+            <div className="text-sm font-semibold text-zinc-900">Review</div>
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                type="date"
+                className="h-9 rounded-full border border-zinc-200 bg-white px-3 text-sm text-zinc-700"
+                value={d.review_at ? new Date(safeMs(d.review_at) ?? Date.now()).toISOString().slice(0, 10) : ""}
+                onChange={(e) => {
+                  const iso = isoFromDateInput(e.target.value);
+                  void setReviewAt(d, iso);
+                }}
+                title="Set review date"
+              />
+              {d.review_at ? (
+                <Chip onClick={() => void setReviewAt(d, null)} title="Clear review date">
+                  Clear
+                </Chip>
+              ) : (
+                <span className="text-xs text-zinc-500">Optional</span>
+              )}
+            </div>
+          </div>
+
+          {/* Chat summaries */}
+          {summaries.length > 0 ? (
+            <div className="rounded-2xl border border-zinc-200 bg-white p-4 space-y-3">
+              <div className="space-y-1">
+                <div className="text-sm font-semibold text-zinc-900">Chat summaries</div>
+                <div className="text-xs text-zinc-500">Saved summaries attached to this decision.</div>
+              </div>
+
+              {summaries.map((s) => (
+                <div key={s.id} className="space-y-2">
+                  <div className="text-xs text-zinc-500">Saved {softWhen(s.created_at)}</div>
+                  <div className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-800">{s.summary_text}</div>
+                </div>
+              ))}
+            </div>
+          ) : null}
 
           {/* Actions */}
           {confirmDeleteForId === d.id ? (
@@ -930,14 +937,11 @@ export default function DecisionsClient({ surface = "decisions" }: { surface?: D
                 Delete this decision? <span className="opacity-80">This can’t be undone.</span>
               </div>
               <div className="flex items-center gap-2">
-                <Chip onClick={() => setConfirmDeleteForId(null)} title="Cancel">
-                  Cancel
-                </Chip>
+                <Chip onClick={() => setConfirmDeleteForId(null)}>Cancel</Chip>
                 <button
                   type="button"
                   onClick={() => void performDelete(d)}
                   className="inline-flex select-none items-center justify-center rounded-full border border-[#C94A4A] bg-[#C94A4A] px-4 py-2 text-sm text-white transition hover:bg-[#b94141]"
-                  title="Delete"
                 >
                   Delete
                 </button>
@@ -945,386 +949,249 @@ export default function DecisionsClient({ surface = "decisions" }: { surface?: D
             </div>
           ) : (
             <div className="flex flex-wrap items-center gap-2">
-              <PrimaryActionButton onClick={() => void saveConclusionNow(d)} title="Stamp the conclusion as saved">
-                Save conclusion
-              </PrimaryActionButton>
-
-              <div className="flex flex-wrap items-center gap-2">
-                <div className="text-xs text-zinc-500">Bring back</div>
-                <select
-                  className="h-9 rounded-full border border-zinc-200 bg-white px-3 text-sm text-zinc-700"
-                  value={revisitMode}
-                  onChange={(e) => {
-                    const v = e.target.value as "7" | "30" | "90" | "custom" | "";
-                    setRevisitModeById((prev) => ({ ...prev, [d.id]: v }));
-
-                    if (v === "7") void scheduleRevisitAt(d, isoNowPlusDays(7));
-                    if (v === "30") void scheduleRevisitAt(d, isoNowPlusDays(30));
-                    if (v === "90") void scheduleRevisitAt(d, isoNowPlusDays(90));
-                  }}
-                  aria-label="Bring back"
-                  title="Choose when to bring this back"
-                >
-                  <option value="">Choose…</option>
-                  <option value="7">In 7 days</option>
-                  <option value="30">In 30 days</option>
-                  <option value="90">In 90 days</option>
-                  <option value="custom">Pick a date…</option>
-                </select>
-
-                {revisitMode === "custom" ? (
-                  <div className="flex flex-wrap items-center gap-2">
-                    <input
-                      type="date"
-                      className="h-9 rounded-full border border-zinc-200 bg-white px-3 text-sm text-zinc-700"
-                      value={customDate}
-                      onChange={(e) => setCustomDateById((prev) => ({ ...prev, [d.id]: e.target.value }))}
-                      aria-label="Custom date"
-                      title="Pick a date"
-                    />
-                    <Chip
-                      onClick={() => {
-                        const iso = isoFromDateInput(customDate);
-                        if (!iso) {
-                          showToast({ message: "Pick a valid date." }, 2000);
-                          return;
-                        }
-                        void scheduleRevisitAt(d, iso);
-                      }}
-                      title="Set"
-                    >
-                      Set
-                    </Chip>
-                  </div>
-                ) : null}
-
-                {d.review_at ? (
-                  <Chip onClick={() => void clearRevisit(d)} title="Clear">
-                    Clear
-                  </Chip>
-                ) : null}
-              </div>
-
-              <Chip onClick={() => setShowDetailsById((p) => ({ ...p, [d.id]: !p[d.id] }))} title="Details">
-                {showDetails ? "Hide details" : "Details"}
-              </Chip>
-
-              <Chip onClick={() => setConfirmDeleteForId(d.id)} title="Delete">
+              <Chip onClick={() => setConfirmDeleteForId(d.id)} title="Delete decision">
                 Delete
+              </Chip>
+              <Chip onClick={() => void closeDecision(d)} title="Close decision">
+                Close decision
               </Chip>
             </div>
           )}
-
-          {/* Details */}
-          {showDetails ? (
-            <div className="space-y-4">
-              <div className="rounded-2xl border border-zinc-200 bg-white p-4 space-y-2">
-                <div className="text-sm font-semibold text-zinc-900">Original</div>
-                <div className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-700">
-                  {(parts.captured || d.title || "").trim() || "—"}
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-zinc-200 bg-white p-4 space-y-3">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="text-sm font-semibold text-zinc-900">Notes</div>
-
-                  {!editingNotes ? (
-                    <Chip
-                      onClick={() => {
-                        setNotesEditingById((p) => ({ ...p, [d.id]: true }));
-                        setNotesDraftById((p) => ({ ...p, [d.id]: parts.notes ?? "" }));
-                      }}
-                      title="Edit"
-                    >
-                      Edit
-                    </Chip>
-                  ) : (
-                    <div className="flex items-center gap-2">
-                      <Chip onClick={() => setNotesEditingById((p) => ({ ...p, [d.id]: false }))} title="Cancel">
-                        Cancel
-                      </Chip>
-                      <Chip onClick={() => void saveNotes()} title="Save">
-                        Save
-                      </Chip>
-                    </div>
-                  )}
-                </div>
-
-                {!editingNotes ? (
-                  <div className="whitespace-pre-wrap rounded-2xl border border-zinc-100 bg-zinc-50 px-4 py-3 text-[15px] leading-relaxed text-zinc-800">
-                    {parts.notes?.trim() ? parts.notes : <span className="text-zinc-500">Add a note…</span>}
-                  </div>
-                ) : (
-                  <textarea
-                    value={draftNotes}
-                    onChange={(e) => setNotesDraftById((p) => ({ ...p, [d.id]: e.target.value }))}
-                    placeholder="Add a note…"
-                    className="w-full min-h-[140px] resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[15px] leading-relaxed text-zinc-900 outline-none focus:ring-2 focus:ring-zinc-200"
-                    aria-label="Notes"
-                  />
-                )}
-              </div>
-
-              {/* Labels (optional) */}
-              {hasAnyLabelOptions ? (
-                <div className="rounded-2xl border border-zinc-200 bg-white p-4 space-y-3">
-                  <div className="text-sm font-semibold text-zinc-900">Filed under</div>
-
-                  <div className="space-y-2">
-                    <div className="text-xs text-zinc-500">Area</div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Chip active={!domainByDecision[d.id]} onClick={() => void setDecisionDomain(d.id, null)}>
-                        None
-                      </Chip>
-                      {domains.map((dom) => (
-                        <Chip
-                          key={dom.id}
-                          active={(domainByDecision[d.id] ?? null) === dom.id}
-                          onClick={() => void setDecisionDomain(d.id, dom.id)}
-                        >
-                          {dom.name}
-                        </Chip>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <div className="text-xs text-zinc-500">Groups</div>
-                    {constellations.length === 0 ? (
-                      <div className="text-sm text-zinc-600">No groups yet.</div>
-                    ) : (
-                      <div className="flex flex-wrap items-center gap-2">
-                        {constellations.map((c) => {
-                          const active = (constellationsByDecision[d.id] ?? []).includes(c.id);
-                          return (
-                            <Chip key={c.id} active={active} onClick={() => void toggleConstellation(d.id, c.id)}>
-                              {c.name}
-                            </Chip>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              ) : null}
-
-              <div className="rounded-2xl border border-zinc-200 bg-white p-3">
-                {userId ? (
-                  <AttachmentsBlock userId={userId} decisionId={d.id} title={attachmentsTitle} bucket="captures" initial={allAtt} />
-                ) : (
-                  <div className="text-sm text-zinc-600">Files unavailable.</div>
-                )}
-              </div>
-
-              {summaries.length > 0 ? (
-                <div className="rounded-2xl border border-zinc-200 bg-white p-4 space-y-3">
-                  <div className="space-y-1">
-                    <div className="text-sm font-semibold text-zinc-900">Saved chat summaries</div>
-                    <div className="text-xs text-zinc-500">These are stored on the decision.</div>
-                  </div>
-
-                  {summaries.map((s) => (
-                    <div key={s.id} className="space-y-2">
-                      <div className="text-xs text-zinc-500">Saved {softWhen(s.created_at)}</div>
-                      <div className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-800">{s.summary_text}</div>
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-          ) : null}
         </div>
       </div>
     );
   };
+
+  const reviewCount = useMemo(() => {
+    if (tab !== "active") return 0;
+    return items.filter((d) => d.status !== "chapter" && isReviewDue(d.review_at)).length;
+  }, [tab, items]);
 
   return (
     <Page title={pageTitle} subtitle={pageSubtitle} right={null}>
       <div className="mx-auto w-full max-w-[760px] space-y-6">
         <TopTabs />
 
-        {/* Composer: Active Decisions only */}
-        {surface === "decisions" ? (
-          <div ref={composerRef} className="rounded-2xl border border-zinc-200 bg-white p-4">
-            <div className="space-y-3">
-              <div className="space-y-1">
-                <div className="text-sm font-semibold text-zinc-900">Talk it through</div>
-                <div className="text-sm text-zinc-600">Start typing. We’ll hold it safely here.</div>
-              </div>
+        {/* ✅ Page 1: New Decision (AI clarify flow) */}
+        {tab === "new" ? (
+          <div className="rounded-2xl border border-zinc-200 bg-white p-4 space-y-4">
+            <div className="space-y-1">
+              <div className="text-sm font-semibold text-zinc-900">What needs deciding?</div>
+              <div className="text-sm text-zinc-600">Start messy — we’ll clarify it.</div>
+            </div>
 
-              {composerChatForId ? (
-                <div id="composer-chat" className="pt-1">
-                  <ConversationPanel
-                    decisionId={composerChatForId}
-                    decisionTitle={items.find((x) => x.id === composerChatForId)?.title ?? "New decision"}
-                    askedText={items.find((x) => x.id === composerChatForId)?.title ?? ""}
-                    frame={{ decision_statement: items.find((x) => x.id === composerChatForId)?.title ?? "" }}
-                    onClose={() => setComposerChatForId(null)}
-                    onSummarySaved={() => void reloadSummaries(composerChatForId)}
-                    autoFocusToken={chatFocusTokenById[composerChatForId] ?? 0}
-                    autoStartToken={chatFocusTokenById[composerChatForId] ?? 0}
-                    initialUserMessage={pendingFirstMsgById[composerChatForId] ?? ""}
-                    initialUserMessageToken={pendingFirstMsgTokenById[composerChatForId] ?? 0}
-                    onInitialUserMessageConsumed={() => {
-                      const id = composerChatForId;
-                      if (!id) return;
-                      setPendingFirstMsgById((p) => ({ ...p, [id]: "" }));
-                    }}
-                  />
+            <textarea
+              ref={newRef}
+              value={newText}
+              onChange={(e) => setNewText(e.target.value)}
+              rows={4}
+              placeholder="Start typing…"
+              className="w-full resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[15px] leading-relaxed text-zinc-900 outline-none focus:ring-2 focus:ring-zinc-200"
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey && newStep === "input") {
+                  e.preventDefault();
+                  void requestFrame();
+                }
+              }}
+            />
 
-                  <div className="mt-3 flex flex-wrap items-center gap-2">
-                    {newDecisionId ? (
-                      <Chip
-                        onClick={() => {
-                          const id = newDecisionId;
-                          if (!id) return;
-                          openCardAtTop(id);
-                          setComposerChatForId(null);
-                        }}
-                        title="Open below"
-                      >
-                        Go to it
-                      </Chip>
-                    ) : null}
+            {newStep === "framing" ? <div className="text-sm text-zinc-500">Clarifying…</div> : null}
 
-                    <Chip onClick={resetComposer} title="Start a fresh new decision">
-                      New decision
-                    </Chip>
+            {(newStep === "confirm" || newStep === "edit") && frameDraft ? (
+              <div className="space-y-4">
+                {frameDraft.what_im_hearing ? (
+                  <div className="rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3">
+                    <div className="text-xs font-semibold text-zinc-500">What I’m hearing</div>
+                    <div className="mt-2 whitespace-pre-wrap text-sm text-zinc-800">{frameDraft.what_im_hearing}</div>
                   </div>
+                ) : null}
 
-                  {userId && newDecisionId && composerShowFiles ? (
-                    <div className="mt-3 rounded-2xl bg-white">
-                      <AttachmentsBlock userId={userId} decisionId={newDecisionId} title="Files" bucket="captures" initial={[]} />
-                      <div className="mt-2 text-xs text-zinc-500">These files are attached to this decision.</div>
+                <div className="rounded-2xl border border-zinc-200 bg-white p-4 space-y-3">
+                  <div className="text-sm font-semibold text-zinc-900">Decision statement</div>
+
+                  {newStep === "confirm" ? (
+                    <div className="space-y-1">
+                      <div className="text-sm text-zinc-900">{frameDraft.statement}</div>
+                      <div className="text-xs text-zinc-500">{frameDraft.title}</div>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <input
+                        value={frameDraft.title}
+                        onChange={(e) => setFrameDraft((p) => (p ? { ...p, title: e.target.value } : p))}
+                        className="h-10 w-full rounded-full border border-zinc-200 bg-white px-4 text-sm text-zinc-800 outline-none focus:ring-2 focus:ring-zinc-200"
+                        placeholder="Title"
+                      />
+                      <textarea
+                        value={frameDraft.statement}
+                        onChange={(e) => setFrameDraft((p) => (p ? { ...p, statement: e.target.value } : p))}
+                        rows={3}
+                        className="w-full resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-sm text-zinc-800 outline-none focus:ring-2 focus:ring-zinc-200"
+                        placeholder="Decision statement"
+                      />
+                    </div>
+                  )}
+
+                  {frameDraft.questions?.length ? (
+                    <div>
+                      <div className="text-xs font-semibold text-zinc-500">Quick clarifiers</div>
+                      <ul className="mt-2 list-disc pl-5 text-sm text-zinc-700 space-y-1">
+                        {frameDraft.questions.map((q, i) => (
+                          <li key={i}>{q}</li>
+                        ))}
+                      </ul>
                     </div>
                   ) : null}
-                </div>
-              ) : (
-                <>
-                  <textarea
-                    ref={composerInputRef}
-                    value={newText}
-                    onChange={(e) => setNewText(e.target.value)}
-                    rows={3}
-                    placeholder="What decision are you holding right now?"
-                    className="w-full resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[15px] leading-relaxed text-zinc-900 outline-none focus:ring-2 focus:ring-zinc-200"
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && !e.shiftKey) {
-                        e.preventDefault();
-                        void sendFromComposer();
-                      }
-                    }}
-                  />
 
-                  <div className="flex flex-wrap items-center gap-2">
-                    <PrimaryActionButton disabled={creatingNew} onClick={() => void sendFromComposer()} title="Start">
-                      {creatingNew ? "Starting…" : "Talk"}
-                    </PrimaryActionButton>
+                  <div className="flex flex-wrap items-center gap-2 pt-2">
+                    {newStep === "confirm" ? (
+                      <>
+                        <PrimaryActionButton disabled={creatingNew} onClick={() => void saveFramedDecision()} title="Save to Active Decisions">
+                          {creatingNew ? "Saving…" : "Yes — Save to Active"}
+                        </PrimaryActionButton>
+                        <Chip onClick={() => setNewStep("edit")} title="Edit the statement">
+                          Edit
+                        </Chip>
+                      </>
+                    ) : (
+                      <>
+                        <PrimaryActionButton disabled={creatingNew} onClick={() => void saveFramedDecision()} title="Save to Active Decisions">
+                          {creatingNew ? "Saving…" : "Save to Active"}
+                        </PrimaryActionButton>
+                        <Chip onClick={() => setNewStep("confirm")} title="Done editing">
+                          Done
+                        </Chip>
+                      </>
+                    )}
 
                     <Chip
-                      onClick={async () => {
-                        const id = await createNewDecisionIfNeeded(undefined, { silent: false });
-                        if (!id) return;
-                        setComposerShowFiles(true);
-                        setComposerChatForId(id);
+                      onClick={() => {
+                        setFrameDraft(null);
+                        setNewStep("input");
                       }}
-                      title="Attach files"
+                      title="Start over"
                     >
-                      Add files
+                      Start over
                     </Chip>
                   </div>
-                </>
-              )}
-            </div>
-          </div>
-        ) : null}
-
-        <AssistedSearch scope={assistedScope as any} placeholder="Search decisions…" />
-
-        <div className="space-y-4">
-          <TilesRow title="Filter by area" items={domains} activeId={activeDomainId} onSelect={(id) => setActiveDomainId(id)} />
-          <TilesRow
-            title="Filter by group"
-            items={constellations}
-            activeId={activeConstellationId}
-            onSelect={(id) => setActiveConstellationId(id)}
-          />
-        </div>
-
-        <div className="text-xs text-zinc-500">{statusLine}</div>
-
-        {/* Empty */}
-        {filteredItems.length === 0 ? (
-          <div className="rounded-2xl border border-zinc-200 bg-white p-4">
-            <div className="space-y-2">
-              <div className="text-sm font-semibold text-zinc-900">All clear.</div>
-              <div className="text-sm text-zinc-600">When something needs attention, it can live here quietly.</div>
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-6">
-            {/* Open decision is separated (not stuck to list) */}
-            {openItem ? (
-              <div className="space-y-3">
-                <div className="text-xs font-semibold text-zinc-500">Open decision</div>
-                {renderOpenDecision(openItem)}
+                </div>
               </div>
             ) : null}
 
-            {/* List */}
-            <div className="space-y-3">
-              <div className="flex items-center justify-between gap-3">
-                <div className="text-xs font-semibold text-zinc-500">{openItem ? "Other decisions" : "Decisions"}</div>
+            {newStep === "input" ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <PrimaryActionButton disabled={framingBusy || creatingNew} onClick={() => void requestFrame()} title="Clarify this decision">
+                  {framingBusy ? "Clarifying…" : "Next"}
+                </PrimaryActionButton>
 
-                {hasMore ? (
-                  <div className="flex items-center gap-2">
-                    <Chip onClick={() => setShowAll((v) => !v)}>{showAll ? "Show less" : "Show all"}</Chip>
-                    {!showAll ? (
-                      <div className="text-xs text-zinc-500">
-                        Showing {DEFAULT_LIMIT} of {others.length}
+                <Chip onClick={() => router.push(buildUrl("active"))} title="Go to Active Decisions">
+                  Active Decisions
+                </Chip>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        {/* Page 2: Active Decisions */}
+        {tab === "active" ? (
+          <div className="space-y-4">
+            {/* Search bar + review filter (your sketch) */}
+            <div className="rounded-2xl border border-zinc-200 bg-white p-3">
+              <div className="flex items-center gap-2">
+                <input
+                  value={searchText}
+                  onChange={(e) => setSearchText(e.target.value)}
+                  placeholder="Search decisions…"
+                  className="h-10 w-full rounded-full border border-zinc-200 bg-white px-4 text-sm text-zinc-800 outline-none focus:ring-2 focus:ring-zinc-200"
+                />
+
+                <Chip active={reviewOnly} onClick={() => setReviewOnly((v) => !v)} title="Filter to decisions needing review">
+                  Review{reviewCount ? ` (${reviewCount})` : ""}
+                </Chip>
+              </div>
+
+              {activeDomainId || activeConstellationId ? (
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <Chip onClick={() => setActiveDomainId(null)} title="Clear area filter">
+                    Clear area
+                  </Chip>
+                  <Chip onClick={() => setActiveConstellationId(null)} title="Clear group filter">
+                    Clear group
+                  </Chip>
+                </div>
+              ) : null}
+            </div>
+
+            {/* Optional label tiles */}
+            <div className="space-y-4">
+              <TilesRow title="Filter by area" items={domains} activeId={activeDomainId} onSelect={(id) => setActiveDomainId(id)} />
+              <TilesRow title="Filter by group" items={constellations} activeId={activeConstellationId} onSelect={(id) => setActiveConstellationId(id)} />
+            </div>
+
+            <div className="text-xs text-zinc-500">{statusLine}</div>
+
+            {filteredItems.length === 0 ? (
+              <div className="rounded-2xl border border-zinc-200 bg-white p-4">
+                <div className="space-y-2">
+                  <div className="text-sm font-semibold text-zinc-900">All clear.</div>
+                  <div className="text-sm text-zinc-600">When something needs attention, it can live here quietly.</div>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-6">
+                {/* Open decision (separate from list) */}
+                {openItem ? (
+                  <div className="space-y-3">
+                    <div className="text-xs font-semibold text-zinc-500">Open decision</div>
+                    {renderOpenDecision(openItem)}
+                  </div>
+                ) : null}
+
+                {/* List */}
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-xs font-semibold text-zinc-500">{openItem ? "Other decisions" : "Decisions"}</div>
+
+                    {hasMore ? (
+                      <div className="flex items-center gap-2">
+                        <Chip onClick={() => setShowAll((v) => !v)}>{showAll ? "Show less" : "Show all"}</Chip>
+                        {!showAll ? (
+                          <div className="text-xs text-zinc-500">
+                            Showing {DEFAULT_LIMIT} of {others.length}
+                          </div>
+                        ) : null}
                       </div>
                     ) : null}
                   </div>
-                ) : null}
+
+                  <div className="rounded-2xl border border-zinc-200 bg-white">{visibleOthers.map((d) => <DecisionRow key={d.id} d={d} />)}</div>
+                </div>
               </div>
-
-              <div className="rounded-2xl border border-zinc-200 bg-white">
-                {visibleOthers.map((d) => {
-                  const isOpen = openId === d.id;
-                  return (
-                    <div
-                      key={d.id}
-                      className={[
-                        "px-4 py-4",
-                        "border-b border-zinc-200 last:border-b-0",
-                        highlightId === d.id ? "ring-2 ring-zinc-200 rounded-2xl" : "",
-                      ].join(" ")}
-                    >
-                      <DecisionHeaderRow
-                        d={d}
-                        isOpen={isOpen}
-                        onToggle={() => {
-                          const nextOpen = isOpen ? null : d.id;
-                          setOpenId(nextOpen);
-
-                          if (!nextOpen) {
-                            setChatForId(null);
-                            setConfirmDeleteForId(null);
-                            return;
-                          }
-
-                          setChatForId(d.id);
-                          setChatFocusTokenById((p) => ({ ...p, [d.id]: (p[d.id] ?? 0) + 1 }));
-                        }}
-                      />
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
+            )}
           </div>
-        )}
+        ) : null}
+
+        {/* Page 3: Closed Decisions */}
+        {tab === "closed" ? (
+          <div className="space-y-3">
+            <div className="text-xs text-zinc-500">{statusLine}</div>
+
+            {filteredItems.length === 0 ? (
+              <div className="rounded-2xl border border-zinc-200 bg-white p-4">
+                <div className="text-sm text-zinc-600">No closed decisions yet.</div>
+              </div>
+            ) : (
+              <div className="rounded-2xl border border-zinc-200 bg-white">
+                {filteredItems.map((d) => (
+                  <div key={d.id} className="px-4 py-4 border-b border-zinc-200 last:border-b-0">
+                    <div className="text-base font-semibold text-zinc-900">{d.title}</div>
+                    <div className="mt-1 text-xs text-zinc-500">Started {softWhen(d.created_at)}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : null}
       </div>
     </Page>
   );

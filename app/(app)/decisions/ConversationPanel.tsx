@@ -91,15 +91,17 @@ export function ConversationPanel(props: {
   const [loading, setLoading] = useState<boolean>(true);
 
   const [sending, setSending] = useState<boolean>(false);
-  const [savingSummary, setSavingSummary] = useState<boolean>(false);
 
   const [messages, setMessages] = useState<Msg[]>([]);
   const [draft, setDraft] = useState<string>("");
 
   const [bootMessage, setBootMessage] = useState<string>("");
 
-  const [savedSummaryText, setSavedSummaryText] = useState<string>("");
+  // ✅ Two-step summary flow
+  const [summaryPreview, setSummaryPreview] = useState<string>("");
   const [summaryStatus, setSummaryStatus] = useState<string>("");
+  const [creatingSummary, setCreatingSummary] = useState<boolean>(false);
+  const [savingSummary, setSavingSummary] = useState<boolean>(false);
 
   const endRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -190,7 +192,7 @@ export function ConversationPanel(props: {
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "auto", block: "end" });
-  }, [messages.length, bootMessage, savedSummaryText]);
+  }, [messages.length, bootMessage, summaryPreview]);
 
   const persist = async (next: Msg[]) => {
     if (!userId) return;
@@ -218,7 +220,8 @@ export function ConversationPanel(props: {
     setStatus("");
     void persist(next);
 
-    setSavedSummaryText("");
+    // If user continues chatting, we don’t keep an old summary preview hanging around
+    setSummaryPreview("");
     setSummaryStatus("");
 
     try {
@@ -277,23 +280,18 @@ export function ConversationPanel(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialUserMessageToken]);
 
-  const saveChatSummary = async () => {
-    if (savingSummary) return;
+  const createChatSummary = async () => {
+    if (creatingSummary) return;
 
     if (messages.length === 0) {
-      setSavedSummaryText("");
+      setSummaryPreview("");
       setSummaryStatus("Nothing to summarise yet.");
       return;
     }
-    if (!userId) {
-      setSavedSummaryText("");
-      setSummaryStatus("Not signed in.");
-      return;
-    }
 
-    setSavingSummary(true);
-    setSavedSummaryText("");
-    setSummaryStatus("Saving…");
+    setCreatingSummary(true);
+    setSummaryPreview("");
+    setSummaryStatus("Creating summary…");
 
     try {
       const res = await fetch("/api/ai/conversation", {
@@ -320,10 +318,32 @@ export function ConversationPanel(props: {
         return;
       }
 
+      setSummaryPreview(text);
+      setSummaryStatus("");
+    } catch (e: any) {
+      setSummaryStatus(e?.message ?? "Summary failed.");
+    } finally {
+      setCreatingSummary(false);
+    }
+  };
+
+  const saveSummary = async () => {
+    if (savingSummary) return;
+    if (!summaryPreview.trim()) return;
+
+    if (!userId) {
+      setSummaryStatus("Not signed in.");
+      return;
+    }
+
+    setSavingSummary(true);
+    setSummaryStatus("Saving…");
+
+    try {
       const { error } = await supabase.from("decision_summaries").insert({
         user_id: userId,
         decision_id: decisionId,
-        summary_text: text,
+        summary_text: summaryPreview.trim(),
       });
 
       if (error) {
@@ -331,11 +351,13 @@ export function ConversationPanel(props: {
         return;
       }
 
-      setSavedSummaryText(text);
-      setSummaryStatus("Saved to this decision.");
+      // ✅ Collapse preview after save (matches your sketch)
+      setSummaryPreview("");
+      setSummaryStatus("Saved.");
       onSummarySaved?.();
+      window.setTimeout(() => setSummaryStatus(""), 1200);
     } catch (e: any) {
-      setSummaryStatus(e?.message ?? "Summary failed.");
+      setSummaryStatus(e?.message ?? "Save failed.");
     } finally {
       setSavingSummary(false);
     }
@@ -346,7 +368,7 @@ export function ConversationPanel(props: {
       {/* Minimal header */}
       <div className="flex items-start justify-between gap-3 px-1">
         <div className="min-w-0">
-          <div className="text-sm font-semibold text-zinc-900">Conversation</div>
+          <div className="text-sm font-semibold text-zinc-900">Let’s work this through</div>
           {askedText ? <div className="mt-1 text-xs text-zinc-500 truncate">{askedText}</div> : null}
         </div>
 
@@ -383,7 +405,7 @@ export function ConversationPanel(props: {
               );
             }
 
-            // Assistant: no heavy “card” bubble — just clean content on white
+            // Assistant: clean content on white
             return (
               <div key={idx} className="flex justify-start">
                 <div className="max-w-[86%] px-1 py-1">
@@ -394,11 +416,21 @@ export function ConversationPanel(props: {
           })}
         </div>
 
-        {savedSummaryText ? (
+        {/* Summary preview (only appears after “Create chat summary”) */}
+        {summaryPreview ? (
           <div className="mt-6">
             <div className="max-w-[86%] rounded-2xl border border-zinc-200 bg-white px-5 py-4">
-              <div className="mb-2 text-xs text-zinc-500">Saved chat summary</div>
-              <MarkdownBody content={savedSummaryText} />
+              <div className="mb-2 text-xs text-zinc-500">Chat summary</div>
+              <MarkdownBody content={summaryPreview} />
+
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <Chip onClick={() => setSummaryPreview("")} title="Discard">
+                  Discard
+                </Chip>
+                <Chip onClick={saveSummary} title="Save summary to the decision">
+                  {savingSummary ? "Saving…" : "Save summary"}
+                </Chip>
+              </div>
             </div>
           </div>
         ) : null}
@@ -451,9 +483,11 @@ export function ConversationPanel(props: {
           </div>
 
           <div className="mt-2 flex flex-wrap items-center gap-2">
-            <Chip onClick={saveChatSummary} title="Summarise this chat and save it to the decision">
-              {savingSummary ? "Saving…" : "Save chat summary"}
-            </Chip>
+            {!summaryPreview ? (
+              <Chip onClick={createChatSummary} title="Create a chat summary (preview first)">
+                {creatingSummary ? "Creating…" : "Create chat summary"}
+              </Chip>
+            ) : null}
           </div>
         </div>
       </div>
