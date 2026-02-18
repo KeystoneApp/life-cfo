@@ -1,4 +1,3 @@
-// app/(app)/decisions/DecisionsClient.tsx
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -47,16 +46,17 @@ type Constellation = { id: string; name: string; sort_order?: number | null };
 
 type Tab = "new" | "active" | "closed";
 
-/** ✅ decision notes table rows (Path B: many notes with timestamps) */
+/** ✅ NEW: decision notes table rows */
 type DecisionNote = {
   id: string;
   user_id: string;
   decision_id: string;
-  kind: "framing" | "thinking" | "note";
   body: string;
   created_at: string;
   updated_at: string | null;
 };
+
+type ReviewPreset = "none" | "1d" | "7d" | "14d" | "30d" | "90d" | "custom";
 
 function safeMs(iso: string | null | undefined) {
   if (!iso) return null;
@@ -73,6 +73,7 @@ function softWhen(iso: string | null | undefined) {
 function softWhenDateTime(iso: string | null | undefined) {
   const ms = safeMs(iso);
   if (!ms) return "";
+  // compact, readable
   return new Date(ms).toLocaleString(undefined, {
     year: "numeric",
     month: "2-digit",
@@ -87,6 +88,19 @@ function isoFromDateInput(dateStr: string) {
   const ms = Date.parse(`${dateStr}T12:00:00`);
   if (Number.isNaN(ms)) return null;
   return new Date(ms).toISOString();
+}
+
+function addDaysIso(days: number) {
+  const ms = Date.now() + days * 24 * 60 * 60 * 1000;
+  const d = new Date(ms);
+  d.setHours(12, 0, 0, 0);
+  return d.toISOString();
+}
+
+function dateInputValueFromIso(iso: string | null | undefined) {
+  const ms = safeMs(iso);
+  if (!ms) return "";
+  return new Date(ms).toISOString().slice(0, 10);
 }
 
 function normalizeAttachments(raw: unknown): AttachmentMeta[] {
@@ -127,7 +141,7 @@ function titleFromStatement(statement: string) {
  * <notes>
  *
  * ✅ We keep Captured in context for provenance,
- * but decision NOTES are stored in decision_notes table.
+ * but decision NOTES are now stored in decision_notes table.
  */
 function splitContext(context: string | null) {
   const raw = (context ?? "").trim();
@@ -164,7 +178,12 @@ function composeContext(captured: string, notes: string) {
   return `Captured:\n${cap}\n\n---\nDraft:\n${n}`;
 }
 
-function PrimaryActionButton(props: { children: React.ReactNode; onClick?: () => void; title?: string; disabled?: boolean }) {
+function PrimaryActionButton(props: {
+  children: React.ReactNode;
+  onClick?: () => void;
+  title?: string;
+  disabled?: boolean;
+}) {
   const { children, onClick, title, disabled } = props;
   return (
     <button
@@ -257,7 +276,7 @@ export default function DecisionsClient() {
   const [newText, setNewText] = useState<string>("");
   const [creatingNew, setCreatingNew] = useState<boolean>(false);
 
-  // ✅ Page 1 framing step
+  // ✅ Page 1 framing step (PATCH)
   type FrameDraft = {
     title: string;
     statement: string;
@@ -272,12 +291,15 @@ export default function DecisionsClient() {
   const DEFAULT_LIMIT = 5;
   const [showAll, setShowAll] = useState(false);
 
-  /** ✅ decision notes state (per open decision) */
+  /** ✅ NEW: decision notes state (per open decision) */
   const [notesByDecisionId, setNotesByDecisionId] = useState<Record<string, DecisionNote[]>>({});
   const [notesLoadingByDecisionId, setNotesLoadingByDecisionId] = useState<Record<string, boolean>>({});
   const [noteDraftByDecisionId, setNoteDraftByDecisionId] = useState<Record<string, string>>({});
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [editingNoteDraft, setEditingNoteDraft] = useState<string>("");
+
+  const [reviewPresetByDecisionId, setReviewPresetByDecisionId] = useState<Record<string, ReviewPreset>>({});
+  const [reviewCustomOpenForId, setReviewCustomOpenForId] = useState<string | null>(null);
 
   const scheduleReload = () => {
     if (reloadTimerRef.current) window.clearTimeout(reloadTimerRef.current);
@@ -452,7 +474,7 @@ export default function DecisionsClient() {
     setSummaries((data ?? []) as DecisionSummary[]);
   };
 
-  /** ✅ load notes for a decision (Path B: includes kind) */
+  /** ✅ NEW: load notes for a decision */
   const loadNotes = async (decisionId: string) => {
     if (!userId) return;
 
@@ -460,7 +482,7 @@ export default function DecisionsClient() {
 
     const { data, error } = await supabase
       .from("decision_notes")
-      .select("id,user_id,decision_id,kind,body,created_at,updated_at")
+      .select("id,user_id,decision_id,body,created_at,updated_at")
       .eq("user_id", userId)
       .eq("decision_id", decisionId)
       .order("created_at", { ascending: false });
@@ -479,7 +501,6 @@ export default function DecisionsClient() {
         id: String(r.id),
         user_id: String(r.user_id),
         decision_id: String(r.decision_id),
-        kind: r.kind === "framing" || r.kind === "thinking" || r.kind === "note" ? r.kind : "note",
         body: String(r.body),
         created_at: String(r.created_at ?? new Date().toISOString()),
         updated_at: r.updated_at ? String(r.updated_at) : null,
@@ -489,7 +510,6 @@ export default function DecisionsClient() {
     setNotesLoadingByDecisionId((p) => ({ ...p, [decisionId]: false }));
   };
 
-  /** ✅ Path B insert: always provide kind (use "note") */
   const addNote = async (decisionId: string) => {
     if (!userId) {
       showToast({ message: "Not signed in." }, 2500);
@@ -508,7 +528,6 @@ export default function DecisionsClient() {
     const { error } = await supabase.from("decision_notes").insert({
       user_id: userId,
       decision_id: decisionId,
-      kind: "note",
       body: text,
     });
 
@@ -584,7 +603,7 @@ export default function DecisionsClient() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId, openDecision?.id]);
 
-  // when open decision changes, load its notes
+  // ✅ when open decision changes, load its notes
   useEffect(() => {
     if (!userId) return;
     if (tab !== "active") return;
@@ -601,7 +620,8 @@ export default function DecisionsClient() {
     if (tab === "active" || tab === "new") list = list.filter((d) => d.status !== "chapter");
 
     if (tab === "active") {
-      if (reviewOnly) list = list.filter((d) => isReviewDue(d.review_at));
+      if (reviewOnly) list = list.filter((d) => !!d.review_at);
+
       const t = (searchText ?? "").trim().toLowerCase();
       if (t) {
         list = list.filter((d) => {
@@ -614,6 +634,14 @@ export default function DecisionsClient() {
     if (tab === "active") {
       if (activeDomainId) list = list.filter((d) => (domainByDecision[d.id] ?? null) === activeDomainId);
       if (activeConstellationId) list = list.filter((d) => (constellationsByDecision[d.id] ?? []).includes(activeConstellationId));
+    }
+
+    if (tab === "active" && reviewOnly) {
+      list = [...list].sort((a, b) => {
+        const am = safeMs(a.review_at) ?? Number.POSITIVE_INFINITY;
+        const bm = safeMs(b.review_at) ?? Number.POSITIVE_INFINITY;
+        return am - bm;
+      });
     }
 
     return list;
@@ -678,7 +706,7 @@ export default function DecisionsClient() {
     }
   };
 
-  // Page 1 requestFrame + saveFramedDecision
+  // ✅ PATCH: Page 1 requestFrame + saveFramedDecision
   const requestFrame = async () => {
     const text = (newText ?? "").trim();
     if (!text) {
@@ -899,7 +927,6 @@ export default function DecisionsClient() {
 
   const renderOpenDecision = (d: Decision) => {
     const parts = splitContext(d.context);
-    void parts; // provenance only; keep in case you later surface captured context
 
     const allAtt = normalizeAttachments(d.attachments) as AttachmentMeta[];
     const isWorking = workForId === d.id;
@@ -980,7 +1007,7 @@ export default function DecisionsClient() {
 
         {/* Workspace */}
         <div className="mt-5 space-y-4">
-          {/* NOTES */}
+          {/* ✅ NOTES (new model) */}
           <div className="rounded-2xl border border-zinc-200 bg-white p-4 space-y-3">
             <div className="flex items-center justify-between gap-2">
               <div className="text-sm font-semibold text-zinc-900">Notes</div>
@@ -999,6 +1026,7 @@ export default function DecisionsClient() {
                 placeholder="Add a note…"
                 className="w-full min-h-[90px] resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[15px] leading-relaxed text-zinc-900 outline-none focus:ring-2 focus:ring-zinc-200"
                 onKeyDown={(e) => {
+                  // Cmd/Ctrl+Enter saves note
                   const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
                   const cmdOrCtrl = isMac ? e.metaKey : e.ctrlKey;
                   if (cmdOrCtrl && e.key === "Enter") {
@@ -1009,9 +1037,9 @@ export default function DecisionsClient() {
               />
 
               <div className="flex flex-wrap items-center gap-2">
-                <PrimaryActionButton onClick={() => void addNote(d.id)} title="Save note">
+                <Chip onClick={() => void addNote(d.id)} title="Save note">
                   Save note
-                </PrimaryActionButton>
+                </Chip>
 
                 {editingNoteId ? <div className="text-xs text-zinc-500">Editing a note below — save/cancel there.</div> : null}
               </div>
@@ -1030,8 +1058,6 @@ export default function DecisionsClient() {
                     const isEditing = editingNoteId === n.id;
                     const stamp = softWhenDateTime(n.created_at);
                     const edited = n.updated_at ? ` • edited ${softWhenDateTime(n.updated_at)}` : "";
-                    const kindLabel =
-                      n.kind === "framing" ? "Framing" : n.kind === "thinking" ? "Thinking" : n.kind === "note" ? "Note" : "Note";
 
                     return (
                       <div key={n.id} className="rounded-2xl border border-zinc-200 bg-white px-4 py-3">
@@ -1040,7 +1066,6 @@ export default function DecisionsClient() {
                             <div className="text-xs text-zinc-500">
                               {stamp}
                               {edited}
-                              <span className="text-zinc-400"> • {kindLabel}</span>
                             </div>
                           </div>
 
@@ -1086,34 +1111,97 @@ export default function DecisionsClient() {
           {/* Files */}
           <div className="rounded-2xl border border-zinc-200 bg-white p-3">
             {userId ? (
-              <AttachmentsBlock userId={userId} decisionId={d.id} title={allAtt.length ? `Files (${allAtt.length})` : "Files"} bucket="captures" initial={allAtt} />
+              <AttachmentsBlock
+                userId={userId}
+                decisionId={d.id}
+                title={allAtt.length ? `Files (${allAtt.length})` : "Files"}
+                bucket="captures"
+                initial={allAtt}
+              />
             ) : (
               <div className="text-sm text-zinc-600">Files unavailable.</div>
             )}
           </div>
 
-          {/* Review */}
+          {/* Review (preset dropdown + Custom) */}
           <div className="rounded-2xl border border-zinc-200 bg-white p-4 space-y-2">
             <div className="text-sm font-semibold text-zinc-900">Review</div>
+
             <div className="flex flex-wrap items-center gap-2">
-              <input
-                type="date"
+              <select
                 className="h-9 rounded-full border border-zinc-200 bg-white px-3 text-sm text-zinc-700"
-                value={d.review_at ? new Date(safeMs(d.review_at) ?? Date.now()).toISOString().slice(0, 10) : ""}
+                value={reviewPresetByDecisionId[d.id] ?? "none"}
                 onChange={(e) => {
-                  const iso = isoFromDateInput(e.target.value);
-                  void setReviewAt(d, iso);
+                  const v = e.target.value as ReviewPreset;
+
+                  setReviewPresetByDecisionId((p) => ({ ...p, [d.id]: v }));
+
+                  if (v === "none") {
+                    setReviewCustomOpenForId((cur) => (cur === d.id ? null : cur));
+                    void setReviewAt(d, null);
+                    return;
+                  }
+
+                  if (v === "custom") {
+                    setReviewCustomOpenForId(d.id);
+                    return;
+                  }
+
+                  setReviewCustomOpenForId((cur) => (cur === d.id ? null : cur));
+
+                  const days = v === "1d" ? 1 : v === "7d" ? 7 : v === "14d" ? 14 : v === "30d" ? 30 : v === "90d" ? 90 : 7;
+
+                  void setReviewAt(d, addDaysIso(days));
                 }}
-                title="Set review date"
-              />
+                title="Set review"
+              >
+                <option value="none">None</option>
+                <option value="1d">In 1 day</option>
+                <option value="7d">In 7 days</option>
+                <option value="14d">In 14 days</option>
+                <option value="30d">In 30 days</option>
+                <option value="90d">In 90 days</option>
+                <option value="custom">Custom…</option>
+              </select>
+
               {d.review_at ? (
-                <Chip onClick={() => void setReviewAt(d, null)} title="Clear review date">
+                <Chip
+                  onClick={() => {
+                    setReviewPresetByDecisionId((p) => ({ ...p, [d.id]: "none" }));
+                    setReviewCustomOpenForId((cur) => (cur === d.id ? null : cur));
+                    void setReviewAt(d, null);
+                  }}
+                  title="Clear review"
+                >
                   Clear
                 </Chip>
               ) : (
                 <span className="text-xs text-zinc-500">Optional</span>
               )}
             </div>
+
+            {reviewCustomOpenForId === d.id ? (
+              <div className="flex flex-wrap items-center gap-2 pt-1">
+                <input
+                  type="date"
+                  className="h-9 rounded-full border border-zinc-200 bg-white px-3 text-sm text-zinc-700"
+                  value={dateInputValueFromIso(d.review_at)}
+                  onChange={(e) => {
+                    const iso = isoFromDateInput(e.target.value);
+                    void setReviewAt(d, iso);
+                  }}
+                  title="Custom review date"
+                />
+                <Chip
+                  onClick={() => {
+                    setReviewCustomOpenForId(null);
+                    setReviewPresetByDecisionId((p) => ({ ...p, [d.id]: "none" }));
+                  }}
+                >
+                  Done
+                </Chip>
+              </div>
+            ) : null}
           </div>
 
           {/* Chat summaries */}
@@ -1167,25 +1255,13 @@ export default function DecisionsClient() {
 
   const reviewCount = useMemo(() => {
     if (tab !== "active") return 0;
-    return items.filter((d) => d.status !== "chapter" && isReviewDue(d.review_at)).length;
+    return items.filter((d) => d.status !== "chapter" && !!d.review_at).length;
   }, [tab, items]);
 
   return (
     <Page title={pageTitle} subtitle={pageSubtitle} right={null}>
       <div className="mx-auto w-full max-w-[760px] space-y-6">
-        <div className="flex justify-center">
-          <div className="flex flex-wrap items-center gap-2">
-            <Chip active={tab === "new"} onClick={() => router.push(buildUrl("new"))} title="New decision">
-              New Decision
-            </Chip>
-            <Chip active={tab === "active"} onClick={() => router.push(buildUrl("active"))} title="Active decisions">
-              Active Decisions
-            </Chip>
-            <Chip active={tab === "closed"} onClick={() => router.push(buildUrl("closed"))} title="Closed decisions">
-              Closed Decisions
-            </Chip>
-          </div>
-        </div>
+        <TopTabs />
 
         {/* Page 1: New Decision */}
         {tab === "new" ? (
@@ -1319,9 +1395,23 @@ export default function DecisionsClient() {
                   className="h-10 w-full rounded-full border border-zinc-200 bg-white px-4 text-sm text-zinc-800 outline-none focus:ring-2 focus:ring-zinc-200"
                 />
 
-                <Chip active={reviewOnly} onClick={() => setReviewOnly((v) => !v)} title="Filter to decisions needing review">
-                  Review{reviewCount ? ` (${reviewCount})` : ""}
-                </Chip>
+                <button
+                  type="button"
+                  onClick={() => setReviewOnly((v) => !v)}
+                  className={[
+                    "inline-flex h-10 w-10 items-center justify-center rounded-full border",
+                    reviewOnly ? "border-zinc-300 bg-zinc-100" : "border-zinc-200 bg-white",
+                    "text-zinc-700 hover:bg-zinc-50 focus:outline-none focus:ring-2 focus:ring-zinc-200",
+                  ].join(" ")}
+                  title="Filter: has review date"
+                  aria-label="Filter: has review date"
+                >
+                  <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M3 5h18l-7 8v5l-4 2v-7L3 5z" />
+                  </svg>
+                </button>
+
+                {reviewCount ? <div className="text-xs text-zinc-500">({reviewCount})</div> : null}
               </div>
 
               {activeDomainId || activeConstellationId ? (
@@ -1338,7 +1428,12 @@ export default function DecisionsClient() {
 
             <div className="space-y-4">
               <TilesRow title="Filter by area" items={domains} activeId={activeDomainId} onSelect={(id) => setActiveDomainId(id)} />
-              <TilesRow title="Filter by group" items={constellations} activeId={activeConstellationId} onSelect={(id) => setActiveConstellationId(id)} />
+              <TilesRow
+                title="Filter by group"
+                items={constellations}
+                activeId={activeConstellationId}
+                onSelect={(id) => setActiveConstellationId(id)}
+              />
             </div>
 
             <div className="text-xs text-zinc-500">{statusLine}</div>
@@ -1366,7 +1461,11 @@ export default function DecisionsClient() {
                     {hasMore ? (
                       <div className="flex items-center gap-2">
                         <Chip onClick={() => setShowAll((v) => !v)}>{showAll ? "Show less" : "Show all"}</Chip>
-                        {!showAll ? <div className="text-xs text-zinc-500">Showing {DEFAULT_LIMIT} of {others.length}</div> : null}
+                        {!showAll ? (
+                          <div className="text-xs text-zinc-500">
+                            Showing {DEFAULT_LIMIT} of {others.length}
+                          </div>
+                        ) : null}
                       </div>
                     ) : null}
                   </div>
