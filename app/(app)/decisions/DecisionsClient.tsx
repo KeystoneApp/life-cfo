@@ -264,7 +264,7 @@ export default function DecisionsClient() {
   const pageTitle = "Decisions";
   const pageSubtitle =
     tab === "new"
-      ? "What needs deciding? Start messy — we’ll clarify it as we go."
+      ? "This is the place to process any decisions you're working through. I can help clarify what matters, then lay out options and tradeoffs. You can set a review date, or close out the decision when it's done. We'll hold it safely for you."
       : tab === "active"
       ? "Active decisions you’re working through."
       : "Closed decisions live here quietly — still searchable whenever you need them.";
