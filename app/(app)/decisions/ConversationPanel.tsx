@@ -351,7 +351,7 @@ export function ConversationPanel(props: {
         return;
       }
 
-      // ✅ Collapse preview after save (matches your sketch)
+      // ✅ Collapse preview after save
       setSummaryPreview("");
       setSummaryStatus("Saved.");
       onSummarySaved?.();
@@ -405,7 +405,6 @@ export function ConversationPanel(props: {
               );
             }
 
-            // Assistant: clean content on white
             return (
               <div key={idx} className="flex justify-start">
                 <div className="max-w-[86%] px-1 py-1">
@@ -416,7 +415,7 @@ export function ConversationPanel(props: {
           })}
         </div>
 
-        {/* Summary preview (only appears after “Create chat summary”) */}
+        {/* Summary preview */}
         {summaryPreview ? (
           <div className="mt-6">
             <div className="max-w-[86%] rounded-2xl border border-zinc-200 bg-white px-5 py-4">

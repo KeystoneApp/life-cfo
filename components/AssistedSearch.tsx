@@ -1,4 +1,3 @@
-// components/AssistedSearch.tsx
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -42,9 +41,23 @@ function softDate(iso: unknown) {
   return new Date(ms).toLocaleDateString();
 }
 
+/**
+ * ✅ IMPORTANT
+ * DecisionsClient forces /decisions to default tab=new when tab is missing.
+ * So AssistedSearch MUST include tab=... when linking to decisions.
+ */
 function routeForDecision(decisionId: string, scope: Scope) {
-  const base = scope === "thinking" ? "/thinking" : "/decisions";
-  return `${base}?open=${encodeURIComponent(decisionId)}`;
+  if (scope === "thinking") {
+    return `/thinking?open=${encodeURIComponent(decisionId)}`;
+  }
+
+  // Chapters live under Closed Decisions
+  if (scope === "chapters") {
+    return `/decisions?tab=closed&open=${encodeURIComponent(decisionId)}`;
+  }
+
+  // Everything else decision-ish should land on Active Decisions
+  return `/decisions?tab=active&open=${encodeURIComponent(decisionId)}`;
 }
 
 function routeForCapture(inboxId: string) {
