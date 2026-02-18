@@ -19,7 +19,7 @@ function isQuotaError(status: number, errorMsg: string) {
   return status === 429 || msg.includes("exceeded your current quota") || msg.includes("insufficient_quota");
 }
 
-function MarkdownBubble({ content }: { content: string }) {
+function MarkdownBody({ content }: { content: string }) {
   return (
     <div
       className={[
@@ -196,11 +196,7 @@ export function ConversationPanel(props: {
     if (!userId) return;
 
     const { error } = await supabase.from("decision_conversations").upsert(
-      {
-        user_id: userId,
-        decision_id: decisionId,
-        messages: next,
-      },
+      { user_id: userId, decision_id: decisionId, messages: next },
       { onConflict: "user_id,decision_id" }
     );
 
@@ -242,11 +238,7 @@ export function ConversationPanel(props: {
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
         const errMsg = json?.error ? String(json.error) : "AI request failed.";
-        if (isQuotaError(res.status, errMsg)) {
-          setStatus("AI is paused right now (quota/billing). Your conversation is still saved.");
-        } else {
-          setStatus(errMsg);
-        }
+        setStatus(isQuotaError(res.status, errMsg) ? "AI is paused right now. Your conversation is still saved." : errMsg);
         return;
       }
 
@@ -301,7 +293,7 @@ export function ConversationPanel(props: {
 
     setSavingSummary(true);
     setSavedSummaryText("");
-    setSummaryStatus("Saving summary…");
+    setSummaryStatus("Saving…");
 
     try {
       const res = await fetch("/api/ai/conversation", {
@@ -318,11 +310,7 @@ export function ConversationPanel(props: {
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
         const errMsg = json?.error ? String(json.error) : "Summary failed.";
-        if (isQuotaError(res.status, errMsg)) {
-          setSummaryStatus("AI summaries are paused right now (quota/billing). Your conversation is still saved.");
-        } else {
-          setSummaryStatus(errMsg);
-        }
+        setSummaryStatus(isQuotaError(res.status, errMsg) ? "AI summaries are paused right now." : errMsg);
         return;
       }
 
@@ -339,7 +327,7 @@ export function ConversationPanel(props: {
       });
 
       if (error) {
-        setSummaryStatus(`Couldn’t save summary: ${error.message}`);
+        setSummaryStatus(`Couldn’t save: ${error.message}`);
         return;
       }
 
@@ -353,53 +341,53 @@ export function ConversationPanel(props: {
     }
   };
 
-  const widthUser = "max-w-[68%]";
-  const widthAsst = "max-w-[84%]";
-
   return (
     <div className="w-full">
-      {/* Minimal header (no heavy card) */}
-      <div className="flex items-start justify-between gap-3 px-0">
+      {/* Minimal header */}
+      <div className="flex items-start justify-between gap-3 px-1">
         <div className="min-w-0">
           <div className="text-sm font-semibold text-zinc-900">Conversation</div>
-          {askedText ? (
-            <div className="mt-1 truncate text-xs text-zinc-500">{askedText}</div>
-          ) : null}
+          {askedText ? <div className="mt-1 text-xs text-zinc-500 truncate">{askedText}</div> : null}
         </div>
 
         <div className="shrink-0">
-          <Chip onClick={onClose} title="Close conversation">
+          <Chip onClick={onClose} title="Close">
             Done
           </Chip>
         </div>
       </div>
 
-      {/* Messages (flat, white; subtle bubbles) */}
-      <div className="mt-3 max-h-[560px] overflow-auto px-0 py-2">
-        {loading ? <div className="text-sm text-zinc-600">Loading…</div> : null}
+      {/* Messages */}
+      <div className="mt-3 max-h-[560px] overflow-auto px-2 py-3 sm:px-4">
+        {loading ? <div className="px-2 text-sm text-zinc-600">Loading…</div> : null}
 
         {!loading && messages.length === 0 ? (
           <div className="py-2">
-            <div className="flex justify-start">
-              <div className={[widthAsst, "rounded-2xl bg-zinc-50 px-4 py-3 text-sm leading-relaxed text-zinc-800"].join(" ")}>
-                <div className="whitespace-pre-wrap">{bootMessage || "Okay — let’s think this through."}</div>
-              </div>
+            <div className="max-w-[80%] rounded-2xl bg-zinc-50 px-5 py-4 text-sm leading-relaxed text-zinc-800">
+              <div className="whitespace-pre-wrap">{bootMessage || "Okay — let’s think this through."}</div>
             </div>
           </div>
         ) : null}
 
-        <div className="space-y-4">
+        <div className="space-y-5">
           {messages.map((m, idx) => {
             const isUser = m.role === "user";
 
-            const bubbleClass = isUser
-              ? [widthUser, "rounded-2xl bg-zinc-100 px-4 py-3 text-sm leading-relaxed text-zinc-900"].join(" ")
-              : [widthAsst, "rounded-2xl bg-white px-4 py-3 text-sm leading-relaxed text-zinc-800"].join(" ");
+            if (isUser) {
+              return (
+                <div key={idx} className="flex justify-end">
+                  <div className="max-w-[70%] rounded-2xl bg-zinc-100 px-4 py-3 text-sm leading-relaxed text-zinc-900">
+                    <div className="whitespace-pre-wrap">{m.content}</div>
+                  </div>
+                </div>
+              );
+            }
 
+            // Assistant: no heavy “card” bubble — just clean content on white
             return (
-              <div key={idx} className={isUser ? "flex justify-end" : "flex justify-start"}>
-                <div className={bubbleClass}>
-                  {isUser ? <div className="whitespace-pre-wrap">{m.content}</div> : <MarkdownBubble content={m.content} />}
+              <div key={idx} className="flex justify-start">
+                <div className="max-w-[86%] px-1 py-1">
+                  <MarkdownBody content={m.content} />
                 </div>
               </div>
             );
@@ -407,12 +395,10 @@ export function ConversationPanel(props: {
         </div>
 
         {savedSummaryText ? (
-          <div className="mt-5">
-            <div className="flex justify-start">
-              <div className={[widthAsst, "rounded-2xl bg-zinc-50 px-4 py-3"].join(" ")}>
-                <div className="mb-2 text-xs text-zinc-500">Saved chat summary</div>
-                <MarkdownBubble content={savedSummaryText} />
-              </div>
+          <div className="mt-6">
+            <div className="max-w-[86%] rounded-2xl border border-zinc-200 bg-white px-5 py-4">
+              <div className="mb-2 text-xs text-zinc-500">Saved chat summary</div>
+              <MarkdownBody content={savedSummaryText} />
             </div>
           </div>
         ) : null}
@@ -420,19 +406,19 @@ export function ConversationPanel(props: {
         <div ref={endRef} />
       </div>
 
-      {/* Composer (flat) */}
-      <div className="pt-2">
-        {status ? <div className="mb-2 text-xs text-zinc-500">{status}</div> : null}
-        {summaryStatus ? <div className="mb-2 text-xs text-zinc-500">{summaryStatus}</div> : null}
+      {/* Composer */}
+      <div className="px-2 pb-3 sm:px-4">
+        {status ? <div className="mb-2 px-2 text-xs text-zinc-500">{status}</div> : null}
+        {summaryStatus ? <div className="mb-2 px-2 text-xs text-zinc-500">{summaryStatus}</div> : null}
 
-        <div className="space-y-2">
+        <div className="rounded-2xl bg-white">
           <div className="relative">
             <textarea
               ref={inputRef}
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               rows={3}
-              placeholder="Write back…"
+              placeholder="Reply…"
               className="w-full rounded-2xl border border-zinc-200 bg-white px-4 py-3 pr-12 text-sm text-zinc-800 outline-none focus:ring-2 focus:ring-zinc-200"
               onKeyDown={(e) => {
                 const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
@@ -464,9 +450,9 @@ export function ConversationPanel(props: {
             ) : null}
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="mt-2 flex flex-wrap items-center gap-2">
             <Chip onClick={saveChatSummary} title="Summarise this chat and save it to the decision">
-              {savingSummary ? "Saving…" : "Save summary"}
+              {savingSummary ? "Saving…" : "Save chat summary"}
             </Chip>
           </div>
         </div>
