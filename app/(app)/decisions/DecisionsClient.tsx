@@ -459,6 +459,9 @@ export default function DecisionsClient() {
   const [summaries, setSummaries] = useState<DecisionSummary[]>([]);
   const [expandedSummary, setExpandedSummary] = useState<Record<string, boolean>>({});
 
+    // Closed Decisions: per-row details toggle (read-only)
+  const [expandedClosed, setExpandedClosed] = useState<Record<string, boolean>>({});
+
   const reloadTimerRef = useRef<number | null>(null);
   const cardRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const topAnchorRefs = useRef<Record<string, HTMLDivElement | null>>({});
@@ -2091,11 +2094,57 @@ export default function DecisionsClient() {
                         <div className="mt-1 text-xs text-zinc-500">Started {softWhen(d.created_at)}</div>
                       </div>
 
-                      <div className="shrink-0">
+                            <div className="shrink-0 flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setExpandedClosed((p) => ({ ...p, [d.id]: !p[d.id] }))}
+                          className="text-xs text-zinc-500 hover:text-zinc-700"
+                          title={expandedClosed[d.id] ? "Hide details" : "Show details"}
+                        >
+                          {expandedClosed[d.id] ? "Hide" : "Show details"}
+                        </button>
+
                         <Chip onClick={() => void reopenDecision(d)} title="Re-open this decision">
                           Re-open
                         </Chip>
                       </div>
+                        {expandedClosed[d.id] ? (
+                        (() => {
+                          const { captured } = splitContext(d.context);
+                          const areaId = domainByDecision[d.id] ?? null;
+                          const areaName = areaId ? domains.find((x) => x.id === areaId)?.name : null;
+
+                          const groupIds = constellationsByDecision[d.id] ?? [];
+                          const groupNames = groupIds
+                            .map((gid) => constellations.find((c) => c.id === gid)?.name)
+                            .filter(Boolean)
+                            .join(", ");
+
+                          const closedStamp = d.decided_at ? softWhen(d.decided_at) : null;
+
+                          return (
+                            <div className="mt-3 rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3 space-y-2">
+                              <div className="text-xs text-zinc-500">
+                                {areaName ? `Area: ${areaName}` : ""}
+                                {areaName && groupNames ? " • " : ""}
+                                {groupNames ? `Group: ${groupNames}` : ""}
+                                {(areaName || groupNames) && (d.review_at || closedStamp) ? " • " : ""}
+                                {d.review_at ? `Review: ${softWhen(d.review_at)}` : ""}
+                                {d.review_at && closedStamp ? " • " : ""}
+                                {closedStamp ? `Closed: ${closedStamp}` : ""}
+                              </div>
+
+                              {captured ? (
+                                <div className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-800">{captured}</div>
+                              ) : d.context ? (
+                                <div className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-800">{d.context}</div>
+                              ) : (
+                                <div className="text-sm text-zinc-600">No details saved.</div>
+                              )}
+                            </div>
+                          );
+                        })()
+                      ) : null}
                     </div>
                   </div>
                 ))}
