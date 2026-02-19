@@ -405,13 +405,7 @@ function renderSummaryBody(text: string) {
   return out;
 }
 
-function SegTabs({
-  tab,
-  onTab,
-}: {
-  tab: Tab;
-  onTab: (t: Tab) => void;
-}) {
+function SegTabs({ tab, onTab }: { tab: Tab; onTab: (t: Tab) => void }) {
   const TabBtn = ({ t, label }: { t: Tab; label: string }) => {
     const active = tab === t;
     return (
@@ -565,6 +559,12 @@ export default function DecisionsClient() {
   const [noteDraftByDecisionId, setNoteDraftByDecisionId] = useState<Record<string, string>>({});
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [editingNoteDraft, setEditingNoteDraft] = useState<string>("");
+
+  /** ✅ "Add details" compact strip + per-section toggles (open decision only renders these when needed) */
+  const [detailsStripOpenByDecisionId, setDetailsStripOpenByDecisionId] = useState<Record<string, boolean>>({});
+  const [notesOpenByDecisionId, setNotesOpenByDecisionId] = useState<Record<string, boolean>>({});
+  const [filesOpenByDecisionId, setFilesOpenByDecisionId] = useState<Record<string, boolean>>({});
+  const [reviewOpenByDecisionId, setReviewOpenByDecisionId] = useState<Record<string, boolean>>({});
 
   const scrollToDecisionTop = (id: string) => {
     const anchor = topAnchorRefs.current[id] ?? cardRefs.current[id];
@@ -1338,6 +1338,42 @@ export default function DecisionsClient() {
     const notesLoading = !!notesLoadingByDecisionId[d.id];
     const composerValue = noteDraftByDecisionId[d.id] ?? "";
 
+    // --- details visibility (content OR user opened) ---
+    const detailsStripOpen = !!detailsStripOpenByDecisionId[d.id];
+    const notesOpen = !!notesOpenByDecisionId[d.id];
+    const filesOpen = !!filesOpenByDecisionId[d.id];
+    const reviewOpen = !!reviewOpenByDecisionId[d.id];
+
+    const notesHasContent = notes.length > 0 || (composerValue ?? "").trim().length > 0 || !!editingNoteId;
+    const filesHasContent = allAtt.length > 0;
+    const reviewHasContent = !!d.review_at;
+
+    const showNotesSection = notesHasContent || notesOpen;
+    const showFilesSection = filesHasContent || filesOpen;
+    const showReviewSection = reviewHasContent || reviewOpen;
+
+    const anyDetailsVisible = showNotesSection || showFilesSection || showReviewSection;
+
+    const openDetailsStrip = () => {
+      setDetailsStripOpenByDecisionId((p) => ({ ...p, [d.id]: true }));
+    };
+
+    const openNotes = () => {
+      openDetailsStrip();
+      setNotesOpenByDecisionId((p) => ({ ...p, [d.id]: true }));
+      void loadNotes(d.id);
+    };
+
+    const openFiles = () => {
+      openDetailsStrip();
+      setFilesOpenByDecisionId((p) => ({ ...p, [d.id]: true }));
+    };
+
+    const openReview = () => {
+      openDetailsStrip();
+      setReviewOpenByDecisionId((p) => ({ ...p, [d.id]: true }));
+    };
+
     return (
       <div
         ref={(el) => {
@@ -1418,6 +1454,43 @@ export default function DecisionsClient() {
             >
               Let’s work this through…
             </PrimaryActionButton>
+
+            {/* Add details link + compact control strip */}
+            <div className="mt-2">
+              {!detailsStripOpen && !anyDetailsVisible ? (
+                <button
+                  type="button"
+                  onClick={openDetailsStrip}
+                  className="text-xs font-medium text-zinc-600 hover:text-zinc-900 hover:underline underline-offset-4"
+                  title="Add notes, files, or a review date"
+                >
+                  Add details
+                </button>
+              ) : (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-xs text-zinc-500">Add:</span>
+                  {!showNotesSection ? (
+                    <TextAction subtle onClick={openNotes} title="Add a note">
+                      + Note
+                    </TextAction>
+                  ) : null}
+                  {!showFilesSection ? (
+                    <TextAction subtle onClick={openFiles} title="Add files">
+                      + Files
+                    </TextAction>
+                  ) : null}
+                  {!showReviewSection ? (
+                    <TextAction subtle onClick={openReview} title="Set a review date">
+                      + Review date
+                    </TextAction>
+                  ) : null}
+
+                  {showNotesSection && showFilesSection && showReviewSection ? (
+                    <span className="text-xs text-zinc-500">—</span>
+                  ) : null}
+                </div>
+              )}
+            </div>
           </div>
         ) : null}
 
@@ -1455,209 +1528,215 @@ export default function DecisionsClient() {
           </div>
         ) : null}
 
-        {/* Workspace (flat sections) */}
-        <div className="mt-5 space-y-6">
-          {/* Notes */}
-          <div className="space-y-3">
-            <div className="flex items-center justify-between gap-2">
-              <div className="text-sm font-semibold text-zinc-900">Notes</div>
-              <TextAction subtle onClick={() => void loadNotes(d.id)} title="Refresh notes">
-                Refresh
-              </TextAction>
-            </div>
+        {/* Workspace (only render sections when they have content OR are opened for editing) */}
+        {anyDetailsVisible ? (
+          <div className="mt-5 space-y-6">
+            {/* Notes */}
+            {showNotesSection ? (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-sm font-semibold text-zinc-900">Notes</div>
+                  <TextAction subtle onClick={() => void loadNotes(d.id)} title="Refresh notes">
+                    Refresh
+                  </TextAction>
+                </div>
 
-            <textarea
-              value={composerValue}
-              onChange={(e) => setNoteDraftByDecisionId((p) => ({ ...p, [d.id]: e.target.value }))}
-              placeholder="Add a note…"
-              className="w-full min-h-[96px] resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[15px] leading-relaxed text-zinc-900 outline-none focus:ring-2 focus:ring-zinc-200"
-              onKeyDown={(e) => {
-                const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
-                const cmdOrCtrl = isMac ? e.metaKey : e.ctrlKey;
-                if (cmdOrCtrl && e.key === "Enter") {
-                  e.preventDefault();
-                  void addNote(d.id);
-                }
-              }}
-            />
+                <textarea
+                  value={composerValue}
+                  onChange={(e) => setNoteDraftByDecisionId((p) => ({ ...p, [d.id]: e.target.value }))}
+                  placeholder="Add a note…"
+                  className="w-full min-h-[96px] resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[15px] leading-relaxed text-zinc-900 outline-none focus:ring-2 focus:ring-zinc-200"
+                  onKeyDown={(e) => {
+                    const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+                    const cmdOrCtrl = isMac ? e.metaKey : e.ctrlKey;
+                    if (cmdOrCtrl && e.key === "Enter") {
+                      e.preventDefault();
+                      void addNote(d.id);
+                    }
+                  }}
+                />
 
-            <div className="flex flex-wrap items-center gap-2">
-              <TextAction onClick={() => void addNote(d.id)} title="Save note">
-                Save note
-              </TextAction>
-              {editingNoteId ? <div className="text-xs text-zinc-500">Editing below — save/cancel there.</div> : null}
-            </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <TextAction onClick={() => void addNote(d.id)} title="Save note">
+                    Save note
+                  </TextAction>
+                  {editingNoteId ? <div className="text-xs text-zinc-500">Editing below — save/cancel there.</div> : null}
+                </div>
 
-            <div className="pt-1">
-              {notesLoading ? <div className="text-sm text-zinc-500">Loading notes…</div> : null}
+                <div className="pt-1">
+                  {notesLoading ? <div className="text-sm text-zinc-500">Loading notes…</div> : null}
 
-              {!notesLoading && notes.length === 0 ? <div className="text-sm text-zinc-600">No notes yet.</div> : null}
+                  {!notesLoading && notes.length > 0 ? (
+                    <div className="divide-y divide-zinc-100 rounded-2xl bg-white">
+                      {notes.map((n) => {
+                        const isEditing = editingNoteId === n.id;
+                        const stamp = softWhenDateTime(n.created_at);
+                        const edited = n.updated_at ? ` • edited ${softWhenDateTime(n.updated_at)}` : "";
 
-              {!notesLoading && notes.length > 0 ? (
-                <div className="divide-y divide-zinc-100 rounded-2xl bg-white">
-                  {notes.map((n) => {
-                    const isEditing = editingNoteId === n.id;
-                    const stamp = softWhenDateTime(n.created_at);
-                    const edited = n.updated_at ? ` • edited ${softWhenDateTime(n.updated_at)}` : "";
+                        return (
+                          <div key={n.id} className="px-4 py-3">
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <div className="text-xs text-zinc-500">
+                                  {stamp}
+                                  {edited}
+                                </div>
+                              </div>
 
-                    return (
-                      <div key={n.id} className="px-4 py-3">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <div className="text-xs text-zinc-500">
-                              {stamp}
-                              {edited}
+                              <div className="shrink-0 flex items-center gap-1">
+                                {!isEditing ? (
+                                  <>
+                                    <TextAction subtle onClick={() => startEditNote(n)} title="Edit note">
+                                      Edit
+                                    </TextAction>
+                                    <TextAction danger onClick={() => void deleteNote(d.id, n.id)} title="Delete note">
+                                      Delete
+                                    </TextAction>
+                                  </>
+                                ) : (
+                                  <>
+                                    <TextAction onClick={() => void saveEditNote(d.id, n.id)} title="Save changes">
+                                      Save
+                                    </TextAction>
+                                    <TextAction subtle onClick={cancelEditNote} title="Cancel edit">
+                                      Cancel
+                                    </TextAction>
+                                  </>
+                                )}
+                              </div>
                             </div>
-                          </div>
 
-                          <div className="shrink-0 flex items-center gap-1">
                             {!isEditing ? (
-                              <>
-                                <TextAction subtle onClick={() => startEditNote(n)} title="Edit note">
-                                  Edit
-                                </TextAction>
-                                <TextAction danger onClick={() => void deleteNote(d.id, n.id)} title="Delete note">
-                                  Delete
-                                </TextAction>
-                              </>
+                              <div className="mt-2 whitespace-pre-wrap text-[15px] leading-relaxed text-zinc-800">{n.body}</div>
                             ) : (
-                              <>
-                                <TextAction onClick={() => void saveEditNote(d.id, n.id)} title="Save changes">
-                                  Save
-                                </TextAction>
-                                <TextAction subtle onClick={cancelEditNote} title="Cancel edit">
-                                  Cancel
-                                </TextAction>
-                              </>
+                              <textarea
+                                value={editingNoteDraft}
+                                onChange={(e) => setEditingNoteDraft(e.target.value)}
+                                className="mt-2 w-full min-h-[90px] resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[15px] leading-relaxed text-zinc-900 outline-none focus:ring-2 focus:ring-zinc-200"
+                              />
                             )}
                           </div>
-                        </div>
-
-                        {!isEditing ? (
-                          <div className="mt-2 whitespace-pre-wrap text-[15px] leading-relaxed text-zinc-800">{n.body}</div>
-                        ) : (
-                          <textarea
-                            value={editingNoteDraft}
-                            onChange={(e) => setEditingNoteDraft(e.target.value)}
-                            className="mt-2 w-full min-h-[90px] resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[15px] leading-relaxed text-zinc-900 outline-none focus:ring-2 focus:ring-zinc-200"
-                          />
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : null}
-            </div>
-          </div>
-
-          {/* Files */}
-          <div className="space-y-2">
-            <div className="text-sm font-semibold text-zinc-900">Files</div>
-            <div className="rounded-2xl bg-white p-3">
-              {userId ? (
-                <AttachmentsBlock
-                  userId={userId}
-                  decisionId={d.id}
-                  title={allAtt.length ? `Files (${allAtt.length})` : "Files"}
-                  bucket="captures"
-                  initial={allAtt}
-                />
-              ) : (
-                <div className="text-sm text-zinc-600">Files unavailable.</div>
-              )}
-            </div>
-          </div>
-
-          {/* Review */}
-          <div className="space-y-2">
-            <div className="text-sm font-semibold text-zinc-900">Review</div>
-            <div className="flex flex-wrap items-center gap-2">
-              <input
-                type="date"
-                className="h-9 rounded-full border border-zinc-200 bg-white px-3 text-sm text-zinc-700"
-                value={d.review_at ? new Date(safeMs(d.review_at) ?? Date.now()).toISOString().slice(0, 10) : ""}
-                onChange={(e) => {
-                  const iso = isoFromDateInput(e.target.value);
-                  void setReviewAt(d, iso);
-                }}
-                title="Set review date"
-              />
-              {d.review_at ? (
-                <TextAction subtle onClick={() => void setReviewAt(d, null)} title="Clear review date">
-                  Clear
-                </TextAction>
-              ) : (
-                <span className="text-xs text-zinc-500">Optional</span>
-              )}
-            </div>
-          </div>
-
-          {/* Chat summaries */}
-          {summaries.length > 0 ? (
-            <div className="space-y-3">
-              <div className="space-y-1">
-                <div className="text-sm font-semibold text-zinc-900">Chat summaries</div>
-                <div className="text-xs text-zinc-500">Saved summaries attached to this decision.</div>
-              </div>
-
-              <div className="divide-y divide-zinc-100 rounded-2xl bg-white">
-                {summaries.map((s) => {
-                  const one = summaryHeadingFrom(s.summary_text, d.title);
-                  const open = !!expandedSummary[s.id];
-
-                  return (
-                    <div key={s.id} className="px-4 py-3">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="text-xs text-zinc-500">Saved {softWhen(s.created_at)}</div>
-                          <div className="mt-1 text-sm font-medium text-zinc-900 truncate">{renderInlineBold(one)}</div>
-                        </div>
-
-                        <div className="shrink-0">
-                          <TextAction subtle onClick={() => setExpandedSummary((p) => ({ ...p, [s.id]: !open }))} title="Expand">
-                            {open ? "Hide" : "Expand"}
-                          </TextAction>
-                        </div>
-                      </div>
-
-                      {open ? <div className="mt-3 space-y-2">{renderSummaryBody(s.summary_text)}</div> : null}
+                        );
+                      })}
                     </div>
-                  );
-                })}
+                  ) : null}
+                </div>
               </div>
-            </div>
-          ) : null}
+            ) : null}
 
-          {/* Actions */}
-          {confirmDeleteForId === d.id ? (
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-[#FCECEC] px-4 py-3">
-              <div className="text-sm text-[#7A1E1E]">
-                Delete this decision? <span className="opacity-80">This can’t be undone.</span>
+            {/* Files */}
+            {showFilesSection ? (
+              <div className="space-y-2">
+                <div className="text-sm font-semibold text-zinc-900">Files</div>
+                <div className="rounded-2xl bg-white p-3">
+                  {userId ? (
+                    <AttachmentsBlock
+                      userId={userId}
+                      decisionId={d.id}
+                      title={allAtt.length ? `Files (${allAtt.length})` : "Files"}
+                      bucket="captures"
+                      initial={allAtt}
+                    />
+                  ) : (
+                    <div className="text-sm text-zinc-600">Files unavailable.</div>
+                  )}
+                </div>
               </div>
-              <div className="flex items-center gap-2">
-                <TextAction subtle onClick={() => setConfirmDeleteForId(null)}>
-                  Cancel
-                </TextAction>
-                <button
-                  type="button"
-                  onClick={() => void performDelete(d)}
-                  className="inline-flex select-none items-center justify-center rounded-full bg-[#C94A4A] px-4 py-2 text-sm text-white transition hover:bg-[#b94141]"
-                >
-                  Delete
-                </button>
+            ) : null}
+
+            {/* Review */}
+            {showReviewSection ? (
+              <div className="space-y-2">
+                <div className="text-sm font-semibold text-zinc-900">Review</div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    type="date"
+                    className="h-9 rounded-full border border-zinc-200 bg-white px-3 text-sm text-zinc-700"
+                    value={d.review_at ? new Date(safeMs(d.review_at) ?? Date.now()).toISOString().slice(0, 10) : ""}
+                    onChange={(e) => {
+                      const iso = isoFromDateInput(e.target.value);
+                      void setReviewAt(d, iso);
+                    }}
+                    title="Set review date"
+                  />
+                  {d.review_at ? (
+                    <TextAction subtle onClick={() => void setReviewAt(d, null)} title="Clear review date">
+                      Clear
+                    </TextAction>
+                  ) : (
+                    <span className="text-xs text-zinc-500">Optional</span>
+                  )}
+                </div>
               </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        {/* Chat summaries */}
+        {summaries.length > 0 ? (
+          <div className="mt-5 space-y-3">
+            <div className="space-y-1">
+              <div className="text-sm font-semibold text-zinc-900">Chat summaries</div>
+              <div className="text-xs text-zinc-500">Saved summaries attached to this decision.</div>
             </div>
-          ) : (
-            <div className="flex flex-wrap items-center gap-3 pt-1">
-              <TextAction onClick={() => void closeDecision(d)} title="Move to Closed">
-                Move to Closed
+
+            <div className="divide-y divide-zinc-100 rounded-2xl bg-white">
+              {summaries.map((s) => {
+                const one = summaryHeadingFrom(s.summary_text, d.title);
+                const open = !!expandedSummary[s.id];
+
+                return (
+                  <div key={s.id} className="px-4 py-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-xs text-zinc-500">Saved {softWhen(s.created_at)}</div>
+                        <div className="mt-1 text-sm font-medium text-zinc-900 truncate">{renderInlineBold(one)}</div>
+                      </div>
+
+                      <div className="shrink-0">
+                        <TextAction subtle onClick={() => setExpandedSummary((p) => ({ ...p, [s.id]: !open }))} title="Expand">
+                          {open ? "Hide" : "Expand"}
+                        </TextAction>
+                      </div>
+                    </div>
+
+                    {open ? <div className="mt-3 space-y-2">{renderSummaryBody(s.summary_text)}</div> : null}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
+
+        {/* Actions */}
+        {confirmDeleteForId === d.id ? (
+          <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-[#FCECEC] px-4 py-3">
+            <div className="text-sm text-[#7A1E1E]">
+              Delete this decision? <span className="opacity-80">This can’t be undone.</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <TextAction subtle onClick={() => setConfirmDeleteForId(null)}>
+                Cancel
               </TextAction>
-              <TextAction danger onClick={() => setConfirmDeleteForId(d.id)} title="Delete decision">
+              <button
+                type="button"
+                onClick={() => void performDelete(d)}
+                className="inline-flex select-none items-center justify-center rounded-full bg-[#C94A4A] px-4 py-2 text-sm text-white transition hover:bg-[#b94141]"
+              >
                 Delete
-              </TextAction>
+              </button>
             </div>
-          )}
-        </div>
+          </div>
+        ) : (
+          <div className="mt-5 flex flex-wrap items-center gap-3 pt-1">
+            <TextAction onClick={() => void closeDecision(d)} title="Move to Closed">
+              Move to Closed
+            </TextAction>
+            <TextAction danger onClick={() => setConfirmDeleteForId(d.id)} title="Delete decision">
+              Delete
+            </TextAction>
+          </div>
+        )}
       </div>
     );
   };
