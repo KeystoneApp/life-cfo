@@ -7,7 +7,6 @@ import { supabase } from "@/lib/supabaseClient";
 import { Page } from "@/components/Page";
 import { Chip, useToast } from "@/components/ui";
 import { ConversationPanel } from "./ConversationPanel";
-
 import { AttachmentsBlock } from "@/components/AttachmentsBlock";
 
 export const dynamic = "force-dynamic";
@@ -45,7 +44,6 @@ type Domain = { id: string; name: string; sort_order?: number | null };
 type Constellation = { id: string; name: string; sort_order?: number | null };
 
 type Tab = "new" | "active" | "closed";
-
 type SortKey = "newest" | "oldest" | "reviewSoon" | "reviewLate" | "titleAZ" | "titleZA";
 
 /** ✅ decision notes table rows */
@@ -173,10 +171,29 @@ function PrimaryActionButton(props: { children: React.ReactNode; onClick?: () =>
       title={title}
       disabled={disabled}
       className={[
-        "inline-flex select-none items-center justify-center rounded-full border px-4 py-2 text-sm transition",
-        "border-[#1F5E5C] bg-[#1F5E5C] text-white",
+        "inline-flex select-none items-center justify-center rounded-full px-4 py-2 text-sm transition",
+        "bg-[#1F5E5C] text-white",
         "hover:bg-[#174947] hover:text-white",
-        "disabled:border-[#9FB8B6] disabled:bg-[#9FB8B6] disabled:text-white/90",
+        "disabled:bg-[#9FB8B6] disabled:text-white/90",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6FAFB2]/35 focus-visible:ring-offset-2",
+      ].join(" ")}
+    >
+      {children}
+    </button>
+  );
+}
+
+function TextAction(props: { children: React.ReactNode; onClick?: () => void; title?: string; subtle?: boolean; danger?: boolean }) {
+  const { children, onClick, title, subtle, danger } = props;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      className={[
+        "inline-flex items-center rounded-full px-2.5 py-1.5 text-xs font-medium transition",
+        danger ? "text-[#C94A4A] hover:bg-[#FCECEC]" : subtle ? "text-zinc-500 hover:bg-zinc-50" : "text-zinc-700 hover:bg-zinc-50",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6FAFB2]/30 focus-visible:ring-offset-2",
       ].join(" ")}
     >
       {children}
@@ -207,9 +224,9 @@ function FilterIconButton({
       onClick={onClick}
       title={title}
       className={[
-        "relative inline-flex h-10 w-10 items-center justify-center rounded-full border transition",
-        active ? "border-zinc-300 bg-zinc-50" : "border-zinc-200 bg-white hover:bg-zinc-50",
-        "text-zinc-700",
+        "relative inline-flex h-10 w-10 items-center justify-center rounded-full transition",
+        active ? "bg-zinc-100 text-zinc-900" : "bg-transparent text-zinc-700 hover:bg-zinc-50",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6FAFB2]/30 focus-visible:ring-offset-2",
       ].join(" ")}
       aria-label="Filters"
     >
@@ -218,7 +235,7 @@ function FilterIconButton({
       </svg>
 
       {count && count > 0 ? (
-        <span className="absolute -right-1 -top-1 inline-flex min-w-[18px] items-center justify-center rounded-full border border-white bg-zinc-900 px-1.5 text-[11px] font-medium text-white">
+        <span className="absolute -right-1 -top-1 inline-flex min-w-[18px] items-center justify-center rounded-full bg-zinc-900 px-1.5 text-[11px] font-medium text-white">
           {count}
         </span>
       ) : null}
@@ -233,9 +250,9 @@ function SortIconButton({ active, onClick, title }: { active?: boolean; onClick?
       onClick={onClick}
       title={title}
       className={[
-        "inline-flex h-10 items-center justify-center gap-2 rounded-full border px-3 transition",
-        active ? "border-zinc-300 bg-zinc-50" : "border-zinc-200 bg-white hover:bg-zinc-50",
-        "text-zinc-700",
+        "inline-flex h-10 items-center justify-center gap-2 rounded-full px-3 transition",
+        active ? "bg-zinc-100 text-zinc-900" : "bg-transparent text-zinc-700 hover:bg-zinc-50",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6FAFB2]/30 focus-visible:ring-offset-2",
       ].join(" ")}
       aria-label="Sort"
     >
@@ -331,8 +348,7 @@ function summaryHeadingFrom(text: string, fallbackTitle: string) {
 
   // prefer a "Decision:" bullet if present
   const decisionLine =
-    meaningful.find((l) => /^[-•]\s*\**\s*Decision\s*\**\s*:/i.test(l)) ??
-    meaningful.find((l) => /Decision\s*:/i.test(l));
+    meaningful.find((l) => /^[-•]\s*\**\s*Decision\s*\**\s*:/i.test(l)) ?? meaningful.find((l) => /Decision\s*:/i.test(l));
 
   if (decisionLine) {
     const cleaned = stripMdMarkers(stripBulletPrefix(decisionLine));
@@ -387,6 +403,42 @@ function renderSummaryBody(text: string) {
   }
 
   return out;
+}
+
+function SegTabs({
+  tab,
+  onTab,
+}: {
+  tab: Tab;
+  onTab: (t: Tab) => void;
+}) {
+  const TabBtn = ({ t, label }: { t: Tab; label: string }) => {
+    const active = tab === t;
+    return (
+      <button
+        type="button"
+        onClick={() => onTab(t)}
+        className={[
+          "h-10 rounded-full px-4 text-sm font-medium transition",
+          active ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-600 hover:text-zinc-900",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6FAFB2]/30 focus-visible:ring-offset-2",
+        ].join(" ")}
+        aria-pressed={active}
+      >
+        {label}
+      </button>
+    );
+  };
+
+  return (
+    <div className="flex justify-center">
+      <div className="inline-flex items-center gap-1 rounded-full bg-zinc-100 p-1">
+        <TabBtn t="new" label="New Decision" />
+        <TabBtn t="active" label="Active Decisions" />
+        <TabBtn t="closed" label="Closed Decisions" />
+      </div>
+    </div>
+  );
 }
 
 export default function DecisionsClient() {
@@ -1233,59 +1285,11 @@ export default function DecisionsClient() {
 
   const sortIsActive = sortKey !== "newest";
 
-  const TopTabs = () => (
-    <div className="flex justify-center">
-      <div className="flex flex-wrap items-center gap-2">
-        <Chip active={tab === "new"} onClick={() => router.push(buildUrl("new"), { scroll: false })} title="New decision">
-          New Decision
-        </Chip>
-        <Chip
-          active={tab === "active"}
-          onClick={() =>
-            router.push(
-              buildUrl("active", {
-                q: searchDebounced,
-                sort: sortKey,
-                domain: activeDomainId,
-                group: activeConstellationId,
-                hasReview: hasReviewDateOnly,
-                reviewDue: reviewDueOnly,
-              }),
-              { scroll: false }
-            )
-          }
-          title="Active decisions"
-        >
-          Active Decisions
-        </Chip>
-        <Chip
-          active={tab === "closed"}
-          onClick={() =>
-            router.push(
-              buildUrl("closed", {
-                q: searchDebounced,
-                sort: sortKey,
-                domain: activeDomainId,
-                group: activeConstellationId,
-                hasReview: hasReviewDateOnly,
-                reviewDue: reviewDueOnly,
-              }),
-              { scroll: false }
-            )
-          }
-          title="Closed decisions"
-        >
-          Closed Decisions
-        </Chip>
-      </div>
-    </div>
-  );
-
   const DecisionRow = ({ d }: { d: Decision }) => (
-    <div className="px-4 py-4 border-b border-zinc-200 last:border-b-0">
+    <div className="py-4 border-b border-zinc-100 last:border-b-0">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <div className="text-base font-semibold text-zinc-900">{d.title}</div>
+          <div className="text-[15px] font-semibold text-zinc-900">{d.title}</div>
           <div className="mt-1 text-xs text-zinc-500">
             Started {softWhen(d.created_at)}
             {d.review_at ? ` • Review ${softWhen(d.review_at)}` : ""}
@@ -1293,7 +1297,7 @@ export default function DecisionsClient() {
         </div>
 
         <div className="shrink-0">
-          <Chip
+          <TextAction
             onClick={() => {
               setOpenId(d.id);
               setWorkForId(null);
@@ -1315,9 +1319,10 @@ export default function DecisionsClient() {
 
               window.setTimeout(() => scrollToDecisionTop(d.id), 60);
             }}
+            title="Open"
           >
             Open
-          </Chip>
+          </TextAction>
         </div>
       </div>
     </div>
@@ -1338,7 +1343,7 @@ export default function DecisionsClient() {
         ref={(el) => {
           cardRefs.current[d.id] = el;
         }}
-        className="rounded-2xl border border-zinc-200 bg-white p-4"
+        className="rounded-2xl bg-zinc-50 p-4 sm:p-5 shadow-sm"
       >
         {/* top anchor for scroll-to-top */}
         <div
@@ -1356,9 +1361,35 @@ export default function DecisionsClient() {
               {d.review_at ? ` • Review ${softWhen(d.review_at)}` : ""}
             </div>
           </div>
+
+          <div className="shrink-0 flex items-center gap-2">
+            <TextAction
+              subtle
+              onClick={() => {
+                setOpenId(null);
+                setWorkForId(null);
+                setConfirmDeleteForId(null);
+                cancelEditNote();
+                router.push(
+                  buildUrl("active", {
+                    q: searchDebounced,
+                    sort: sortKey,
+                    domain: activeDomainId,
+                    group: activeConstellationId,
+                    hasReview: hasReviewDateOnly,
+                    reviewDue: reviewDueOnly,
+                  }),
+                  { scroll: false }
+                );
+              }}
+              title="Hide decision"
+            >
+              Hide
+            </TextAction>
+          </div>
         </div>
 
-        {/* Green button */}
+        {/* Primary action */}
         {!isWorking ? (
           <div className="mt-4">
             <PrimaryActionButton
@@ -1378,7 +1409,7 @@ export default function DecisionsClient() {
                   { scroll: false }
                 );
 
-                // ✅ anchor to very top of decision card (yellow arrow area)
+                // ✅ anchor to very top of decision card
                 window.setTimeout(() => scrollToDecisionTop(d.id), 0);
                 window.setTimeout(() => scrollToDecisionTop(d.id), 80);
                 window.setTimeout(() => scrollToDecisionTop(d.id), 320);
@@ -1392,89 +1423,85 @@ export default function DecisionsClient() {
 
         {/* Conversation */}
         {isWorking ? (
-          <div id="work-through-panel" className="mt-4">
-            <ConversationPanel
-              decisionId={d.id}
-              decisionTitle={d.title}
-              askedText={""} // ✅ remove repeated small text under the header
-              frame={{ decision_statement: d.title }}
-              autoFocusToken={1}
-              autoStartToken={1}
-              onClose={() => {
-                setWorkForId(null);
-                router.push(
-                  buildUrl("active", {
-                    open: d.id,
-                    work: false,
-                    q: searchDebounced,
-                    sort: sortKey,
-                    domain: activeDomainId,
-                    group: activeConstellationId,
-                    hasReview: hasReviewDateOnly,
-                    reviewDue: reviewDueOnly,
-                  }),
-                  { scroll: false }
-                );
-                window.setTimeout(() => scrollToDecisionTop(d.id), 0);
-              }}
-              onSummarySaved={() => void reloadSummaries(d.id)}
-            />
+          <div id="work-through-panel" className="mt-4 rounded-2xl bg-white">
+            <div className="p-3 sm:p-4">
+              <ConversationPanel
+                decisionId={d.id}
+                decisionTitle={d.title}
+                askedText={""}
+                frame={{ decision_statement: d.title }}
+                autoFocusToken={1}
+                autoStartToken={1}
+                onClose={() => {
+                  setWorkForId(null);
+                  router.push(
+                    buildUrl("active", {
+                      open: d.id,
+                      work: false,
+                      q: searchDebounced,
+                      sort: sortKey,
+                      domain: activeDomainId,
+                      group: activeConstellationId,
+                      hasReview: hasReviewDateOnly,
+                      reviewDue: reviewDueOnly,
+                    }),
+                    { scroll: false }
+                  );
+                  window.setTimeout(() => scrollToDecisionTop(d.id), 0);
+                }}
+                onSummarySaved={() => void reloadSummaries(d.id)}
+              />
+            </div>
           </div>
         ) : null}
 
-        {/* Workspace */}
-        <div className="mt-5 space-y-4">
+        {/* Workspace (flat sections) */}
+        <div className="mt-5 space-y-6">
           {/* Notes */}
-          <div className="rounded-2xl border border-zinc-200 bg-white p-4 space-y-3">
+          <div className="space-y-3">
             <div className="flex items-center justify-between gap-2">
               <div className="text-sm font-semibold text-zinc-900">Notes</div>
-              <div className="flex items-center gap-2">
-                <Chip onClick={() => void loadNotes(d.id)} title="Refresh notes">
-                  Refresh
-                </Chip>
-              </div>
+              <TextAction subtle onClick={() => void loadNotes(d.id)} title="Refresh notes">
+                Refresh
+              </TextAction>
             </div>
 
-            <div className="space-y-2">
-              <textarea
-                value={composerValue}
-                onChange={(e) => setNoteDraftByDecisionId((p) => ({ ...p, [d.id]: e.target.value }))}
-                placeholder="Add a note…"
-                className="w-full min-h-[90px] resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[15px] leading-relaxed text-zinc-900 outline-none focus:ring-2 focus:ring-zinc-200"
-                onKeyDown={(e) => {
-                  const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
-                  const cmdOrCtrl = isMac ? e.metaKey : e.ctrlKey;
-                  if (cmdOrCtrl && e.key === "Enter") {
-                    e.preventDefault();
-                    void addNote(d.id);
-                  }
-                }}
-              />
+            <textarea
+              value={composerValue}
+              onChange={(e) => setNoteDraftByDecisionId((p) => ({ ...p, [d.id]: e.target.value }))}
+              placeholder="Add a note…"
+              className="w-full min-h-[96px] resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[15px] leading-relaxed text-zinc-900 outline-none focus:ring-2 focus:ring-zinc-200"
+              onKeyDown={(e) => {
+                const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+                const cmdOrCtrl = isMac ? e.metaKey : e.ctrlKey;
+                if (cmdOrCtrl && e.key === "Enter") {
+                  e.preventDefault();
+                  void addNote(d.id);
+                }
+              }}
+            />
 
-              <div className="flex flex-wrap items-center gap-2">
-                <Chip onClick={() => void addNote(d.id)} title="Save note">
-                  Save note
-                </Chip>
-
-                {editingNoteId ? <div className="text-xs text-zinc-500">Editing a note below — save/cancel there.</div> : null}
-              </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <TextAction onClick={() => void addNote(d.id)} title="Save note">
+                Save note
+              </TextAction>
+              {editingNoteId ? <div className="text-xs text-zinc-500">Editing below — save/cancel there.</div> : null}
             </div>
 
-            <div className="pt-1 space-y-3">
+            <div className="pt-1">
               {notesLoading ? <div className="text-sm text-zinc-500">Loading notes…</div> : null}
 
-              {!notesLoading && notes.length === 0 ? (
-                <div className="rounded-2xl border border-zinc-100 bg-zinc-50 px-4 py-3 text-sm text-zinc-600">No notes yet.</div>
-              ) : null}
+              {!notesLoading && notes.length === 0 ? <div className="text-sm text-zinc-600">No notes yet.</div> : null}
 
-              {!notesLoading
-                ? notes.map((n) => {
+              {!notesLoading && notes.length > 0 ? (
+                <div className="divide-y divide-zinc-100 rounded-2xl bg-white">
+                  {notes.map((n) => {
                     const isEditing = editingNoteId === n.id;
                     const stamp = softWhenDateTime(n.created_at);
                     const edited = n.updated_at ? ` • edited ${softWhenDateTime(n.updated_at)}` : "";
 
                     return (
-                      <div key={n.id} className="rounded-2xl border border-zinc-200 bg-white px-4 py-3">
+                      <div key={n.id} className="px-4 py-3">
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
                             <div className="text-xs text-zinc-500">
@@ -1483,24 +1510,24 @@ export default function DecisionsClient() {
                             </div>
                           </div>
 
-                          <div className="shrink-0 flex items-center gap-2">
+                          <div className="shrink-0 flex items-center gap-1">
                             {!isEditing ? (
                               <>
-                                <Chip onClick={() => startEditNote(n)} title="Edit note">
+                                <TextAction subtle onClick={() => startEditNote(n)} title="Edit note">
                                   Edit
-                                </Chip>
-                                <Chip onClick={() => void deleteNote(d.id, n.id)} title="Delete note">
+                                </TextAction>
+                                <TextAction danger onClick={() => void deleteNote(d.id, n.id)} title="Delete note">
                                   Delete
-                                </Chip>
+                                </TextAction>
                               </>
                             ) : (
                               <>
-                                <Chip onClick={() => void saveEditNote(d.id, n.id)} title="Save changes">
+                                <TextAction onClick={() => void saveEditNote(d.id, n.id)} title="Save changes">
                                   Save
-                                </Chip>
-                                <Chip onClick={cancelEditNote} title="Cancel edit">
+                                </TextAction>
+                                <TextAction subtle onClick={cancelEditNote} title="Cancel edit">
                                   Cancel
-                                </Chip>
+                                </TextAction>
                               </>
                             )}
                           </div>
@@ -1517,28 +1544,32 @@ export default function DecisionsClient() {
                         )}
                       </div>
                     );
-                  })
-                : null}
+                  })}
+                </div>
+              ) : null}
             </div>
           </div>
 
           {/* Files */}
-          <div className="rounded-2xl border border-zinc-200 bg-white p-3">
-            {userId ? (
-              <AttachmentsBlock
-                userId={userId}
-                decisionId={d.id}
-                title={allAtt.length ? `Files (${allAtt.length})` : "Files"}
-                bucket="captures"
-                initial={allAtt}
-              />
-            ) : (
-              <div className="text-sm text-zinc-600">Files unavailable.</div>
-            )}
+          <div className="space-y-2">
+            <div className="text-sm font-semibold text-zinc-900">Files</div>
+            <div className="rounded-2xl bg-white p-3">
+              {userId ? (
+                <AttachmentsBlock
+                  userId={userId}
+                  decisionId={d.id}
+                  title={allAtt.length ? `Files (${allAtt.length})` : "Files"}
+                  bucket="captures"
+                  initial={allAtt}
+                />
+              ) : (
+                <div className="text-sm text-zinc-600">Files unavailable.</div>
+              )}
+            </div>
           </div>
 
           {/* Review */}
-          <div className="rounded-2xl border border-zinc-200 bg-white p-4 space-y-2">
+          <div className="space-y-2">
             <div className="text-sm font-semibold text-zinc-900">Review</div>
             <div className="flex flex-wrap items-center gap-2">
               <input
@@ -1552,9 +1583,9 @@ export default function DecisionsClient() {
                 title="Set review date"
               />
               {d.review_at ? (
-                <Chip onClick={() => void setReviewAt(d, null)} title="Clear review date">
+                <TextAction subtle onClick={() => void setReviewAt(d, null)} title="Clear review date">
                   Clear
-                </Chip>
+                </TextAction>
               ) : (
                 <span className="text-xs text-zinc-500">Optional</span>
               )}
@@ -1563,91 +1594,67 @@ export default function DecisionsClient() {
 
           {/* Chat summaries */}
           {summaries.length > 0 ? (
-            <div className="rounded-2xl border border-zinc-200 bg-white p-4 space-y-3">
+            <div className="space-y-3">
               <div className="space-y-1">
                 <div className="text-sm font-semibold text-zinc-900">Chat summaries</div>
                 <div className="text-xs text-zinc-500">Saved summaries attached to this decision.</div>
               </div>
 
-              {summaries.map((s) => {
-                const one = summaryHeadingFrom(s.summary_text, d.title);
-                const open = !!expandedSummary[s.id];
+              <div className="divide-y divide-zinc-100 rounded-2xl bg-white">
+                {summaries.map((s) => {
+                  const one = summaryHeadingFrom(s.summary_text, d.title);
+                  const open = !!expandedSummary[s.id];
 
-                return (
-                  <div key={s.id} className="rounded-2xl border border-zinc-200 bg-white px-4 py-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="text-xs text-zinc-500">Saved {softWhen(s.created_at)}</div>
-                        <div className="mt-1 text-sm font-medium text-zinc-900 truncate">{renderInlineBold(one)}</div>
+                  return (
+                    <div key={s.id} className="px-4 py-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="text-xs text-zinc-500">Saved {softWhen(s.created_at)}</div>
+                          <div className="mt-1 text-sm font-medium text-zinc-900 truncate">{renderInlineBold(one)}</div>
+                        </div>
+
+                        <div className="shrink-0">
+                          <TextAction subtle onClick={() => setExpandedSummary((p) => ({ ...p, [s.id]: !open }))} title="Expand">
+                            {open ? "Hide" : "Expand"}
+                          </TextAction>
+                        </div>
                       </div>
 
-                      <div className="shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => setExpandedSummary((p) => ({ ...p, [s.id]: !open }))}
-                          className="text-xs text-zinc-500 hover:text-zinc-700"
-                        >
-                          {open ? "Hide" : "Expand"}
-                        </button>
-                      </div>
+                      {open ? <div className="mt-3 space-y-2">{renderSummaryBody(s.summary_text)}</div> : null}
                     </div>
-
-                    {open ? <div className="mt-3 space-y-2">{renderSummaryBody(s.summary_text)}</div> : null}
-                  </div>
-                );
-              })}
+                  );
+                })}
+              </div>
             </div>
           ) : null}
 
-          {/* Actions (bottom buttons) */}
+          {/* Actions */}
           {confirmDeleteForId === d.id ? (
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#C94A4A] bg-[#FCECEC] px-4 py-3">
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-[#FCECEC] px-4 py-3">
               <div className="text-sm text-[#7A1E1E]">
                 Delete this decision? <span className="opacity-80">This can’t be undone.</span>
               </div>
               <div className="flex items-center gap-2">
-                <Chip onClick={() => setConfirmDeleteForId(null)}>Cancel</Chip>
+                <TextAction subtle onClick={() => setConfirmDeleteForId(null)}>
+                  Cancel
+                </TextAction>
                 <button
                   type="button"
                   onClick={() => void performDelete(d)}
-                  className="inline-flex select-none items-center justify-center rounded-full border border-[#C94A4A] bg-[#C94A4A] px-4 py-2 text-sm text-white transition hover:bg-[#b94141]"
+                  className="inline-flex select-none items-center justify-center rounded-full bg-[#C94A4A] px-4 py-2 text-sm text-white transition hover:bg-[#b94141]"
                 >
                   Delete
                 </button>
               </div>
             </div>
           ) : (
-            <div className="flex flex-wrap items-center gap-2">
-              <Chip
-                onClick={() => {
-                  setOpenId(null);
-                  setWorkForId(null);
-                  setConfirmDeleteForId(null);
-                  cancelEditNote();
-                  router.push(
-                    buildUrl("active", {
-                      q: searchDebounced,
-                      sort: sortKey,
-                      domain: activeDomainId,
-                      group: activeConstellationId,
-                      hasReview: hasReviewDateOnly,
-                      reviewDue: reviewDueOnly,
-                    }),
-                    { scroll: false }
-                  );
-                }}
-                title="Hide decision"
-              >
-                Hide
-              </Chip>
-
-              <Chip onClick={() => void closeDecision(d)} title="Move to Closed">
+            <div className="flex flex-wrap items-center gap-3 pt-1">
+              <TextAction onClick={() => void closeDecision(d)} title="Move to Closed">
                 Move to Closed
-              </Chip>
-
-              <Chip onClick={() => setConfirmDeleteForId(d.id)} title="Delete decision">
+              </TextAction>
+              <TextAction danger onClick={() => setConfirmDeleteForId(d.id)} title="Delete decision">
                 Delete
-              </Chip>
+              </TextAction>
             </div>
           )}
         </div>
@@ -1655,8 +1662,7 @@ export default function DecisionsClient() {
     );
   };
 
-  const shouldShowStatusLine =
-    statusLine && (statusLine.startsWith("Error:") || statusLine === "Not signed in." || statusLine === "Loading…");
+  const shouldShowStatusLine = statusLine && (statusLine.startsWith("Error:") || statusLine === "Not signed in." || statusLine === "Loading…");
 
   const ActiveFilterChips = () => {
     const any = filterCount > 0 || sortIsActive || !!(searchDebounced ?? "").trim();
@@ -1669,16 +1675,16 @@ export default function DecisionsClient() {
       <button
         type="button"
         onClick={onClear}
-        className="inline-flex items-center gap-2 rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs text-zinc-700 hover:bg-zinc-50"
+        className="inline-flex items-center gap-2 rounded-full bg-zinc-100 px-3 py-1.5 text-xs text-zinc-700 hover:bg-zinc-200/70"
         title="Clear"
       >
         <span className="truncate max-w-[220px]">{label}</span>
-        <span className="text-zinc-400">×</span>
+        <span className="text-zinc-500">×</span>
       </button>
     );
 
     return (
-      <div className="flex flex-wrap items-center gap-2 px-1">
+      <div className="flex flex-wrap items-center gap-2">
         {(searchDebounced ?? "").trim() ? <ChipPill label={`Search: ${(searchDebounced ?? "").trim()}`} onClear={() => setSearchText("")} /> : null}
         {sortIsActive ? <ChipPill label={`Sort: ${sortLabel[sortKey]}`} onClear={() => setSortKey("newest")} /> : null}
         {activeDomainId ? <ChipPill label={`Area: ${areaName}`} onClear={() => setActiveDomainId(null)} /> : null}
@@ -1699,7 +1705,7 @@ export default function DecisionsClient() {
               setFilterOpen(false);
               setSortOpen(false);
             }}
-            className="ml-1 inline-flex items-center rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs text-zinc-700 hover:bg-zinc-50"
+            className="ml-1 inline-flex items-center rounded-full bg-zinc-100 px-3 py-1.5 text-xs text-zinc-700 hover:bg-zinc-200/70"
             title="Clear all"
           >
             Clear all
@@ -1722,7 +1728,7 @@ export default function DecisionsClient() {
       />
 
       {filterOpen ? (
-        <div className="absolute right-0 z-50 mt-2 w-[320px] overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm">
+        <div className="absolute right-0 z-50 mt-2 w-[320px] overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-lg">
           <div className="flex items-center justify-between gap-2 px-4 py-3">
             <div className="text-sm font-semibold text-zinc-900">Filters</div>
             <div className="flex items-center gap-2">
@@ -1810,7 +1816,7 @@ export default function DecisionsClient() {
       />
 
       {sortOpen ? (
-        <div className="absolute right-0 z-50 mt-2 w-[260px] overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm">
+        <div className="absolute right-0 z-50 mt-2 w-[260px] overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-lg">
           <div className="flex items-center justify-between gap-2 px-4 py-3">
             <div className="text-sm font-semibold text-zinc-900">Sort</div>
             <div className="flex items-center gap-2">
@@ -1841,8 +1847,8 @@ export default function DecisionsClient() {
                 type="button"
                 onClick={() => setSortKey(k)}
                 className={[
-                  "w-full rounded-2xl border px-3 py-2 text-left text-sm transition",
-                  sortKey === k ? "border-zinc-300 bg-zinc-50 text-zinc-900" : "border-zinc-200 bg-white hover:bg-zinc-50 text-zinc-700",
+                  "w-full rounded-2xl px-3 py-2 text-left text-sm transition",
+                  sortKey === k ? "bg-zinc-100 text-zinc-900" : "bg-white hover:bg-zinc-50 text-zinc-700",
                 ].join(" ")}
               >
                 {label}
@@ -1862,11 +1868,40 @@ export default function DecisionsClient() {
   return (
     <Page title={pageTitle} subtitle={pageSubtitle} right={null}>
       <div className="mx-auto w-full max-w-[760px] space-y-6">
-        <TopTabs />
+        <SegTabs
+          tab={tab}
+          onTab={(t) => {
+            if (t === "new") router.push(buildUrl("new"), { scroll: false });
+            if (t === "active")
+              router.push(
+                buildUrl("active", {
+                  q: searchDebounced,
+                  sort: sortKey,
+                  domain: activeDomainId,
+                  group: activeConstellationId,
+                  hasReview: hasReviewDateOnly,
+                  reviewDue: reviewDueOnly,
+                }),
+                { scroll: false }
+              );
+            if (t === "closed")
+              router.push(
+                buildUrl("closed", {
+                  q: searchDebounced,
+                  sort: sortKey,
+                  domain: activeDomainId,
+                  group: activeConstellationId,
+                  hasReview: hasReviewDateOnly,
+                  reviewDue: reviewDueOnly,
+                }),
+                { scroll: false }
+              );
+          }}
+        />
 
         {/* Page 1: New Decision */}
         {tab === "new" ? (
-          <div className="rounded-2xl border border-zinc-200 bg-white p-4 space-y-4">
+          <div className="space-y-5">
             <div className="space-y-1">
               <div className="text-sm font-semibold text-zinc-900">What needs deciding?</div>
               <div className="text-sm text-zinc-600">Start messy — we’ll clarify it.</div>
@@ -1892,13 +1927,13 @@ export default function DecisionsClient() {
             {(newStep === "confirm" || newStep === "edit") && frameDraft ? (
               <div className="space-y-4">
                 {frameDraft.what_im_hearing ? (
-                  <div className="rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3">
+                  <div className="rounded-2xl bg-zinc-50 px-4 py-3">
                     <div className="text-xs font-semibold text-zinc-500">What I’m hearing</div>
                     <div className="mt-2 whitespace-pre-wrap text-sm text-zinc-800">{frameDraft.what_im_hearing}</div>
                   </div>
                 ) : null}
 
-                <div className="rounded-2xl border border-zinc-200 bg-white p-4 space-y-3">
+                <div className="space-y-3">
                   <div className="text-sm font-semibold text-zinc-900">Decision statement</div>
 
                   {newStep === "confirm" ? (
@@ -1941,22 +1976,23 @@ export default function DecisionsClient() {
                         <PrimaryActionButton disabled={creatingNew} onClick={() => void saveFramedDecision()} title="Save to Active Decisions">
                           {creatingNew ? "Saving…" : "Yes — Save to Active"}
                         </PrimaryActionButton>
-                        <Chip onClick={() => setNewStep("edit")} title="Edit the statement">
+                        <TextAction subtle onClick={() => setNewStep("edit")} title="Edit the statement">
                           Edit
-                        </Chip>
+                        </TextAction>
                       </>
                     ) : (
                       <>
                         <PrimaryActionButton disabled={creatingNew} onClick={() => void saveFramedDecision()} title="Save to Active Decisions">
                           {creatingNew ? "Saving…" : "Save to Active"}
                         </PrimaryActionButton>
-                        <Chip onClick={() => setNewStep("confirm")} title="Done editing">
+                        <TextAction subtle onClick={() => setNewStep("confirm")} title="Done editing">
                           Done
-                        </Chip>
+                        </TextAction>
                       </>
                     )}
 
-                    <Chip
+                    <TextAction
+                      subtle
                       onClick={() => {
                         setFrameDraft(null);
                         setNewStep("input");
@@ -1964,19 +2000,20 @@ export default function DecisionsClient() {
                       title="Start over"
                     >
                       Start over
-                    </Chip>
+                    </TextAction>
                   </div>
                 </div>
               </div>
             ) : null}
 
             {newStep === "input" ? (
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-wrap items-center gap-3">
                 <PrimaryActionButton disabled={framingBusy || creatingNew} onClick={() => void requestFrame()} title="Clarify this decision">
                   {framingBusy ? "Clarifying…" : "Next"}
                 </PrimaryActionButton>
 
-                <Chip
+                <TextAction
+                  subtle
                   onClick={() =>
                     router.push(
                       buildUrl("active", {
@@ -1992,8 +2029,8 @@ export default function DecisionsClient() {
                   }
                   title="Go to Active Decisions"
                 >
-                  Active Decisions
-                </Chip>
+                  Go to Active
+                </TextAction>
               </div>
             ) : null}
           </div>
@@ -2001,20 +2038,19 @@ export default function DecisionsClient() {
 
         {/* Page 2: Active Decisions */}
         {tab === "active" ? (
-          <div className="space-y-3">
-            <div className="rounded-2xl border border-zinc-200 bg-white p-3">
-              <div className="flex items-center gap-2">
-                <input
-                  ref={searchInputRef}
-                  value={searchText}
-                  onChange={(e) => setSearchText(e.target.value)}
-                  placeholder={searchPlaceholder}
-                  className="h-10 w-full rounded-full border border-zinc-200 bg-white px-4 text-sm text-zinc-800 outline-none focus:ring-2 focus:ring-zinc-200"
-                />
+          <div className="space-y-4">
+            {/* Search row (flat) */}
+            <div className="flex items-center gap-2">
+              <input
+                ref={searchInputRef}
+                value={searchText}
+                onChange={(e) => setSearchText(e.target.value)}
+                placeholder={searchPlaceholder}
+                className="h-10 w-full rounded-full border border-zinc-200 bg-white px-4 text-sm text-zinc-800 outline-none focus:ring-2 focus:ring-zinc-200"
+              />
 
-                <SortPanel />
-                <FilterPanel />
-              </div>
+              <SortPanel />
+              <FilterPanel />
             </div>
 
             <ActiveFilterChips />
@@ -2022,11 +2058,9 @@ export default function DecisionsClient() {
             {shouldShowStatusLine ? <div className="text-xs text-zinc-500">{statusLine}</div> : null}
 
             {filteredItems.length === 0 ? (
-              <div className="rounded-2xl border border-zinc-200 bg-white p-4">
-                <div className="space-y-2">
-                  <div className="text-sm font-semibold text-zinc-900">All clear.</div>
-                  <div className="text-sm text-zinc-600">When something needs attention, it can live here quietly.</div>
-                </div>
+              <div className="space-y-2 pt-2">
+                <div className="text-sm font-semibold text-zinc-900">All clear.</div>
+                <div className="text-sm text-zinc-600">When something needs attention, it can live here quietly.</div>
               </div>
             ) : (
               <div className="space-y-6">
@@ -2043,7 +2077,9 @@ export default function DecisionsClient() {
 
                     {hasMoreInUI ? (
                       <div className="flex items-center gap-2">
-                        <Chip onClick={() => setShowAll((v) => !v)}>{showAll ? "Show less" : "Show all"}</Chip>
+                        <TextAction subtle onClick={() => setShowAll((v) => !v)}>
+                          {showAll ? "Show less" : "Show all"}
+                        </TextAction>
                         {!showAll ? (
                           <div className="text-xs text-zinc-500">
                             Showing {DEFAULT_LIMIT} of {others.length}
@@ -2053,7 +2089,8 @@ export default function DecisionsClient() {
                     ) : null}
                   </div>
 
-                  <div className="rounded-2xl border border-zinc-200 bg-white">
+                  {/* Flat list */}
+                  <div className="divide-y divide-zinc-100">
                     {visibleOthers.map((d) => (
                       <DecisionRow key={d.id} d={d} />
                     ))}
@@ -2061,9 +2098,9 @@ export default function DecisionsClient() {
 
                   {showAll && hasServerMore ? (
                     <div className="flex items-center justify-center pt-2">
-                      <Chip onClick={loadMore} title="Load more decisions">
+                      <TextAction onClick={loadMore} title="Load more decisions">
                         Load more
-                      </Chip>
+                      </TextAction>
                     </div>
                   ) : null}
                 </div>
@@ -2074,32 +2111,28 @@ export default function DecisionsClient() {
 
         {/* Page 3: Closed Decisions */}
         {tab === "closed" ? (
-          <div className="space-y-3">
-            <div className="rounded-2xl border border-zinc-200 bg-white p-3">
-              <div className="flex items-center gap-2">
-                <input
-                  ref={searchInputRef}
-                  value={searchText}
-                  onChange={(e) => setSearchText(e.target.value)}
-                  placeholder={searchPlaceholder}
-                  className="h-10 w-full rounded-full border border-zinc-200 bg-white px-4 text-sm text-zinc-800 outline-none focus:ring-2 focus:ring-zinc-200"
-                />
+          <div className="space-y-4">
+            <div className="flex items-center gap-2">
+              <input
+                ref={searchInputRef}
+                value={searchText}
+                onChange={(e) => setSearchText(e.target.value)}
+                placeholder={searchPlaceholder}
+                className="h-10 w-full rounded-full border border-zinc-200 bg-white px-4 text-sm text-zinc-800 outline-none focus:ring-2 focus:ring-zinc-200"
+              />
 
-                <SortPanel />
-                <FilterPanel />
-              </div>
+              <SortPanel />
+              <FilterPanel />
             </div>
 
             <ActiveFilterChips />
 
             {shouldShowStatusLine ? <div className="text-xs text-zinc-500">{statusLine}</div> : null}
 
-            {filteredItems.length === 0 ? (
-              <div className="rounded-2xl border border-zinc-200 bg-white p-4">
-                <div className="text-sm text-zinc-600">No closed decisions yet.</div>
-              </div>
-            ) : (
-              <div className="rounded-2xl border border-zinc-200 bg-white">
+            {filteredItems.length === 0 ? <div className="text-sm text-zinc-600 pt-2">No closed decisions yet.</div> : null}
+
+            {filteredItems.length > 0 ? (
+              <div className="divide-y divide-zinc-100">
                 {filteredItems.map((d) => {
                   const isOpen = !!expandedClosed[d.id];
                   const notes = notesByDecisionId[d.id] ?? [];
@@ -2109,17 +2142,17 @@ export default function DecisionsClient() {
                   const captured = splitContext(d.context).captured;
 
                   return (
-                    <div key={d.id} className="px-4 py-4 border-b border-zinc-200 last:border-b-0">
+                    <div key={d.id} className="py-4">
                       {/* header row */}
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
-                          <div className="text-base font-semibold text-zinc-900">{d.title}</div>
+                          <div className="text-[15px] font-semibold text-zinc-900">{d.title}</div>
                           <div className="mt-1 text-xs text-zinc-500">Started {softWhen(d.created_at)}</div>
                         </div>
 
                         <div className="shrink-0 flex items-center gap-2">
-                          <button
-                            type="button"
+                          <TextAction
+                            subtle
                             onClick={() => {
                               setExpandedClosed((p) => {
                                 const nextOpen = !p[d.id];
@@ -2130,23 +2163,22 @@ export default function DecisionsClient() {
                                 return { ...p, [d.id]: nextOpen };
                               });
                             }}
-                            className="text-xs text-zinc-500 hover:text-zinc-700"
                             title={isOpen ? "Hide details" : "Show details"}
                           >
-                            {isOpen ? "Hide" : "Show details"}
-                          </button>
+                            {isOpen ? "Hide details" : "Show details"}
+                          </TextAction>
 
-                          <Chip onClick={() => void reopenDecision(d)} title="Re-open this decision">
+                          <TextAction onClick={() => void reopenDecision(d)} title="Re-open this decision">
                             Re-open
-                          </Chip>
+                          </TextAction>
                         </div>
                       </div>
 
-                      {/* details (active-style headings, read-only) */}
+                      {/* details (flat sections) */}
                       {isOpen ? (
-                        <div className="mt-4 space-y-4">
+                        <div className="mt-4 space-y-5">
                           {/* Captured */}
-                          <div className="rounded-2xl border border-zinc-200 bg-white p-4 space-y-2">
+                          <div className="space-y-2">
                             <div className="text-sm font-semibold text-zinc-900">Captured</div>
                             {captured ? (
                               <div className="whitespace-pre-wrap text-[15px] leading-relaxed text-zinc-800">{captured}</div>
@@ -2158,17 +2190,17 @@ export default function DecisionsClient() {
                           </div>
 
                           {/* Notes (read-only) */}
-                          <div className="rounded-2xl border border-zinc-200 bg-white p-4 space-y-3">
+                          <div className="space-y-2">
                             <div className="text-sm font-semibold text-zinc-900">Notes</div>
 
                             {notesLoading ? (
                               <div className="text-sm text-zinc-500">Loading notes…</div>
                             ) : notes.length === 0 ? (
-                              <div className="rounded-2xl border border-zinc-100 bg-zinc-50 px-4 py-3 text-sm text-zinc-600">No notes.</div>
+                              <div className="text-sm text-zinc-600">No notes.</div>
                             ) : (
-                              <div className="space-y-3">
+                              <div className="divide-y divide-zinc-100 rounded-2xl bg-white">
                                 {notes.map((n) => (
-                                  <div key={n.id} className="rounded-2xl border border-zinc-200 bg-white px-4 py-3">
+                                  <div key={n.id} className="px-4 py-3">
                                     <div className="text-xs text-zinc-500">
                                       {softWhenDateTime(n.created_at)}
                                       {n.updated_at ? ` • edited ${softWhenDateTime(n.updated_at)}` : ""}
@@ -2181,7 +2213,7 @@ export default function DecisionsClient() {
                           </div>
 
                           {/* Files (read-only list) */}
-                          <div className="rounded-2xl border border-zinc-200 bg-white p-4 space-y-2">
+                          <div className="space-y-2">
                             <div className="text-sm font-semibold text-zinc-900">Files</div>
                             {normalizeAttachments(d.attachments).length === 0 ? (
                               <div className="text-sm text-zinc-600">No attachments.</div>
@@ -2197,13 +2229,13 @@ export default function DecisionsClient() {
                           </div>
 
                           {/* Review (read-only) */}
-                          <div className="rounded-2xl border border-zinc-200 bg-white p-4 space-y-2">
+                          <div className="space-y-2">
                             <div className="text-sm font-semibold text-zinc-900">Review</div>
                             <div className="text-sm text-zinc-700">{d.review_at ? softWhen(d.review_at) : "No review date."}</div>
                           </div>
 
                           {/* Chat summaries (read-only) */}
-                          <div className="rounded-2xl border border-zinc-200 bg-white p-4 space-y-3">
+                          <div className="space-y-3">
                             <div className="space-y-1">
                               <div className="text-sm font-semibold text-zinc-900">Chat summaries</div>
                               <div className="text-xs text-zinc-500">Saved summaries attached to this decision.</div>
@@ -2214,13 +2246,13 @@ export default function DecisionsClient() {
                             ) : closedSummaries.length === 0 ? (
                               <div className="text-sm text-zinc-600">No summaries yet.</div>
                             ) : (
-                              <div className="space-y-3">
+                              <div className="divide-y divide-zinc-100 rounded-2xl bg-white">
                                 {closedSummaries.map((s) => {
                                   const heading = summaryHeadingFrom(s.summary_text, d.title);
                                   const open = !!expandedSummary[s.id];
 
                                   return (
-                                    <div key={s.id} className="rounded-2xl border border-zinc-200 bg-white px-4 py-3">
+                                    <div key={s.id} className="px-4 py-3">
                                       <div className="flex items-start justify-between gap-3">
                                         <div className="min-w-0">
                                           <div className="text-xs text-zinc-500">Saved {softWhen(s.created_at)}</div>
@@ -2228,13 +2260,9 @@ export default function DecisionsClient() {
                                         </div>
 
                                         <div className="shrink-0">
-                                          <button
-                                            type="button"
-                                            onClick={() => setExpandedSummary((p) => ({ ...p, [s.id]: !open }))}
-                                            className="text-xs text-zinc-500 hover:text-zinc-700"
-                                          >
+                                          <TextAction subtle onClick={() => setExpandedSummary((p) => ({ ...p, [s.id]: !open }))}>
                                             {open ? "Hide" : "Expand"}
-                                          </button>
+                                          </TextAction>
                                         </div>
                                       </div>
 
@@ -2251,13 +2279,13 @@ export default function DecisionsClient() {
                   );
                 })}
               </div>
-            )}
+            ) : null}
 
             {hasServerMore ? (
               <div className="flex items-center justify-center pt-2">
-                <Chip onClick={loadMore} title="Load more decisions">
+                <TextAction onClick={loadMore} title="Load more decisions">
                   Load more
-                </Chip>
+                </TextAction>
               </div>
             ) : null}
           </div>

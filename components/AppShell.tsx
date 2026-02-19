@@ -1,3 +1,4 @@
+// app/(app)/AppShell.tsx
 "use client";
 
 import type { ReactNode } from "react";
@@ -5,7 +6,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { cn } from "@/lib/cn";
 import { Chip } from "@/components/ui";
 
 type AppShellProps = {
@@ -58,8 +58,8 @@ export function AppShell({ children }: AppShellProps) {
   useOutsideClick(menuRef, () => setMenuOpen(false), menuOpen);
 
   return (
-    <div className="min-h-dvh bg-[#faf7f2]">
-      <div className="sticky top-0 z-40 border-b border-zinc-200 bg-white">
+    <div className="min-h-dvh bg-white">
+      <div className="sticky top-0 z-40 border-b border-zinc-100 bg-white">
         <div className="mx-auto flex w-full max-w-[1100px] items-center justify-between gap-3 px-4 py-3">
           {/* Brand */}
           <div className="flex items-center gap-3">
@@ -89,27 +89,15 @@ export function AppShell({ children }: AppShellProps) {
             {menuOpen ? (
               <div className="absolute right-0 top-full z-50 mt-2 w-[240px] overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-lg">
                 <div className="grid">
-                  <Link
-                    href="/settings"
-                    className="px-4 py-3 text-sm text-zinc-800 hover:bg-zinc-50"
-                    onClick={() => setMenuOpen(false)}
-                  >
+                  <Link href="/settings" className="px-4 py-3 text-sm text-zinc-800 hover:bg-zinc-50" onClick={() => setMenuOpen(false)}>
                     Settings
                   </Link>
 
-                  <Link
-                    href="/family"
-                    className="px-4 py-3 text-sm text-zinc-800 hover:bg-zinc-50"
-                    onClick={() => setMenuOpen(false)}
-                  >
+                  <Link href="/family" className="px-4 py-3 text-sm text-zinc-800 hover:bg-zinc-50" onClick={() => setMenuOpen(false)}>
                     Family
                   </Link>
 
-                  <Link
-                    href="/fine-print"
-                    className="px-4 py-3 text-sm text-zinc-800 hover:bg-zinc-50"
-                    onClick={() => setMenuOpen(false)}
-                  >
+                  <Link href="/fine-print" className="px-4 py-3 text-sm text-zinc-800 hover:bg-zinc-50" onClick={() => setMenuOpen(false)}>
                     Fine print
                   </Link>
 

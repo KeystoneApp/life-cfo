@@ -13,7 +13,8 @@ body {
 @layer base {
   body {
     margin: 0;
-    @apply bg-neutral-bg text-neutral-text;
+    /* Flat-by-default canvas */
+    @apply bg-white text-neutral-text;
   }
 
   input,
