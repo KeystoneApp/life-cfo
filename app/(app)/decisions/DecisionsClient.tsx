@@ -405,7 +405,13 @@ function renderSummaryBody(text: string) {
   return out;
 }
 
-function SegTabs({ tab, onTab }: { tab: Tab; onTab: (t: Tab) => void }) {
+function SegTabs({
+  tab,
+  onTab,
+}: {
+  tab: Tab;
+  onTab: (t: Tab) => void;
+}) {
   const TabBtn = ({ t, label }: { t: Tab; label: string }) => {
     const active = tab === t;
     return (
@@ -433,6 +439,54 @@ function SegTabs({ tab, onTab }: { tab: Tab; onTab: (t: Tab) => void }) {
       </div>
     </div>
   );
+}
+
+/* ---------- review helpers (restores preset dropdown + custom date) ---------- */
+
+type ReviewPreset =
+  | "none"
+  | "tomorrow"
+  | "nextWeek"
+  | "twoWeeks"
+  | "oneMonth"
+  | "threeMonths"
+  | "sixMonths"
+  | "oneYear"
+  | "custom";
+
+function startOfLocalDay(d: Date) {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  return x;
+}
+function isoAtLocalNoon(date: Date) {
+  // noon local reduces timezone edge weirdness when converting to ISO
+  const x = new Date(date);
+  x.setHours(12, 0, 0, 0);
+  return x.toISOString();
+}
+function addDaysLocal(base: Date, days: number) {
+  const x = new Date(base);
+  x.setDate(x.getDate() + days);
+  return x;
+}
+function addMonthsLocal(base: Date, months: number) {
+  const x = new Date(base);
+  x.setMonth(x.getMonth() + months);
+  return x;
+}
+function reviewIsoFromPreset(preset: ReviewPreset): string | null {
+  const today = startOfLocalDay(new Date());
+  if (preset === "none") return null;
+  if (preset === "tomorrow") return isoAtLocalNoon(addDaysLocal(today, 1));
+  if (preset === "nextWeek") return isoAtLocalNoon(addDaysLocal(today, 7));
+  if (preset === "twoWeeks") return isoAtLocalNoon(addDaysLocal(today, 14));
+  if (preset === "oneMonth") return isoAtLocalNoon(addMonthsLocal(today, 1));
+  if (preset === "threeMonths") return isoAtLocalNoon(addMonthsLocal(today, 3));
+  if (preset === "sixMonths") return isoAtLocalNoon(addMonthsLocal(today, 6));
+  if (preset === "oneYear") return isoAtLocalNoon(addMonthsLocal(today, 12));
+  // custom is handled elsewhere
+  return null;
 }
 
 export default function DecisionsClient() {
@@ -560,11 +614,18 @@ export default function DecisionsClient() {
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [editingNoteDraft, setEditingNoteDraft] = useState<string>("");
 
-  /** ✅ "Add details" compact strip + per-section toggles (open decision only renders these when needed) */
+  /* ---------- NEW: “Add details” UX state (active decision only) ---------- */
   const [detailsStripOpenByDecisionId, setDetailsStripOpenByDecisionId] = useState<Record<string, boolean>>({});
-  const [notesOpenByDecisionId, setNotesOpenByDecisionId] = useState<Record<string, boolean>>({});
-  const [filesOpenByDecisionId, setFilesOpenByDecisionId] = useState<Record<string, boolean>>({});
+  const [noteComposerOpenByDecisionId, setNoteComposerOpenByDecisionId] = useState<Record<string, boolean>>({});
+  const [filesComposerOpenByDecisionId, setFilesComposerOpenByDecisionId] = useState<Record<string, boolean>>({});
   const [reviewOpenByDecisionId, setReviewOpenByDecisionId] = useState<Record<string, boolean>>({});
+
+  // review preset + custom value (per decision)
+  const [reviewPresetByDecisionId, setReviewPresetByDecisionId] = useState<Record<string, ReviewPreset>>({});
+  const [reviewCustomDateByDecisionId, setReviewCustomDateByDecisionId] = useState<Record<string, string>>({});
+
+  // used to auto-close file “add” panel when attachments count increases
+  const prevAttachmentCountRef = useRef<Record<string, number>>({});
 
   const scrollToDecisionTop = (id: string) => {
     const anchor = topAnchorRefs.current[id] ?? cardRefs.current[id];
@@ -952,6 +1013,8 @@ export default function DecisionsClient() {
     }
 
     showToast({ message: "Note saved." }, 1400);
+    // ✅ close composer after save
+    setNoteComposerOpenByDecisionId((p) => ({ ...p, [decisionId]: false }));
     void loadNotes(decisionId);
   };
 
@@ -1019,6 +1082,16 @@ export default function DecisionsClient() {
     if (!openDecision?.id) return;
 
     void loadNotes(openDecision.id);
+
+    // seed attachment count tracker for auto-close
+    const count = normalizeAttachments(openDecision.attachments).length;
+    prevAttachmentCountRef.current[openDecision.id] = count;
+
+    // seed review preset UI for this open decision (so dropdown isn't blank)
+    const iso = openDecision.review_at;
+    const dateStr = iso ? new Date(safeMs(iso) ?? Date.now()).toISOString().slice(0, 10) : "";
+    setReviewCustomDateByDecisionId((p) => (p[openDecision.id] != null ? p : { ...p, [openDecision.id]: dateStr }));
+    setReviewPresetByDecisionId((p) => (p[openDecision.id] != null ? p : { ...p, [openDecision.id]: iso ? "custom" : "none" }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId, tab, openDecision?.id]);
 
@@ -1338,41 +1411,37 @@ export default function DecisionsClient() {
     const notesLoading = !!notesLoadingByDecisionId[d.id];
     const composerValue = noteDraftByDecisionId[d.id] ?? "";
 
-    // --- details visibility (content OR user opened) ---
+    // “Add details” UX
     const detailsStripOpen = !!detailsStripOpenByDecisionId[d.id];
-    const notesOpen = !!notesOpenByDecisionId[d.id];
-    const filesOpen = !!filesOpenByDecisionId[d.id];
+    const noteComposerOpen = !!noteComposerOpenByDecisionId[d.id];
+    const filesComposerOpen = !!filesComposerOpenByDecisionId[d.id];
     const reviewOpen = !!reviewOpenByDecisionId[d.id];
 
-    const notesHasContent = notes.length > 0 || (composerValue ?? "").trim().length > 0 || !!editingNoteId;
-    const filesHasContent = allAtt.length > 0;
-    const reviewHasContent = !!d.review_at;
+    const preset = (reviewPresetByDecisionId[d.id] ?? (d.review_at ? "custom" : "none")) as ReviewPreset;
+    const customDateStr =
+      reviewCustomDateByDecisionId[d.id] ??
+      (d.review_at ? new Date(safeMs(d.review_at) ?? Date.now()).toISOString().slice(0, 10) : "");
 
-    const showNotesSection = notesHasContent || notesOpen;
-    const showFilesSection = filesHasContent || filesOpen;
-    const showReviewSection = reviewHasContent || reviewOpen;
+    // auto-close file add panel when attachments count increases
+    const currentAttCount = allAtt.length;
+    const prevAttCount = prevAttachmentCountRef.current[d.id] ?? currentAttCount;
+    if (prevAttCount !== currentAttCount) {
+      prevAttachmentCountRef.current[d.id] = currentAttCount;
+      if (filesComposerOpen && currentAttCount > prevAttCount) {
+        // close after successful add (best-effort, no AttachmentsBlock callback needed)
+        setFilesComposerOpenByDecisionId((p) => ({ ...p, [d.id]: false }));
+      }
+    }
 
-    const anyDetailsVisible = showNotesSection || showFilesSection || showReviewSection;
+    const summariesHasAny = summaries.length > 0;
+    const notesHasAny = notes.length > 0;
+    const filesHasAny = allAtt.length > 0;
+    const reviewHasAny = !!d.review_at;
 
-    const openDetailsStrip = () => {
-      setDetailsStripOpenByDecisionId((p) => ({ ...p, [d.id]: true }));
-    };
-
-    const openNotes = () => {
-      openDetailsStrip();
-      setNotesOpenByDecisionId((p) => ({ ...p, [d.id]: true }));
-      void loadNotes(d.id);
-    };
-
-    const openFiles = () => {
-      openDetailsStrip();
-      setFilesOpenByDecisionId((p) => ({ ...p, [d.id]: true }));
-    };
-
-    const openReview = () => {
-      openDetailsStrip();
-      setReviewOpenByDecisionId((p) => ({ ...p, [d.id]: true }));
-    };
+    const showSummariesSection = summariesHasAny; // summaries are always read-only; render only if there is content
+    const showNotesSection = notesHasAny || noteComposerOpen || editingNoteId != null;
+    const showFilesSection = filesHasAny || filesComposerOpen;
+    const showReviewSection = reviewHasAny || reviewOpen;
 
     return (
       <div
@@ -1457,39 +1526,61 @@ export default function DecisionsClient() {
 
             {/* Add details link + compact control strip */}
             <div className="mt-2">
-              {!detailsStripOpen && !anyDetailsVisible ? (
-                <button
-                  type="button"
-                  onClick={openDetailsStrip}
-                  className="text-xs font-medium text-zinc-600 hover:text-zinc-900 hover:underline underline-offset-4"
-                  title="Add notes, files, or a review date"
-                >
-                  Add details
-                </button>
-              ) : (
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="text-xs text-zinc-500">Add:</span>
-                  {!showNotesSection ? (
-                    <TextAction subtle onClick={openNotes} title="Add a note">
-                      + Note
-                    </TextAction>
-                  ) : null}
-                  {!showFilesSection ? (
-                    <TextAction subtle onClick={openFiles} title="Add files">
-                      + Files
-                    </TextAction>
-                  ) : null}
-                  {!showReviewSection ? (
-                    <TextAction subtle onClick={openReview} title="Set a review date">
-                      + Review date
-                    </TextAction>
-                  ) : null}
+              <button
+                type="button"
+                onClick={() => setDetailsStripOpenByDecisionId((p) => ({ ...p, [d.id]: !detailsStripOpen }))}
+                className="text-xs text-zinc-500 hover:text-zinc-700 underline underline-offset-4"
+                title="Add notes, files, or a review date"
+              >
+                Add details
+              </button>
 
-                  {showNotesSection && showFilesSection && showReviewSection ? (
-                    <span className="text-xs text-zinc-500">—</span>
-                  ) : null}
+              {detailsStripOpen ? (
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <TextAction
+                    onClick={() => {
+                      setNoteComposerOpenByDecisionId((p) => ({ ...p, [d.id]: true }));
+                      setFilesComposerOpenByDecisionId((p) => ({ ...p, [d.id]: p[d.id] ?? false }));
+                      setReviewOpenByDecisionId((p) => ({ ...p, [d.id]: p[d.id] ?? false }));
+                      void loadNotes(d.id);
+                    }}
+                    title="Add a note"
+                  >
+                    + Notes
+                  </TextAction>
+
+                  <TextAction
+                    onClick={() => {
+                      setFilesComposerOpenByDecisionId((p) => ({ ...p, [d.id]: true }));
+                      setNoteComposerOpenByDecisionId((p) => ({ ...p, [d.id]: p[d.id] ?? false }));
+                      setReviewOpenByDecisionId((p) => ({ ...p, [d.id]: p[d.id] ?? false }));
+                    }}
+                    title="Add a file"
+                  >
+                    + Files
+                  </TextAction>
+
+                  <TextAction
+                    onClick={() => {
+                      setReviewOpenByDecisionId((p) => ({ ...p, [d.id]: true }));
+                      setReviewPresetByDecisionId((p) => ({ ...p, [d.id]: d.review_at ? "custom" : "none" }));
+                      setReviewCustomDateByDecisionId((p) => ({
+                        ...p,
+                        [d.id]: d.review_at ? new Date(safeMs(d.review_at) ?? Date.now()).toISOString().slice(0, 10) : p[d.id] ?? "",
+                      }));
+                      setNoteComposerOpenByDecisionId((p) => ({ ...p, [d.id]: p[d.id] ?? false }));
+                      setFilesComposerOpenByDecisionId((p) => ({ ...p, [d.id]: p[d.id] ?? false }));
+                    }}
+                    title="Set a review date"
+                  >
+                    + Review date
+                  </TextAction>
+
+                  <TextAction subtle onClick={() => setDetailsStripOpenByDecisionId((p) => ({ ...p, [d.id]: false }))} title="Hide controls">
+                    Done
+                  </TextAction>
                 </div>
-              )}
+              ) : null}
             </div>
           </div>
         ) : null}
@@ -1528,215 +1619,317 @@ export default function DecisionsClient() {
           </div>
         ) : null}
 
-        {/* Workspace (only render sections when they have content OR are opened for editing) */}
-        {anyDetailsVisible ? (
-          <div className="mt-5 space-y-6">
-            {/* Notes */}
-            {showNotesSection ? (
-              <div className="space-y-3">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="text-sm font-semibold text-zinc-900">Notes</div>
+        {/* Workspace (sections render only if content exists OR being edited) */}
+        <div className="mt-5 space-y-6">
+          {/* ✅ Chat summaries FIRST */}
+          {showSummariesSection ? (
+            <div className="space-y-3">
+              <div className="space-y-1">
+                <div className="text-sm font-semibold text-zinc-900">Chat summaries</div>
+                <div className="text-xs text-zinc-500">Saved summaries attached to this decision.</div>
+              </div>
+
+              <div className="divide-y divide-zinc-100 rounded-2xl bg-white">
+                {summaries.map((s) => {
+                  const one = summaryHeadingFrom(s.summary_text, d.title);
+                  const open = !!expandedSummary[s.id];
+
+                  return (
+                    <div key={s.id} className="px-4 py-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="text-xs text-zinc-500">Saved {softWhen(s.created_at)}</div>
+                          <div className="mt-1 text-sm font-medium text-zinc-900 truncate">{renderInlineBold(one)}</div>
+                        </div>
+
+                        <div className="shrink-0">
+                          <TextAction subtle onClick={() => setExpandedSummary((p) => ({ ...p, [s.id]: !open }))} title="Expand">
+                            {open ? "Hide" : "Expand"}
+                          </TextAction>
+                        </div>
+                      </div>
+
+                      {open ? <div className="mt-3 space-y-2">{renderSummaryBody(s.summary_text)}</div> : null}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
+
+          {/* Notes */}
+          {showNotesSection ? (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-sm font-semibold text-zinc-900">Notes</div>
+                <div className="flex items-center gap-2">
                   <TextAction subtle onClick={() => void loadNotes(d.id)} title="Refresh notes">
                     Refresh
                   </TextAction>
-                </div>
-
-                <textarea
-                  value={composerValue}
-                  onChange={(e) => setNoteDraftByDecisionId((p) => ({ ...p, [d.id]: e.target.value }))}
-                  placeholder="Add a note…"
-                  className="w-full min-h-[96px] resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[15px] leading-relaxed text-zinc-900 outline-none focus:ring-2 focus:ring-zinc-200"
-                  onKeyDown={(e) => {
-                    const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
-                    const cmdOrCtrl = isMac ? e.metaKey : e.ctrlKey;
-                    if (cmdOrCtrl && e.key === "Enter") {
-                      e.preventDefault();
-                      void addNote(d.id);
-                    }
-                  }}
-                />
-
-                <div className="flex flex-wrap items-center gap-2">
-                  <TextAction onClick={() => void addNote(d.id)} title="Save note">
-                    Save note
-                  </TextAction>
-                  {editingNoteId ? <div className="text-xs text-zinc-500">Editing below — save/cancel there.</div> : null}
-                </div>
-
-                <div className="pt-1">
-                  {notesLoading ? <div className="text-sm text-zinc-500">Loading notes…</div> : null}
-
-                  {!notesLoading && notes.length > 0 ? (
-                    <div className="divide-y divide-zinc-100 rounded-2xl bg-white">
-                      {notes.map((n) => {
-                        const isEditing = editingNoteId === n.id;
-                        const stamp = softWhenDateTime(n.created_at);
-                        const edited = n.updated_at ? ` • edited ${softWhenDateTime(n.updated_at)}` : "";
-
-                        return (
-                          <div key={n.id} className="px-4 py-3">
-                            <div className="flex items-start justify-between gap-3">
-                              <div className="min-w-0">
-                                <div className="text-xs text-zinc-500">
-                                  {stamp}
-                                  {edited}
-                                </div>
-                              </div>
-
-                              <div className="shrink-0 flex items-center gap-1">
-                                {!isEditing ? (
-                                  <>
-                                    <TextAction subtle onClick={() => startEditNote(n)} title="Edit note">
-                                      Edit
-                                    </TextAction>
-                                    <TextAction danger onClick={() => void deleteNote(d.id, n.id)} title="Delete note">
-                                      Delete
-                                    </TextAction>
-                                  </>
-                                ) : (
-                                  <>
-                                    <TextAction onClick={() => void saveEditNote(d.id, n.id)} title="Save changes">
-                                      Save
-                                    </TextAction>
-                                    <TextAction subtle onClick={cancelEditNote} title="Cancel edit">
-                                      Cancel
-                                    </TextAction>
-                                  </>
-                                )}
-                              </div>
-                            </div>
-
-                            {!isEditing ? (
-                              <div className="mt-2 whitespace-pre-wrap text-[15px] leading-relaxed text-zinc-800">{n.body}</div>
-                            ) : (
-                              <textarea
-                                value={editingNoteDraft}
-                                onChange={(e) => setEditingNoteDraft(e.target.value)}
-                                className="mt-2 w-full min-h-[90px] resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[15px] leading-relaxed text-zinc-900 outline-none focus:ring-2 focus:ring-zinc-200"
-                              />
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
+                  {noteComposerOpen ? (
+                    <TextAction subtle onClick={() => setNoteComposerOpenByDecisionId((p) => ({ ...p, [d.id]: false }))} title="Close note editor">
+                      Close
+                    </TextAction>
                   ) : null}
                 </div>
               </div>
-            ) : null}
 
-            {/* Files */}
-            {showFilesSection ? (
-              <div className="space-y-2">
+              {/* Composer only when explicitly adding */}
+              {noteComposerOpen ? (
+                <>
+                  <textarea
+                    value={composerValue}
+                    onChange={(e) => setNoteDraftByDecisionId((p) => ({ ...p, [d.id]: e.target.value }))}
+                    placeholder="Add a note…"
+                    className="w-full min-h-[96px] resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[15px] leading-relaxed text-zinc-900 outline-none focus:ring-2 focus:ring-zinc-200"
+                    onKeyDown={(e) => {
+                      const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+                      const cmdOrCtrl = isMac ? e.metaKey : e.ctrlKey;
+                      if (cmdOrCtrl && e.key === "Enter") {
+                        e.preventDefault();
+                        void addNote(d.id);
+                      }
+                    }}
+                  />
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <TextAction onClick={() => void addNote(d.id)} title="Save note">
+                      Save note
+                    </TextAction>
+                    <TextAction subtle onClick={() => setNoteComposerOpenByDecisionId((p) => ({ ...p, [d.id]: false }))} title="Cancel">
+                      Cancel
+                    </TextAction>
+                    {editingNoteId ? <div className="text-xs text-zinc-500">Editing below — save/cancel there.</div> : null}
+                  </div>
+                </>
+              ) : null}
+
+              <div className="pt-1">
+                {notesLoading ? <div className="text-sm text-zinc-500">Loading notes…</div> : null}
+
+                {!notesLoading && notes.length === 0 ? <div className="text-sm text-zinc-600">No notes yet.</div> : null}
+
+                {!notesLoading && notes.length > 0 ? (
+                  <div className="divide-y divide-zinc-100 rounded-2xl bg-white">
+                    {notes.map((n) => {
+                      const isEditing = editingNoteId === n.id;
+                      const stamp = softWhenDateTime(n.created_at);
+                      const edited = n.updated_at ? ` • edited ${softWhenDateTime(n.updated_at)}` : "";
+
+                      return (
+                        <div key={n.id} className="px-4 py-3">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="text-xs text-zinc-500">
+                                {stamp}
+                                {edited}
+                              </div>
+                            </div>
+
+                            <div className="shrink-0 flex items-center gap-1">
+                              {!isEditing ? (
+                                <>
+                                  <TextAction subtle onClick={() => startEditNote(n)} title="Edit note">
+                                    Edit
+                                  </TextAction>
+                                  <TextAction danger onClick={() => void deleteNote(d.id, n.id)} title="Delete note">
+                                    Delete
+                                  </TextAction>
+                                </>
+                              ) : (
+                                <>
+                                  <TextAction onClick={() => void saveEditNote(d.id, n.id)} title="Save changes">
+                                    Save
+                                  </TextAction>
+                                  <TextAction subtle onClick={cancelEditNote} title="Cancel edit">
+                                    Cancel
+                                  </TextAction>
+                                </>
+                              )}
+                            </div>
+                          </div>
+
+                          {!isEditing ? (
+                            <div className="mt-2 whitespace-pre-wrap text-[15px] leading-relaxed text-zinc-800">{n.body}</div>
+                          ) : (
+                            <textarea
+                              value={editingNoteDraft}
+                              onChange={(e) => setEditingNoteDraft(e.target.value)}
+                              className="mt-2 w-full min-h-[90px] resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[15px] leading-relaxed text-zinc-900 outline-none focus:ring-2 focus:ring-zinc-200"
+                            />
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+
+          {/* Files */}
+          {showFilesSection ? (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-2">
                 <div className="text-sm font-semibold text-zinc-900">Files</div>
+                {filesComposerOpen ? (
+                  <TextAction subtle onClick={() => setFilesComposerOpenByDecisionId((p) => ({ ...p, [d.id]: false }))} title="Close file uploader">
+                    Close
+                  </TextAction>
+                ) : null}
+              </div>
+
+              {/* Existing files list always shown when there is content */}
+              {filesHasAny ? (
+                <div className="rounded-2xl bg-white px-4 py-3">
+                  <ul className="space-y-1">
+                    {allAtt.map((a, idx) => (
+                      <li key={`${a.path}-${idx}`} className="truncate text-sm text-zinc-700">
+                        {a.name}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+
+              {/* Uploader only when explicitly adding */}
+              {filesComposerOpen ? (
                 <div className="rounded-2xl bg-white p-3">
                   {userId ? (
                     <AttachmentsBlock
                       userId={userId}
                       decisionId={d.id}
-                      title={allAtt.length ? `Files (${allAtt.length})` : "Files"}
+                      title={allAtt.length ? `Add files (currently ${allAtt.length})` : "Add files"}
                       bucket="captures"
                       initial={allAtt}
                     />
                   ) : (
                     <div className="text-sm text-zinc-600">Files unavailable.</div>
                   )}
-                </div>
-              </div>
-            ) : null}
-
-            {/* Review */}
-            {showReviewSection ? (
-              <div className="space-y-2">
-                <div className="text-sm font-semibold text-zinc-900">Review</div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <input
-                    type="date"
-                    className="h-9 rounded-full border border-zinc-200 bg-white px-3 text-sm text-zinc-700"
-                    value={d.review_at ? new Date(safeMs(d.review_at) ?? Date.now()).toISOString().slice(0, 10) : ""}
-                    onChange={(e) => {
-                      const iso = isoFromDateInput(e.target.value);
-                      void setReviewAt(d, iso);
-                    }}
-                    title="Set review date"
-                  />
-                  {d.review_at ? (
-                    <TextAction subtle onClick={() => void setReviewAt(d, null)} title="Clear review date">
-                      Clear
-                    </TextAction>
-                  ) : (
-                    <span className="text-xs text-zinc-500">Optional</span>
-                  )}
-                </div>
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-
-        {/* Chat summaries */}
-        {summaries.length > 0 ? (
-          <div className="mt-5 space-y-3">
-            <div className="space-y-1">
-              <div className="text-sm font-semibold text-zinc-900">Chat summaries</div>
-              <div className="text-xs text-zinc-500">Saved summaries attached to this decision.</div>
-            </div>
-
-            <div className="divide-y divide-zinc-100 rounded-2xl bg-white">
-              {summaries.map((s) => {
-                const one = summaryHeadingFrom(s.summary_text, d.title);
-                const open = !!expandedSummary[s.id];
-
-                return (
-                  <div key={s.id} className="px-4 py-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="text-xs text-zinc-500">Saved {softWhen(s.created_at)}</div>
-                        <div className="mt-1 text-sm font-medium text-zinc-900 truncate">{renderInlineBold(one)}</div>
-                      </div>
-
-                      <div className="shrink-0">
-                        <TextAction subtle onClick={() => setExpandedSummary((p) => ({ ...p, [s.id]: !open }))} title="Expand">
-                          {open ? "Hide" : "Expand"}
-                        </TextAction>
-                      </div>
-                    </div>
-
-                    {open ? <div className="mt-3 space-y-2">{renderSummaryBody(s.summary_text)}</div> : null}
+                  <div className="mt-2 text-xs text-zinc-500">
+                    Tip: after an upload completes, this panel will close automatically.
                   </div>
-                );
-              })}
-            </div>
-          </div>
-        ) : null}
+                </div>
+              ) : null}
 
-        {/* Actions */}
-        {confirmDeleteForId === d.id ? (
-          <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-[#FCECEC] px-4 py-3">
-            <div className="text-sm text-[#7A1E1E]">
-              Delete this decision? <span className="opacity-80">This can’t be undone.</span>
+              {!filesHasAny && !filesComposerOpen ? <div className="text-sm text-zinc-600">No files yet.</div> : null}
             </div>
-            <div className="flex items-center gap-2">
-              <TextAction subtle onClick={() => setConfirmDeleteForId(null)}>
-                Cancel
+          ) : null}
+
+          {/* ✅ Review (restored: preset dropdown + custom date) */}
+          {showReviewSection ? (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-sm font-semibold text-zinc-900">Review</div>
+                {reviewOpen ? (
+                  <TextAction subtle onClick={() => setReviewOpenByDecisionId((p) => ({ ...p, [d.id]: false }))} title="Close review editor">
+                    Close
+                  </TextAction>
+                ) : null}
+              </div>
+
+              {/* If not actively editing, show a simple line */}
+              {!reviewOpen ? (
+                <div className="text-sm text-zinc-700">{d.review_at ? softWhen(d.review_at) : "No review date."}</div>
+              ) : (
+                <div className="flex flex-wrap items-center gap-2">
+                  <select
+                    className="h-9 rounded-full border border-zinc-200 bg-white px-3 text-sm text-zinc-700"
+                    value={preset}
+                    onChange={(e) => {
+                      const next = e.target.value as ReviewPreset;
+                      setReviewPresetByDecisionId((p) => ({ ...p, [d.id]: next }));
+
+                      if (next === "custom") {
+                        // keep current custom date visible
+                        const fallback = d.review_at ? new Date(safeMs(d.review_at) ?? Date.now()).toISOString().slice(0, 10) : "";
+                        setReviewCustomDateByDecisionId((p) => ({ ...p, [d.id]: p[d.id] ?? fallback }));
+                        return;
+                      }
+
+                      const iso = reviewIsoFromPreset(next);
+                      void setReviewAt(d, iso);
+
+                      // keep UI state consistent
+                      if (next === "none") setReviewCustomDateByDecisionId((p) => ({ ...p, [d.id]: "" }));
+                    }}
+                    title="Choose a review time"
+                  >
+                    <option value="none">No review date</option>
+                    <option value="tomorrow">Tomorrow</option>
+                    <option value="nextWeek">Next week</option>
+                    <option value="twoWeeks">2 weeks</option>
+                    <option value="oneMonth">1 month</option>
+                    <option value="threeMonths">3 months</option>
+                    <option value="sixMonths">6 months</option>
+                    <option value="oneYear">1 year</option>
+                    <option value="custom">Custom…</option>
+                  </select>
+
+                  {preset === "custom" ? (
+                    <>
+                      <input
+                        type="date"
+                        className="h-9 rounded-full border border-zinc-200 bg-white px-3 text-sm text-zinc-700"
+                        value={customDateStr}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setReviewCustomDateByDecisionId((p) => ({ ...p, [d.id]: v }));
+                          const iso = isoFromDateInput(v);
+                          void setReviewAt(d, iso);
+                        }}
+                        title="Pick a date"
+                      />
+                      {d.review_at ? (
+                        <TextAction
+                          subtle
+                          onClick={() => {
+                            setReviewPresetByDecisionId((p) => ({ ...p, [d.id]: "none" }));
+                            setReviewCustomDateByDecisionId((p) => ({ ...p, [d.id]: "" }));
+                            void setReviewAt(d, null);
+                          }}
+                          title="Clear review date"
+                        >
+                          Clear
+                        </TextAction>
+                      ) : null}
+                    </>
+                  ) : null}
+                </div>
+              )}
+            </div>
+          ) : null}
+
+          {/* Actions */}
+          {confirmDeleteForId === d.id ? (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-[#FCECEC] px-4 py-3">
+              <div className="text-sm text-[#7A1E1E]">
+                Delete this decision? <span className="opacity-80">This can’t be undone.</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <TextAction subtle onClick={() => setConfirmDeleteForId(null)}>
+                  Cancel
+                </TextAction>
+                <button
+                  type="button"
+                  onClick={() => void performDelete(d)}
+                  className="inline-flex select-none items-center justify-center rounded-full bg-[#C94A4A] px-4 py-2 text-sm text-white transition hover:bg-[#b94141]"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center gap-3 pt-1">
+              <TextAction onClick={() => void closeDecision(d)} title="Move to Closed">
+                Move to Closed
               </TextAction>
-              <button
-                type="button"
-                onClick={() => void performDelete(d)}
-                className="inline-flex select-none items-center justify-center rounded-full bg-[#C94A4A] px-4 py-2 text-sm text-white transition hover:bg-[#b94141]"
-              >
+              <TextAction danger onClick={() => setConfirmDeleteForId(d.id)} title="Delete decision">
                 Delete
-              </button>
+              </TextAction>
             </div>
-          </div>
-        ) : (
-          <div className="mt-5 flex flex-wrap items-center gap-3 pt-1">
-            <TextAction onClick={() => void closeDecision(d)} title="Move to Closed">
-              Move to Closed
-            </TextAction>
-            <TextAction danger onClick={() => setConfirmDeleteForId(d.id)} title="Delete decision">
-              Delete
-            </TextAction>
-          </div>
-        )}
+          )}
+        </div>
       </div>
     );
   };
