@@ -602,10 +602,12 @@ export default function GoalsPage() {
     return (
       <Page title="Goals" subtitle={subtitle}>
         <div className="mx-auto w-full max-w-[900px]">
-          <Card className="border-zinc-200 bg-white">
-            <CardContent>
-              <div className="flex items-center gap-2">
-                <Chip>Loading…</Chip>
+          <Card className="border-zinc-200 bg-white shadow-none">
+            <CardContent className="p-0">
+              <div className="px-6 py-5">
+                <div className="flex items-center gap-2">
+                  <Chip>Loading…</Chip>
+                </div>
               </div>
             </CardContent>
           </Card>
@@ -618,9 +620,11 @@ export default function GoalsPage() {
     return (
       <Page title="Goals" subtitle={subtitle}>
         <div className="mx-auto w-full max-w-[900px]">
-          <Card className="border-zinc-200 bg-white">
-            <CardContent>
-              <div className="text-[15px] leading-relaxed text-zinc-800">Sign in to use Goals.</div>
+          <Card className="border-zinc-200 bg-white shadow-none">
+            <CardContent className="p-0">
+              <div className="px-6 py-5">
+                <div className="text-[15px] leading-relaxed text-zinc-800">Sign in to use Goals.</div>
+              </div>
             </CardContent>
           </Card>
         </div>
@@ -658,14 +662,17 @@ export default function GoalsPage() {
         type="button"
         onClick={() => setSelectedGoalId(g.id)}
         className={[
-          "w-full rounded-2xl border px-3 py-3 text-left transition",
-          isSelected ? "border-zinc-300 bg-zinc-50" : "border-zinc-200 bg-white hover:bg-zinc-50",
+          "w-full rounded-2xl border px-4 py-3 text-left transition",
+          "shadow-none",
+          isSelected ? "border-zinc-300 bg-white" : "border-zinc-200 bg-white hover:border-zinc-300",
         ].join(" ")}
       >
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              <div className="truncate text-[15px] font-semibold text-zinc-900">{String(g.title ?? "Goal").trim() || "Goal"}</div>
+              <div className="truncate text-[15px] font-semibold text-zinc-900">
+                {String(g.title ?? "Goal").trim() || "Goal"}
+              </div>
               {g.is_primary ? <Chip className="text-xs border-zinc-200 bg-white text-zinc-700">Primary</Chip> : null}
               {pill}
             </div>
@@ -678,7 +685,6 @@ export default function GoalsPage() {
               ) : (
                 <>{moneyFromCents(cur, g.currency)} saved</>
               )}
-
               {g.deadline_at ? <span> • target by {fmtDateShort(g.deadline_at)}</span> : null}
             </div>
           </div>
@@ -723,7 +729,7 @@ export default function GoalsPage() {
             Money
           </Chip>
 
-          <Button onClick={beginCreate} disabled={creating || !!editingId}>
+          <Button onClick={beginCreate} disabled={creating || !!editingId} className="rounded-2xl">
             New goal
           </Button>
         </div>
@@ -731,164 +737,171 @@ export default function GoalsPage() {
     >
       <div className="mx-auto w-full max-w-[900px] space-y-4">
         {/* Focus spotlight */}
-        <Card className="border-zinc-200 bg-white">
-          <CardContent>
-            <SectionHeader
-              title="Focus"
-              right={
-                <div className="flex items-center gap-2">
-                  {loadingGoals ? <Chip>Updating…</Chip> : <Chip>{sortedGoals.length} goals</Chip>}
-                </div>
-              }
-            />
+        <Card className="border-zinc-200 bg-white shadow-none">
+          <CardContent className="p-0">
+            <div className="px-6 py-5">
+              <SectionHeader
+                title="Focus"
+                right={
+                  <div className="flex items-center gap-2">
+                    {loadingGoals ? <Chip>Updating…</Chip> : <Chip>{sortedGoals.length} goals</Chip>}
+                  </div>
+                }
+              />
 
-            <div className="mt-3">
-              {primaryGoal && normalizeStatus(primaryGoal.status) === "active" ? (
-                <div className="rounded-2xl border border-zinc-200 bg-white p-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="text-[15px] font-semibold text-zinc-900 truncate">
-                        {String(primaryGoal.title ?? "Goal").trim() || "Goal"}
-                      </div>
-
-                      <div className="mt-1 text-xs text-zinc-600">
-                        {toInt(primaryGoal.target_cents) ? (
-                          <>
-                            {moneyFromCents(toInt(primaryGoal.current_cents) ?? 0, primaryGoal.currency)} /{" "}
-                            {moneyFromCents(toInt(primaryGoal.target_cents) ?? 0, primaryGoal.currency)}
-                          </>
-                        ) : (
-                          <>{moneyFromCents(toInt(primaryGoal.current_cents) ?? 0, primaryGoal.currency)} saved</>
-                        )}
-                        {primaryGoal.deadline_at ? <span> • target by {fmtDateShort(primaryGoal.deadline_at)}</span> : null}
-                      </div>
-
-                      {toInt(primaryGoal.target_cents) ? (
-                        <div className="mt-3 h-2 w-full rounded-full bg-zinc-100">
-                          <div
-                            className="h-2 rounded-full bg-zinc-300"
-                            style={{
-                              width: `${clamp(
-                                percent(toInt(primaryGoal.current_cents) ?? 0, toInt(primaryGoal.target_cents) ?? 0),
-                                0,
-                                100
-                              )}%`,
-                            }}
-                          />
+              <div className="mt-3">
+                {primaryGoal && normalizeStatus(primaryGoal.status) === "active" ? (
+                  <div className="rounded-2xl border border-zinc-200 bg-white p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-[15px] font-semibold text-zinc-900 truncate">
+                          {String(primaryGoal.title ?? "Goal").trim() || "Goal"}
                         </div>
+
+                        <div className="mt-1 text-xs text-zinc-600">
+                          {toInt(primaryGoal.target_cents) ? (
+                            <>
+                              {moneyFromCents(toInt(primaryGoal.current_cents) ?? 0, primaryGoal.currency)} /{" "}
+                              {moneyFromCents(toInt(primaryGoal.target_cents) ?? 0, primaryGoal.currency)}
+                            </>
+                          ) : (
+                            <>{moneyFromCents(toInt(primaryGoal.current_cents) ?? 0, primaryGoal.currency)} saved</>
+                          )}
+                          {primaryGoal.deadline_at ? <span> • target by {fmtDateShort(primaryGoal.deadline_at)}</span> : null}
+                        </div>
+
+                        {toInt(primaryGoal.target_cents) ? (
+                          <div className="mt-3 h-2 w-full rounded-full bg-zinc-100">
+                            <div
+                              className="h-2 rounded-full bg-zinc-300"
+                              style={{
+                                width: `${clamp(
+                                  percent(toInt(primaryGoal.current_cents) ?? 0, toInt(primaryGoal.target_cents) ?? 0),
+                                  0,
+                                  100
+                                )}%`,
+                              }}
+                            />
+                          </div>
+                        ) : null}
+                      </div>
+
+                      <div className="shrink-0 flex items-center gap-2">
+                        <Chip onClick={() => setSelectedGoalId(primaryGoal.id)} className="text-xs" title="Open details">
+                          Open
+                        </Chip>
+                        <Chip onClick={() => beginEdit(primaryGoal)} className="text-xs" title="Edit">
+                          Edit
+                        </Chip>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-2xl border border-zinc-200 bg-white p-4">
+                    <div className="text-[15px] leading-relaxed text-zinc-800">This is a calm anchor — not a dashboard.</div>
+                    <div className="mt-2 text-xs text-zinc-600">
+                      You can run multiple goals at once. If you enable “Primary”, Keystone can keep one goal in focus.
+                    </div>
+
+                    <div className="mt-3 flex items-center gap-2 flex-wrap">
+                      <Chip className="text-xs border-zinc-200 bg-white text-zinc-700">Multiple at once</Chip>
+                      {!goalsSupportPrimary ? (
+                        <Chip
+                          className="text-xs border-zinc-200 bg-white text-zinc-700"
+                          title="Run the optional migration to add is_primary"
+                        >
+                          Primary not enabled
+                        </Chip>
                       ) : null}
                     </div>
-
-                    <div className="shrink-0 flex items-center gap-2">
-                      <Chip onClick={() => setSelectedGoalId(primaryGoal.id)} className="text-xs" title="Open details">
-                        Open
-                      </Chip>
-                      <Chip onClick={() => beginEdit(primaryGoal)} className="text-xs" title="Edit">
-                        Edit
-                      </Chip>
-                    </div>
                   </div>
-                </div>
-              ) : (
-                <div className="rounded-2xl border border-zinc-200 bg-white p-4">
-                  <div className="text-[15px] leading-relaxed text-zinc-800">
-                    This is a calm anchor — not a dashboard.
-                  </div>
-                  <div className="mt-2 text-xs text-zinc-600">
-                    You can run multiple goals at once. If you enable “Primary”, Keystone can keep one goal in focus.
-                  </div>
-
-                  <div className="mt-3 flex items-center gap-2 flex-wrap">
-                    <Chip className="text-xs border-zinc-200 bg-white text-zinc-700">Multiple at once</Chip>
-                    {!goalsSupportPrimary ? (
-                      <Chip className="text-xs border-zinc-200 bg-white text-zinc-700" title="Run the optional migration to add is_primary">
-                        Primary not enabled
-                      </Chip>
-                    ) : null}
-                  </div>
-                </div>
-              )}
+                )}
+              </div>
             </div>
           </CardContent>
         </Card>
 
         {/* Create / Edit */}
         {(creating || editingId) && (
-          <Card className="border-zinc-200 bg-white">
-            <CardContent>
-              <SectionHeader title={editingId ? "Edit goal" : "New goal"} />
+          <Card className="border-zinc-200 bg-white shadow-none">
+            <CardContent className="p-0">
+              <div className="px-6 py-5">
+                <SectionHeader title={editingId ? "Edit goal" : "New goal"} />
 
-              <div className="mt-3 grid gap-3 md:grid-cols-12">
-                <div className="md:col-span-6">
-                  <div className="text-xs text-zinc-600 mb-1">Name</div>
-                  <input
-                    className="w-full rounded-xl border border-zinc-200 px-3 py-2 bg-white"
-                    value={title}
-                    onChange={(e) => setTitle(e.target.value)}
-                    placeholder="e.g. $100k buffer"
-                  />
+                <div className="mt-3 grid gap-3 md:grid-cols-12">
+                  <div className="md:col-span-6">
+                    <div className="text-xs text-zinc-600 mb-1">Name</div>
+                    <input
+                      className="w-full rounded-2xl border border-zinc-200 px-4 py-2 bg-white outline-none focus:ring-2 focus:ring-zinc-200"
+                      value={title}
+                      onChange={(e) => setTitle(e.target.value)}
+                      placeholder="e.g. $100k buffer"
+                    />
+                  </div>
+
+                  <div className="md:col-span-2">
+                    <div className="text-xs text-zinc-600 mb-1">Currency</div>
+                    <input
+                      className="w-full rounded-2xl border border-zinc-200 px-4 py-2 bg-white outline-none focus:ring-2 focus:ring-zinc-200"
+                      value={currency}
+                      onChange={(e) => setCurrency(e.target.value.toUpperCase())}
+                      placeholder="AUD"
+                    />
+                  </div>
+
+                  <div className="md:col-span-2">
+                    <div className="text-xs text-zinc-600 mb-1">Target</div>
+                    <input
+                      className="w-full rounded-2xl border border-zinc-200 px-4 py-2 bg-white outline-none focus:ring-2 focus:ring-zinc-200"
+                      value={target}
+                      onChange={(e) => setTarget(e.target.value)}
+                      placeholder="100000"
+                    />
+                  </div>
+
+                  <div className="md:col-span-2">
+                    <div className="text-xs text-zinc-600 mb-1">Already saved</div>
+                    <input
+                      className="w-full rounded-2xl border border-zinc-200 px-4 py-2 bg-white outline-none focus:ring-2 focus:ring-zinc-200"
+                      value={current}
+                      onChange={(e) => setCurrent(e.target.value)}
+                      placeholder="0"
+                    />
+                  </div>
+
+                  <div className="md:col-span-4">
+                    <div className="text-xs text-zinc-600 mb-1">Target date (optional)</div>
+                    <input
+                      type="date"
+                      className="w-full rounded-2xl border border-zinc-200 px-4 py-2 bg-white outline-none focus:ring-2 focus:ring-zinc-200"
+                      value={deadlineAt}
+                      onChange={(e) => setDeadlineAt(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="md:col-span-8">
+                    <div className="text-xs text-zinc-600 mb-1">Notes (optional)</div>
+                    <input
+                      className="w-full rounded-2xl border border-zinc-200 px-4 py-2 bg-white outline-none focus:ring-2 focus:ring-zinc-200"
+                      value={notes}
+                      onChange={(e) => setNotes(e.target.value)}
+                      placeholder="What does this protect or unlock?"
+                    />
+                  </div>
                 </div>
 
-                <div className="md:col-span-2">
-                  <div className="text-xs text-zinc-600 mb-1">Currency</div>
-                  <input
-                    className="w-full rounded-xl border border-zinc-200 px-3 py-2 bg-white"
-                    value={currency}
-                    onChange={(e) => setCurrency(e.target.value.toUpperCase())}
-                    placeholder="AUD"
-                  />
-                </div>
+                <div className="mt-4 flex items-center justify-between gap-2 flex-wrap">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <Button onClick={() => void upsertGoal()} className="rounded-2xl">
+                      {editingId ? "Save changes" : "Create goal"}
+                    </Button>
+                    <Button variant="secondary" onClick={resetForm} className="rounded-2xl">
+                      Cancel
+                    </Button>
+                  </div>
 
-                <div className="md:col-span-2">
-                  <div className="text-xs text-zinc-600 mb-1">Target</div>
-                  <input
-                    className="w-full rounded-xl border border-zinc-200 px-3 py-2 bg-white"
-                    value={target}
-                    onChange={(e) => setTarget(e.target.value)}
-                    placeholder="100000"
-                  />
+                  <div className="text-xs text-zinc-500">Start simple. You can refine later without losing the point.</div>
                 </div>
-
-                <div className="md:col-span-2">
-                  <div className="text-xs text-zinc-600 mb-1">Already saved</div>
-                  <input
-                    className="w-full rounded-xl border border-zinc-200 px-3 py-2 bg-white"
-                    value={current}
-                    onChange={(e) => setCurrent(e.target.value)}
-                    placeholder="0"
-                  />
-                </div>
-
-                <div className="md:col-span-4">
-                  <div className="text-xs text-zinc-600 mb-1">Target date (optional)</div>
-                  <input
-                    type="date"
-                    className="w-full rounded-xl border border-zinc-200 px-3 py-2 bg-white"
-                    value={deadlineAt}
-                    onChange={(e) => setDeadlineAt(e.target.value)}
-                  />
-                </div>
-
-                <div className="md:col-span-8">
-                  <div className="text-xs text-zinc-600 mb-1">Notes (optional)</div>
-                  <input
-                    className="w-full rounded-xl border border-zinc-200 px-3 py-2 bg-white"
-                    value={notes}
-                    onChange={(e) => setNotes(e.target.value)}
-                    placeholder="What does this protect or unlock?"
-                  />
-                </div>
-              </div>
-
-              <div className="mt-4 flex items-center justify-between gap-2 flex-wrap">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <Button onClick={() => void upsertGoal()}>{editingId ? "Save changes" : "Create goal"}</Button>
-                  <Button variant="secondary" onClick={resetForm}>
-                    Cancel
-                  </Button>
-                </div>
-
-                <div className="text-xs text-zinc-500">Start simple. You can refine later without losing the point.</div>
               </div>
             </CardContent>
           </Card>
@@ -898,66 +911,70 @@ export default function GoalsPage() {
         <div className="grid gap-4 md:grid-cols-12">
           {/* Goals list */}
           <div className="md:col-span-5">
-            <Card className="border-zinc-200 bg-white">
-              <CardContent>
-                <SectionHeader
-                  title="Your goals"
-                  right={
-                    <div className="flex items-center gap-2">
-                      {loadingGoals ? <Chip>Updating…</Chip> : null}
-                      <Chip className="text-xs">Multiple at once</Chip>
-                    </div>
-                  }
-                />
-
-                <div className="mt-3 space-y-3">
-                  {sortedGoals.length === 0 ? (
-                    <div className="rounded-2xl border border-zinc-200 bg-white p-4">
-                      <div className="text-[15px] leading-relaxed text-zinc-800">No goals yet.</div>
-                      <div className="mt-2 text-xs text-zinc-600">A goal is just a promise you can keep seeing.</div>
-                      <div className="mt-3">
-                        <Button onClick={beginCreate}>Create your first goal</Button>
+            <Card className="border-zinc-200 bg-white shadow-none">
+              <CardContent className="p-0">
+                <div className="px-6 py-5">
+                  <SectionHeader
+                    title="Your goals"
+                    right={
+                      <div className="flex items-center gap-2">
+                        {loadingGoals ? <Chip>Updating…</Chip> : null}
+                        <Chip className="text-xs">Multiple at once</Chip>
                       </div>
-                    </div>
-                  ) : (
-                    <>
-                      {activeGoals.length > 0 ? (
-                        <div className="space-y-2">
-                          <div className="text-xs font-semibold text-zinc-900">Active</div>
-                          {activeGoals.map((g) => (
-                            <GoalRow key={g.id} g={g} />
-                          ))}
-                        </div>
-                      ) : null}
+                    }
+                  />
 
-                      {pausedGoals.length > 0 ? (
-                        <div className="space-y-2 pt-1">
-                          <div className="text-xs font-semibold text-zinc-900">Paused</div>
-                          {pausedGoals.map((g) => (
-                            <GoalRow key={g.id} g={g} />
-                          ))}
+                  <div className="mt-3 space-y-3">
+                    {sortedGoals.length === 0 ? (
+                      <div className="rounded-2xl border border-zinc-200 bg-white p-4">
+                        <div className="text-[15px] leading-relaxed text-zinc-800">No goals yet.</div>
+                        <div className="mt-2 text-xs text-zinc-600">A goal is just a promise you can keep seeing.</div>
+                        <div className="mt-3">
+                          <Button onClick={beginCreate} className="rounded-2xl">
+                            Create your first goal
+                          </Button>
                         </div>
-                      ) : null}
+                      </div>
+                    ) : (
+                      <>
+                        {activeGoals.length > 0 ? (
+                          <div className="space-y-2">
+                            <div className="text-xs font-semibold text-zinc-900">Active</div>
+                            {activeGoals.map((g) => (
+                              <GoalRow key={g.id} g={g} />
+                            ))}
+                          </div>
+                        ) : null}
 
-                      {doneGoals.length > 0 ? (
-                        <div className="space-y-2 pt-1">
-                          <div className="text-xs font-semibold text-zinc-900">Done</div>
-                          {doneGoals.map((g) => (
-                            <GoalRow key={g.id} g={g} />
-                          ))}
-                        </div>
-                      ) : null}
+                        {pausedGoals.length > 0 ? (
+                          <div className="space-y-2 pt-1">
+                            <div className="text-xs font-semibold text-zinc-900">Paused</div>
+                            {pausedGoals.map((g) => (
+                              <GoalRow key={g.id} g={g} />
+                            ))}
+                          </div>
+                        ) : null}
 
-                      {archivedGoals.length > 0 ? (
-                        <div className="space-y-2 pt-1">
-                          <div className="text-xs font-semibold text-zinc-900">Archived</div>
-                          {archivedGoals.map((g) => (
-                            <GoalRow key={g.id} g={g} />
-                          ))}
-                        </div>
-                      ) : null}
-                    </>
-                  )}
+                        {doneGoals.length > 0 ? (
+                          <div className="space-y-2 pt-1">
+                            <div className="text-xs font-semibold text-zinc-900">Done</div>
+                            {doneGoals.map((g) => (
+                              <GoalRow key={g.id} g={g} />
+                            ))}
+                          </div>
+                        ) : null}
+
+                        {archivedGoals.length > 0 ? (
+                          <div className="space-y-2 pt-1">
+                            <div className="text-xs font-semibold text-zinc-900">Archived</div>
+                            {archivedGoals.map((g) => (
+                              <GoalRow key={g.id} g={g} />
+                            ))}
+                          </div>
+                        ) : null}
+                      </>
+                    )}
+                  </div>
                 </div>
               </CardContent>
             </Card>
@@ -965,267 +982,254 @@ export default function GoalsPage() {
 
           {/* Selected goal detail */}
           <div className="md:col-span-7">
-            <Card className="border-zinc-200 bg-white">
-              <CardContent>
-                <SectionHeader
-                  title="Details"
-                  right={selectedGoal ? <Chip className="text-xs">{statusPill(selectedStatus)}</Chip> : <Chip className="text-xs">Select one</Chip>}
-                />
+            <Card className="border-zinc-200 bg-white shadow-none">
+              <CardContent className="p-0">
+                <div className="px-6 py-5">
+                  <SectionHeader
+                    title="Details"
+                    right={
+                      selectedGoal ? (
+                        <Chip className="text-xs">{statusPill(selectedStatus)}</Chip>
+                      ) : (
+                        <Chip className="text-xs">Select one</Chip>
+                      )
+                    }
+                  />
 
-                {!selectedGoal ? (
-                  <div className="mt-3 rounded-2xl border border-zinc-200 bg-white p-4">
-                    <div className="text-[15px] leading-relaxed text-zinc-800">Choose a goal on the left.</div>
-                    <div className="mt-2 text-xs text-zinc-600">This is designed to feel like a calm anchor.</div>
-                  </div>
-                ) : (
-                  <div className="mt-3 space-y-4">
-                    {/* Summary card */}
-                    <div className="rounded-2xl border border-zinc-200 bg-white p-4">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="text-[16px] font-semibold text-zinc-900 truncate">
-                            {String(selectedGoal.title ?? "Goal").trim() || "Goal"}
-                          </div>
-
-                          <div className="mt-1 text-xs text-zinc-600">
-                            {selectedStatus}
-                            {selectedGoal.deadline_at ? <span> • target by {fmtDateShort(selectedGoal.deadline_at)}</span> : null}
-                            {selectedIsPrimary ? <span> • primary</span> : null}
-                          </div>
-
-                          <div className="mt-3 grid gap-2">
-                            <div className="flex items-center justify-between gap-2">
-                              <div className="text-xs text-zinc-600">Saved so far</div>
-                              <div className="text-xs font-semibold text-zinc-900">{selectedComputed?.curStr}</div>
+                  {!selectedGoal ? (
+                    <div className="mt-3 rounded-2xl border border-zinc-200 bg-white p-4">
+                      <div className="text-[15px] leading-relaxed text-zinc-800">Choose a goal on the left.</div>
+                      <div className="mt-2 text-xs text-zinc-600">This is designed to feel like a calm anchor.</div>
+                    </div>
+                  ) : (
+                    <div className="mt-3 space-y-4">
+                      {/* Summary card */}
+                      <div className="rounded-2xl border border-zinc-200 bg-white p-4">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="text-[16px] font-semibold text-zinc-900 truncate">
+                              {String(selectedGoal.title ?? "Goal").trim() || "Goal"}
                             </div>
 
-                            <div className="flex items-center justify-between gap-2">
-                              <div className="text-xs text-zinc-600">Target</div>
-                              <div className="text-xs font-semibold text-zinc-900">{selectedComputed?.tgtStr}</div>
+                            <div className="mt-1 text-xs text-zinc-600">
+                              {selectedStatus}
+                              {selectedGoal.deadline_at ? <span> • target by {fmtDateShort(selectedGoal.deadline_at)}</span> : null}
+                              {selectedIsPrimary ? <span> • primary</span> : null}
                             </div>
 
-                            {selectedComputed?.remaining != null ? (
+                            <div className="mt-3 grid gap-2">
                               <div className="flex items-center justify-between gap-2">
-                                <div className="text-xs text-zinc-600">Remaining</div>
-                                <div className="text-xs font-semibold text-zinc-900">{selectedComputed?.remainingStr}</div>
+                                <div className="text-xs text-zinc-600">Saved so far</div>
+                                <div className="text-xs font-semibold text-zinc-900">{selectedComputed?.curStr}</div>
                               </div>
+
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="text-xs text-zinc-600">Target</div>
+                                <div className="text-xs font-semibold text-zinc-900">{selectedComputed?.tgtStr}</div>
+                              </div>
+
+                              {selectedComputed?.remaining != null ? (
+                                <div className="flex items-center justify-between gap-2">
+                                  <div className="text-xs text-zinc-600">Remaining</div>
+                                  <div className="text-xs font-semibold text-zinc-900">{selectedComputed?.remainingStr}</div>
+                                </div>
+                              ) : null}
+                            </div>
+
+                            {/* Progress bar */}
+                            {selectedComputed && selectedComputed.tgt > 0 ? (
+                              <div className="mt-3">
+                                <div className="flex items-center justify-between text-xs text-zinc-600">
+                                  <span>{selectedComputed.p}%</span>
+                                  <span>{moneyFromCents(selectedComputed.tgt, selectedGoal.currency)}</span>
+                                </div>
+                                <div className="mt-2 h-2 w-full rounded-full bg-zinc-100">
+                                  <div className="h-2 rounded-full bg-zinc-300" style={{ width: `${clamp(selectedComputed.p, 0, 100)}%` }} />
+                                </div>
+                              </div>
+                            ) : null}
+
+                            {selectedGoal.notes ? (
+                              <div className="mt-3 text-[13px] leading-relaxed text-zinc-700 whitespace-pre-wrap">{String(selectedGoal.notes)}</div>
                             ) : null}
                           </div>
 
-                          {/* Progress bar */}
-                          {selectedComputed && selectedComputed.tgt > 0 ? (
-                            <div className="mt-3">
-                              <div className="flex items-center justify-between text-xs text-zinc-600">
-                                <span>{selectedComputed.p}%</span>
-                                <span>{moneyFromCents(selectedComputed.tgt, selectedGoal.currency)}</span>
+                          {/* Top right actions */}
+                          <div className="shrink-0 flex flex-col items-end gap-2">
+                            <div className="flex items-center gap-2">
+                              {canPinSelected ? (
+                                <Chip
+                                  onClick={() => void markPrimary(selectedGoal)}
+                                  className="text-xs"
+                                  title={selectedIsPrimary ? "Primary already" : "Set as primary"}
+                                >
+                                  {selectedIsPrimary ? "Primary" : "Set primary"}
+                                </Chip>
+                              ) : null}
+
+                              {canEditSelected ? (
+                                <Chip onClick={() => beginEdit(selectedGoal)} className="text-xs" title="Edit">
+                                  Edit
+                                </Chip>
+                              ) : null}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Progress update */}
+                      <div className="rounded-2xl border border-zinc-200 bg-white p-4">
+                        <SectionHeader
+                          title="Progress"
+                          right={
+                            canShowDelta ? (
+                              <div className="flex items-center gap-2">
+                                <Chip className="text-xs" title="Use - to subtract">
+                                  + / -
+                                </Chip>
+                                {loadingUpdates ? <Chip className="text-xs">Updating…</Chip> : null}
                               </div>
-                              <div className="mt-2 h-2 w-full rounded-full bg-zinc-100">
-                                <div
-                                  className="h-2 rounded-full bg-zinc-300"
-                                  style={{ width: `${clamp(selectedComputed.p, 0, 100)}%` }}
+                            ) : (
+                              <Chip className="text-xs">Archived</Chip>
+                            )
+                          }
+                        />
+
+                        {canShowDelta ? (
+                          <>
+                            <div className="mt-3 flex flex-wrap items-center gap-2">
+                              <Chip onClick={() => void quickAdd(10)} className="text-xs" title="Add $10">
+                                +$10
+                              </Chip>
+                              <Chip onClick={() => void quickAdd(50)} className="text-xs" title="Add $50">
+                                +$50
+                              </Chip>
+                              <Chip onClick={() => void quickAdd(200)} className="text-xs" title="Add $200">
+                                +$200
+                              </Chip>
+                              <Chip onClick={() => void quickAdd(1000)} className="text-xs" title="Add $1000">
+                                +$1000
+                              </Chip>
+
+                              <div className="w-px h-5 bg-zinc-100 mx-1" />
+
+                              <Chip onClick={() => void quickSubtract(10)} className="text-xs" title="Subtract $10">
+                                -$10
+                              </Chip>
+                              <Chip onClick={() => void quickSubtract(50)} className="text-xs" title="Subtract $50">
+                                -$50
+                              </Chip>
+                            </div>
+
+                            <div className="mt-3 grid gap-3 md:grid-cols-12">
+                              <div className="md:col-span-4">
+                                <div className="text-xs text-zinc-600 mb-1">Amount</div>
+                                <input
+                                  ref={deltaRef}
+                                  className="w-full rounded-2xl border border-zinc-200 px-4 py-2 bg-white outline-none focus:ring-2 focus:ring-zinc-200"
+                                  value={delta}
+                                  onChange={(e) => setDelta(e.target.value)}
+                                  placeholder="e.g. 50 or -20"
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") {
+                                      e.preventDefault();
+                                      void addProgress();
+                                    }
+                                  }}
+                                />
+                              </div>
+
+                              <div className="md:col-span-8">
+                                <div className="text-xs text-zinc-600 mb-1">Note (optional)</div>
+                                <input
+                                  className="w-full rounded-2xl border border-zinc-200 px-4 py-2 bg-white outline-none focus:ring-2 focus:ring-zinc-200"
+                                  value={deltaNote}
+                                  onChange={(e) => setDeltaNote(e.target.value)}
+                                  placeholder="e.g. sold marketplace items"
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") {
+                                      e.preventDefault();
+                                      void addProgress();
+                                    }
+                                  }}
                                 />
                               </div>
                             </div>
-                          ) : null}
 
-                          {selectedGoal.notes ? (
-                            <div className="mt-3 text-[13px] leading-relaxed text-zinc-700 whitespace-pre-wrap">
-                              {String(selectedGoal.notes)}
-                            </div>
-                          ) : null}
-                        </div>
-
-                        {/* Top right actions */}
-                        <div className="shrink-0 flex flex-col items-end gap-2">
-                          <div className="flex items-center gap-2">
-                            {canPinSelected ? (
-                              <Chip
-                                onClick={() => void markPrimary(selectedGoal)}
-                                className="text-xs"
-                                title={selectedIsPrimary ? "Primary already" : "Set as primary"}
-                              >
-                                {selectedIsPrimary ? "Primary" : "Set primary"}
-                              </Chip>
-                            ) : null}
-
-                            {canEditSelected ? (
-                              <Chip onClick={() => beginEdit(selectedGoal)} className="text-xs" title="Edit">
-                                Edit
-                              </Chip>
-                            ) : null}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Progress update */}
-                    <div className="rounded-2xl border border-zinc-200 bg-white p-4">
-                      <SectionHeader
-                        title="Progress"
-                        right={
-                          canShowDelta ? (
-                            <div className="flex items-center gap-2">
-                              <Chip className="text-xs" title="Use - to subtract">
-                                + / -
-                              </Chip>
-                              {loadingUpdates ? <Chip className="text-xs">Updating…</Chip> : null}
-                            </div>
-                          ) : (
-                            <Chip className="text-xs">Archived</Chip>
-                          )
-                        }
-                      />
-
-                      {canShowDelta ? (
-                        <>
-                          <div className="mt-3 flex flex-wrap items-center gap-2">
-                            <Chip onClick={() => void quickAdd(10)} className="text-xs" title="Add $10">
-                              +$10
-                            </Chip>
-                            <Chip onClick={() => void quickAdd(50)} className="text-xs" title="Add $50">
-                              +$50
-                            </Chip>
-                            <Chip onClick={() => void quickAdd(200)} className="text-xs" title="Add $200">
-                              +$200
-                            </Chip>
-                            <Chip onClick={() => void quickAdd(1000)} className="text-xs" title="Add $1000">
-                              +$1000
-                            </Chip>
-
-                            <div className="w-px h-5 bg-zinc-100 mx-1" />
-
-                            <Chip onClick={() => void quickSubtract(10)} className="text-xs" title="Subtract $10">
-                              -$10
-                            </Chip>
-                            <Chip onClick={() => void quickSubtract(50)} className="text-xs" title="Subtract $50">
-                              -$50
-                            </Chip>
-                          </div>
-
-                          <div className="mt-3 grid gap-3 md:grid-cols-12">
-                            <div className="md:col-span-4">
-                              <div className="text-xs text-zinc-600 mb-1">Amount</div>
-                              <input
-                                ref={deltaRef}
-                                className="w-full rounded-xl border border-zinc-200 px-3 py-2 bg-white"
-                                value={delta}
-                                onChange={(e) => setDelta(e.target.value)}
-                                placeholder="e.g. 50 or -20"
-                                onKeyDown={(e) => {
-                                  if (e.key === "Enter") {
-                                    e.preventDefault();
-                                    void addProgress();
-                                  }
-                                }}
-                              />
+                            <div className="mt-3 flex items-center justify-between gap-2 flex-wrap">
+                              <Button onClick={() => void addProgress()} className="rounded-2xl">
+                                Save progress
+                              </Button>
+                              <div className="text-xs text-zinc-500">This updates the goal total. Updates feed is best-effort.</div>
                             </div>
 
-                            <div className="md:col-span-8">
-                              <div className="text-xs text-zinc-600 mb-1">Note (optional)</div>
-                              <input
-                                className="w-full rounded-xl border border-zinc-200 px-3 py-2 bg-white"
-                                value={deltaNote}
-                                onChange={(e) => setDeltaNote(e.target.value)}
-                                placeholder="e.g. sold marketplace items"
-                                onKeyDown={(e) => {
-                                  if (e.key === "Enter") {
-                                    e.preventDefault();
-                                    void addProgress();
-                                  }
-                                }}
-                              />
-                            </div>
-                          </div>
+                            {/* Recent updates */}
+                            <div className="mt-4">
+                              <div className="text-xs font-semibold text-zinc-900 mb-2">Recent</div>
 
-                          <div className="mt-3 flex items-center justify-between gap-2 flex-wrap">
-                            <Button onClick={() => void addProgress()}>Save progress</Button>
-                            <div className="text-xs text-zinc-500">This updates the goal total. Updates feed is best-effort.</div>
-                          </div>
-
-                          {/* Recent updates */}
-                          <div className="mt-4">
-                            <div className="text-xs font-semibold text-zinc-900 mb-2">Recent</div>
-
-                            {updates.length === 0 ? (
-                              <div className="text-xs text-zinc-600">No updates recorded yet.</div>
-                            ) : (
-                              <div className="space-y-2">
-                                {updates.slice(0, 8).map((u) => {
-                                  const when = u.created_at ? relativeDayLabel(u.created_at) : "—";
-                                  const sign = u.delta_cents >= 0 ? "+" : "−";
-                                  const amt = moneyFromCents(Math.abs(u.delta_cents), selectedGoal.currency);
-                                  return (
-                                    <div key={u.id} className="flex items-start justify-between gap-3 rounded-xl border border-zinc-200 bg-white px-3 py-2">
-                                      <div className="min-w-0">
-                                        <div className="text-xs text-zinc-900">
-                                          <span className="font-semibold">{sign + amt}</span>
-                                          {u.note ? <span className="text-zinc-700"> — {u.note}</span> : null}
+                              {updates.length === 0 ? (
+                                <div className="text-xs text-zinc-600">No updates recorded yet.</div>
+                              ) : (
+                                <div className="space-y-2">
+                                  {updates.slice(0, 8).map((u) => {
+                                    const when = u.created_at ? relativeDayLabel(u.created_at) : "—";
+                                    const sign = u.delta_cents >= 0 ? "+" : "−";
+                                    const amt = moneyFromCents(Math.abs(u.delta_cents), selectedGoal.currency);
+                                    return (
+                                      <div key={u.id} className="flex items-start justify-between gap-3 rounded-2xl border border-zinc-200 bg-white px-4 py-3">
+                                        <div className="min-w-0">
+                                          <div className="text-xs text-zinc-900">
+                                            <span className="font-semibold">{sign + amt}</span>
+                                            {u.note ? <span className="text-zinc-700"> — {u.note}</span> : null}
+                                          </div>
+                                          <div className="text-[11px] text-zinc-500 mt-0.5">{when}</div>
                                         </div>
-                                        <div className="text-[11px] text-zinc-500 mt-0.5">{when}</div>
                                       </div>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            )}
-                          </div>
-                        </>
-                      ) : (
-                        <div className="mt-3 text-sm text-zinc-700">This goal is archived. Restore it to update progress.</div>
-                      )}
-                    </div>
-
-                    {/* Status + safety */}
-                    <div className="rounded-2xl border border-zinc-200 bg-white p-4">
-                      <SectionHeader title="State" right={<Chip className="text-xs">Safe changes</Chip>} />
-
-                      <div className="mt-3 flex flex-wrap items-center gap-2">
-                        <Chip
-                          onClick={() => void setGoalStatus(selectedGoal, "active")}
-                          className="text-xs"
-                          title="Mark active"
-                        >
-                          Active
-                        </Chip>
-                        <Chip
-                          onClick={() => void setGoalStatus(selectedGoal, "paused")}
-                          className="text-xs"
-                          title="Pause this goal"
-                        >
-                          Pause
-                        </Chip>
-                        <Chip
-                          onClick={() => void setGoalStatus(selectedGoal, "done")}
-                          className="text-xs"
-                          title="Mark done"
-                        >
-                          Done
-                        </Chip>
-                        <Chip
-                          onClick={() => void setGoalStatus(selectedGoal, "archived")}
-                          className="text-xs"
-                          title="Archive"
-                        >
-                          Archive
-                        </Chip>
-
-                        <div className="w-px h-5 bg-zinc-100 mx-1" />
-
-                        <Chip
-                          onClick={() => void deleteGoal(selectedGoal)}
-                          className="text-xs border-rose-200 bg-rose-50 text-rose-700"
-                          title="Archive (or delete if already archived)"
-                        >
-                          Remove
-                        </Chip>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          </>
+                        ) : (
+                          <div className="mt-3 text-sm text-zinc-700">This goal is archived. Restore it to update progress.</div>
+                        )}
                       </div>
 
-                      <div className="mt-2 text-xs text-zinc-500">
-                        “Remove” will archive first. Only archived goals are deleted.
+                      {/* Status + safety */}
+                      <div className="rounded-2xl border border-zinc-200 bg-white p-4">
+                        <SectionHeader title="State" right={<Chip className="text-xs">Safe changes</Chip>} />
+
+                        <div className="mt-3 flex flex-wrap items-center gap-2">
+                          <Chip onClick={() => void setGoalStatus(selectedGoal, "active")} className="text-xs" title="Mark active">
+                            Active
+                          </Chip>
+                          <Chip onClick={() => void setGoalStatus(selectedGoal, "paused")} className="text-xs" title="Pause this goal">
+                            Pause
+                          </Chip>
+                          <Chip onClick={() => void setGoalStatus(selectedGoal, "done")} className="text-xs" title="Mark done">
+                            Done
+                          </Chip>
+                          <Chip onClick={() => void setGoalStatus(selectedGoal, "archived")} className="text-xs" title="Archive">
+                            Archive
+                          </Chip>
+
+                          <div className="w-px h-5 bg-zinc-100 mx-1" />
+
+                          <Chip
+                            onClick={() => void deleteGoal(selectedGoal)}
+                            className="text-xs border-rose-200 bg-rose-50 text-rose-700"
+                            title="Archive (or delete if already archived)"
+                          >
+                            Remove
+                          </Chip>
+                        </div>
+
+                        <div className="mt-2 text-xs text-zinc-500">“Remove” will archive first. Only archived goals are deleted.</div>
                       </div>
                     </div>
-                  </div>
-                )}
+                  )}
+                </div>
               </CardContent>
             </Card>
           </div>

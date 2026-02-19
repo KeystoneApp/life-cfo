@@ -1,3 +1,4 @@
+// app/(app)/money/page.tsx
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -159,86 +160,96 @@ export default function MoneyPage() {
     <Page title="Money" subtitle="A clear picture, without the noise.">
       <div className="mx-auto max-w-[760px] space-y-6">
         {/* Snapshot */}
-        <Card className="border-zinc-200 bg-white">
-          <CardContent>
-            {loading ? (
-              <div className="text-sm text-zinc-600">Loading your snapshot…</div>
-            ) : (
-              <div className="space-y-4">
-                <div>
-                  <div className="text-sm font-medium text-zinc-900">Your current position</div>
-                  <div className="text-xs text-zinc-500">{confidenceCopy(snapshot!.confidence)}</div>
-                </div>
+        <Card className="border-zinc-200 bg-white shadow-none">
+          <CardContent className="p-0">
+            <div className="px-6 py-5">
+              {loading ? (
+                <div className="text-sm text-zinc-600">Loading your snapshot…</div>
+              ) : (
+                <div className="space-y-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-semibold text-zinc-900">Your current position</div>
+                      <div className="text-xs text-zinc-500">{confidenceCopy(snapshot!.confidence)}</div>
+                    </div>
 
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <div className="text-xs text-zinc-500">Available cash</div>
-                    <div className="text-lg font-medium text-zinc-900">{fmt(snapshot!.available_cash)}</div>
-                  </div>
-                  <div>
-                    <div className="text-xs text-zinc-500">Upcoming obligations</div>
-                    <div className="text-lg font-medium text-zinc-900">
-                      {fmt(snapshot!.upcoming_obligations)}
+                    <div className="flex flex-wrap gap-2">
+                      <Chip className="text-xs" onClick={() => router.push("/accounts")}>
+                        Accounts
+                      </Chip>
+                      <Chip className="text-xs" onClick={() => router.push("/bills")}>
+                        Bills
+                      </Chip>
+                      <Chip className="text-xs" onClick={() => router.push("/money/goals")}>
+                        Goals
+                      </Chip>
+                      <Chip className="text-xs" onClick={() => router.push("/buffer")}>
+                        Buffer
+                      </Chip>
                     </div>
                   </div>
-                  <div>
-                    <div className="text-xs text-zinc-500">Goals pressure</div>
-                    <div className="text-lg font-medium text-zinc-900">{fmt(snapshot!.goals_pressure)}</div>
-                  </div>
-                  <div>
-                    <div className="text-xs text-zinc-500">Buffer</div>
-                    <div className="text-lg font-medium text-zinc-900">{fmt(snapshot!.buffer)}</div>
-                  </div>
-                </div>
 
-                      <div className="flex flex-wrap gap-2 pt-2">
-                  <Chip className="text-xs" onClick={() => router.push("/accounts")}>
-                    Accounts
-                  </Chip>
-                  <Chip className="text-xs" onClick={() => router.push("/bills")}>
-                    Bills
-                  </Chip>
-                  <Chip className="text-xs" onClick={() => router.push("/money/goals")}>
-                    Goals
-                  </Chip>
-                  <Chip className="text-xs" onClick={() => router.push("/buffer")}>
-                    Buffer
-                  </Chip>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="rounded-2xl border border-zinc-200 bg-white px-4 py-3">
+                      <div className="text-xs text-zinc-500">Available cash</div>
+                      <div className="mt-1 text-lg font-semibold text-zinc-900">{fmt(snapshot!.available_cash)}</div>
+                    </div>
+
+                    <div className="rounded-2xl border border-zinc-200 bg-white px-4 py-3">
+                      <div className="text-xs text-zinc-500">Upcoming obligations</div>
+                      <div className="mt-1 text-lg font-semibold text-zinc-900">{fmt(snapshot!.upcoming_obligations)}</div>
+                    </div>
+
+                    <div className="rounded-2xl border border-zinc-200 bg-white px-4 py-3">
+                      <div className="text-xs text-zinc-500">Goals pressure</div>
+                      <div className="mt-1 text-lg font-semibold text-zinc-900">{fmt(snapshot!.goals_pressure)}</div>
+                    </div>
+
+                    <div className="rounded-2xl border border-zinc-200 bg-white px-4 py-3">
+                      <div className="text-xs text-zinc-500">Buffer</div>
+                      <div className="mt-1 text-lg font-semibold text-zinc-900">{fmt(snapshot!.buffer)}</div>
+                    </div>
+                  </div>
                 </div>
-              </div>
-            )}
+              )}
+            </div>
           </CardContent>
         </Card>
 
         {/* Ask (scoped) */}
-        <Card className="border-zinc-200 bg-white">
-          <CardContent>
-            <textarea
-              ref={inputRef}
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              placeholder="Ask about your money…"
-              className="w-full min-h-[110px] resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[15px] text-zinc-800 placeholder:text-zinc-500 outline-none focus:ring-2 focus:ring-zinc-200"
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  void submitAsk();
-                }
-              }}
-            />
+        <Card className="border-zinc-200 bg-white shadow-none">
+          <CardContent className="p-0">
+            <div className="px-6 py-5">
+              <div className="text-sm font-semibold text-zinc-900">Ask about your money</div>
+              <div className="mt-1 text-xs text-zinc-500">Questions stay scoped to your money.</div>
 
-            <div className="mt-2 flex justify-between text-xs text-zinc-500">
-              <span>Questions stay scoped to your money.</span>
-              {ask.status === "loading" ? <span>Thinking…</span> : null}
-            </div>
+              <textarea
+                ref={inputRef}
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                placeholder="Ask about your money…"
+                className="mt-3 w-full min-h-[120px] resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[15px] leading-relaxed text-zinc-800 placeholder:text-zinc-500 outline-none focus:ring-2 focus:ring-zinc-200"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    void submitAsk();
+                  }
+                }}
+              />
 
-            <div className="mt-3 flex gap-2">
-              <Button onClick={() => void submitAsk()} disabled={!text.trim() || ask.status === "loading"}>
-                Get answer
-              </Button>
-              <Chip className="text-xs" onClick={() => setText("")} disabled={!text.trim()}>
-                Clear
-              </Chip>
+              <div className="mt-2 flex justify-between text-xs text-zinc-500">
+                <span>Answer-first, then you decide what to do.</span>
+                {ask.status === "loading" ? <span>Thinking…</span> : <span className="h-4" aria-hidden="true" />}
+              </div>
+
+              <div className="mt-3 flex gap-2">
+                <Button onClick={() => void submitAsk()} disabled={!text.trim() || ask.status === "loading"} className="rounded-2xl">
+                  Get answer
+                </Button>
+                <Chip className="text-xs" onClick={() => setText("")} disabled={!text.trim() || ask.status === "loading"}>
+                  Clear
+                </Chip>
+              </div>
             </div>
           </CardContent>
         </Card>
@@ -246,31 +257,31 @@ export default function MoneyPage() {
         {/* Answer */}
         {ask.status !== "idle" ? (
           <div ref={answerRef}>
-            <Card className="border-zinc-200 bg-white">
-              <CardContent>
-                {ask.status === "loading" ? (
-                  <div className="text-sm text-zinc-700">Thinking…</div>
-                ) : ask.status === "error" ? (
-                  <div className="text-sm text-zinc-700">{ask.message}</div>
-                ) : (
-                  <div className="space-y-2">
-                    <div className="text-xs text-zinc-500">Question</div>
-                    <div className="text-sm text-zinc-900">{ask.question}</div>
+            <Card className="border-zinc-200 bg-white shadow-none">
+              <CardContent className="p-0">
+                <div className="px-6 py-5">
+                  {ask.status === "loading" ? (
+                    <div className="text-sm text-zinc-700">Thinking…</div>
+                  ) : ask.status === "error" ? (
+                    <div className="text-sm text-zinc-700">{ask.message}</div>
+                  ) : (
+                    <div className="space-y-3">
+                      <div className="text-xs text-zinc-500">Question</div>
+                      <div className="text-sm font-medium text-zinc-900">{ask.question}</div>
 
-                    <div className="pt-2 text-[15px] leading-relaxed text-zinc-800 whitespace-pre-wrap">
-                      {ask.answer}
-                    </div>
+                      <div className="pt-1 text-[15px] leading-relaxed text-zinc-800 whitespace-pre-wrap">{ask.answer}</div>
 
-                    <div className="pt-3 flex flex-wrap gap-2">
-                      <Chip className="text-xs" onClick={() => setAsk({ status: "idle" })}>
-                        Done
-                      </Chip>
-                      <Chip className="text-xs" onClick={() => inputRef.current?.focus()}>
-                        Ask another
-                      </Chip>
+                      <div className="pt-3 flex flex-wrap gap-2">
+                        <Chip className="text-xs" onClick={() => setAsk({ status: "idle" })}>
+                          Done
+                        </Chip>
+                        <Chip className="text-xs" onClick={() => inputRef.current?.focus()}>
+                          Ask another
+                        </Chip>
+                      </div>
                     </div>
-                  </div>
-                )}
+                  )}
+                </div>
               </CardContent>
             </Card>
           </div>

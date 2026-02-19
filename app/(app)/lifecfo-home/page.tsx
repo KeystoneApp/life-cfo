@@ -135,8 +135,8 @@ function extractBullets(text: string): string[] {
 
 function tonePill(tone: MemoTone) {
   if (tone === "attention") return { label: "Needs attention", className: "bg-zinc-900 text-white" };
-  if (tone === "tight") return { label: "A bit tight", className: "bg-zinc-100 text-zinc-800 border border-zinc-200" };
-  return { label: "All clear", className: "bg-zinc-50 text-zinc-700 border border-zinc-200" };
+  if (tone === "tight") return { label: "A bit tight", className: "bg-white text-zinc-800 border border-zinc-200" };
+  return { label: "All clear", className: "bg-white text-zinc-700 border border-zinc-200" };
 }
 
 function calmWhatWouldChange(tone: MemoTone): string[] {
@@ -155,7 +155,6 @@ function calmAssumptions(): string[] {
 
 /* ---------- status presentation (top check-in) ---------- */
 
-type StatusRunStatus = StatusRun["status"]; // (forward reference is fine in TS, but we redefine below after type)
 function statusBorderClass(status: "all_clear" | "tight" | "attention" | "unknown") {
   if (status === "attention") return "border-l-4 border-l-red-300";
   if (status === "tight") return "border-l-4 border-l-amber-300";
@@ -496,137 +495,134 @@ Follow-up question: ${fu}`
     <Page title="Home" subtitle={subtitle}>
       <div className="mx-auto max-w-[760px] space-y-6">
         {/* TOP: Always-on CFO check-in memo */}
-        <Card
-          className={`border-zinc-200 bg-white ${statusMemo.status === "ready" ? statusBorderClass(statusMemo.run.status) : ""}`}
-        >
-          <CardContent>
-            <div className="space-y-3">
-              <div className="flex items-center justify-between gap-3">
-                <div className="text-sm font-semibold text-zinc-900">Life CFO</div>
-                <div className="flex items-center gap-2">
-                  <Chip className="text-xs" title="How it works" onClick={() => router.push("/how-life-cfo-works")}>
-                    How it works
-                  </Chip>
+        <Card className={`border-zinc-200 bg-white shadow-none ${statusMemo.status === "ready" ? statusBorderClass(statusMemo.run.status) : ""}`}>
+          <CardContent className="p-0">
+            <div className="px-6 py-5">
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-sm font-semibold text-zinc-900">Life CFO</div>
+                  <div className="flex items-center gap-2">
+                    <Chip className="text-xs" title="How it works" onClick={() => router.push("/how-life-cfo-works")}>
+                      How it works
+                    </Chip>
+                  </div>
                 </div>
-              </div>
 
-              {authStatus === "signed_out" ? (
-                <div className="text-sm text-zinc-700">Sign in to get a household check-in and ask a question.</div>
-              ) : (
-                <>
-                  {statusMemo.status === "idle" || statusMemo.status === "loading" ? (
-                    <div className="space-y-2">
-                      <div className="text-sm text-zinc-700">Checking in…</div>
-                      <div className="text-xs text-zinc-500">This is a calm status snapshot. Nothing saves unless you choose.</div>
-                    </div>
-                  ) : statusMemo.status === "error" ? (
-                    <div className="space-y-2">
-                      <div className="text-sm text-zinc-700">{statusMemo.message}</div>
-                      <div className="flex flex-wrap gap-2">
-                        <Chip className="text-xs" title="Run check now" onClick={() => void runStatusCheck({ force: true })}>
-                          Run check now
-                        </Chip>
+                {authStatus === "signed_out" ? (
+                  <div className="text-sm text-zinc-700">Sign in to get a household check-in and ask a question.</div>
+                ) : (
+                  <>
+                    {statusMemo.status === "idle" || statusMemo.status === "loading" ? (
+                      <div className="space-y-2">
+                        <div className="text-sm text-zinc-700">Checking in…</div>
+                        <div className="text-xs text-zinc-500">This is a calm status snapshot. Nothing saves unless you choose.</div>
                       </div>
-                    </div>
-                  ) : (
-                    <div className="space-y-3">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="space-y-1">
-                          <div className="text-xs text-zinc-500">
-                            <span className="font-medium text-zinc-600">Check-in</span>{" "}
-                            <span className="text-zinc-400">•</span>{" "}
-                            <span>Last checked: {formatCheckedAt(statusMemo.run.checked_at)}</span>
+                    ) : statusMemo.status === "error" ? (
+                      <div className="space-y-2">
+                        <div className="text-sm text-zinc-700">{statusMemo.message}</div>
+                        <div className="flex flex-wrap gap-2">
+                          <Chip className="text-xs" title="Run check now" onClick={() => void runStatusCheck({ force: true })}>
+                            Run check now
+                          </Chip>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="space-y-1">
+                            <div className="text-xs text-zinc-500">
+                              <span className="font-medium text-zinc-600">Check-in</span> <span className="text-zinc-400">•</span>{" "}
+                              <span>Last checked: {formatCheckedAt(statusMemo.run.checked_at)}</span>
+                            </div>
                           </div>
                         </div>
-                      </div>
 
-                      <div className="space-y-2">
-                        <div className="text-[15px] font-medium leading-relaxed text-zinc-900">
-                          {statusOpeningLine(statusMemo.run.status)}
+                        <div className="space-y-2">
+                          <div className="text-[15px] font-medium leading-relaxed text-zinc-900">{statusOpeningLine(statusMemo.run.status)}</div>
+
+                          <div className="whitespace-pre-wrap text-[15px] leading-relaxed text-zinc-800">
+                            {cleanAnswer(statusMemo.run.memo_text || "") || ""}
+                          </div>
                         </div>
 
-                        <div className="whitespace-pre-wrap text-[15px] leading-relaxed text-zinc-800">
-                          {cleanAnswer(statusMemo.run.memo_text || "") || ""}
+                        <div className="flex flex-wrap gap-2">
+                          <Chip className="text-xs" title="Check now" onClick={() => void runStatusCheck({ force: true })}>
+                            Check now
+                          </Chip>
+
+                          <Chip className="text-xs" title="Open Money" onClick={() => router.push("/money")}>
+                            Open Money
+                          </Chip>
+                          <Chip className="text-xs" title="Open Bills" onClick={() => router.push("/bills")}>
+                            Open Bills
+                          </Chip>
+
+                          {buildStamp ? <span className="ml-auto text-[11px] text-zinc-400">Build {buildStamp}</span> : null}
+                        </div>
+
+                        <div className="text-xs text-zinc-500">
+                          One place. One question. One answer. <span className="text-zinc-400">Save only if you choose.</span>
                         </div>
                       </div>
+                    )}
+                  </>
+                )}
 
-                      <div className="flex flex-wrap gap-2">
-                        <Chip className="text-xs" title="Check now" onClick={() => void runStatusCheck({ force: true })}>
-                          Check now
-                        </Chip>
-
-                        <Chip className="text-xs" title="Open Money" onClick={() => router.push("/money")}>
-                          Open Money
-                        </Chip>
-                        <Chip className="text-xs" title="Open Bills" onClick={() => router.push("/bills")}>
-                          Open Bills
-                        </Chip>
-
-                        {buildStamp ? <span className="ml-auto text-[11px] text-zinc-400">Build {buildStamp}</span> : null}
-                      </div>
-
-                      <div className="text-xs text-zinc-500">
-                        One place. One question. One answer. <span className="text-zinc-400">Save only if you choose.</span>
-                      </div>
-                    </div>
-                  )}
-                </>
-              )}
-
-              {authStatus !== "signed_out" && buildStamp && statusMemo.status !== "ready" ? (
-                <div className="text-[11px] text-zinc-400">Build {buildStamp}</div>
-              ) : null}
+                {authStatus !== "signed_out" && buildStamp && statusMemo.status !== "ready" ? <div className="text-[11px] text-zinc-400">Build {buildStamp}</div> : null}
+              </div>
             </div>
           </CardContent>
         </Card>
 
         {/* Input card */}
-        <Card className="border-zinc-200 bg-white">
-          <CardContent>
-            <textarea
-              ref={inputRef}
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              placeholder="Ask Life CFO… (or just unload what’s in your head)"
-              className="w-full min-h-[140px] resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[15px] leading-relaxed text-zinc-800 placeholder:text-zinc-500 outline-none focus:ring-2 focus:ring-zinc-200"
-              disabled={!canType}
-              onKeyDown={(e) => {
-                const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
-                const cmdOrCtrl = isMac ? e.metaKey : e.ctrlKey;
+        <Card className="border-zinc-200 bg-white shadow-none">
+          <CardContent className="p-0">
+            <div className="px-6 py-5">
+              <textarea
+                ref={inputRef}
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                placeholder="Ask Life CFO… (or just unload what’s in your head)"
+                className="w-full min-h-[140px] resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[15px] leading-relaxed text-zinc-800 placeholder:text-zinc-500 outline-none focus:ring-2 focus:ring-zinc-200"
+                disabled={!canType}
+                onKeyDown={(e) => {
+                  const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+                  const cmdOrCtrl = isMac ? e.metaKey : e.ctrlKey;
 
-                if (cmdOrCtrl && e.key === "Enter") {
-                  e.preventDefault();
-                  void submit();
-                  return;
-                }
+                  if (cmdOrCtrl && e.key === "Enter") {
+                    e.preventDefault();
+                    void submit();
+                    return;
+                  }
 
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  void submit();
-                }
-              }}
-            />
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    void submit();
+                  }
+                }}
+              />
 
-            <div className="mt-2 flex justify-between text-xs text-zinc-500">
-              <span>Ask anything. Save only if you want to.</span>
-              {ask.status === "loading" ? <span aria-live="polite">Thinking…</span> : <span className="h-4" aria-hidden="true" />}
-            </div>
+              <div className="mt-2 flex justify-between text-xs text-zinc-500">
+                <span>Ask anything. Save only if you want to.</span>
+                {ask.status === "loading" ? <span aria-live="polite">Thinking…</span> : <span className="h-4" aria-hidden="true" />}
+              </div>
 
-            <div className="mt-3 flex gap-2">
-              <Button onClick={() => void submit()} disabled={!canType || !text.trim() || ask.status === "loading"} className="rounded-2xl">
-                Get answer
-              </Button>
-              <Chip className="text-xs" title="Clear" onClick={() => setText("")} disabled={!text.trim() || ask.status === "loading"}>
-                Clear
-              </Chip>
-            </div>
-
-            <div className="mt-3 flex flex-wrap gap-2">
-              {["Are we okay this month?", "What bills are due soon?", "What changed recently?", "Can we afford $___?"].map((ex) => (
-                <Chip key={ex} className="text-xs" title={ex} disabled={!canType || ask.status === "loading"} onClick={() => setText(ex)}>
-                  {ex}
+              <div className="mt-3 flex gap-2">
+                <Button onClick={() => void submit()} disabled={!canType || !text.trim() || ask.status === "loading"} className="rounded-2xl">
+                  Get answer
+                </Button>
+                <Chip className="text-xs" title="Clear" onClick={() => setText("")} disabled={!text.trim() || ask.status === "loading"}>
+                  Clear
                 </Chip>
-              ))}
+              </div>
+
+              <div className="mt-3 flex flex-wrap gap-2">
+                {["Are we okay this month?", "What bills are due soon?", "What changed recently?", "Can we afford $___?"].map((ex) => (
+                  <Chip key={ex} className="text-xs" title={ex} disabled={!canType || ask.status === "loading"} onClick={() => setText(ex)}>
+                    {ex}
+                  </Chip>
+                ))}
+              </div>
             </div>
           </CardContent>
         </Card>
@@ -634,275 +630,273 @@ Follow-up question: ${fu}`
         {/* Q&A CFO Answer card */}
         {ask.status !== "idle" ? (
           <div ref={answerRef}>
-            <Card className="border-zinc-200 bg-white">
-              <CardContent>
-                {ask.status === "loading" ? (
-                  <div className="text-sm text-zinc-700">Thinking…</div>
-                ) : ask.status === "error" ? (
-                  <div className="space-y-2">
-                    <div className="text-sm font-semibold text-zinc-900">Life CFO</div>
-                    <div className="text-sm text-zinc-700">{ask.message}</div>
-                    <div className="text-xs text-zinc-500">
-                      <span className="font-medium text-zinc-600">You asked:</span> {ask.question}
-                    </div>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      <Chip className="text-xs" title="Try again" onClick={() => void askHome(ask.question)}>
-                        Try again
-                      </Chip>
-                      <Chip className="text-xs" title="Done" onClick={() => setAsk({ status: "idle" })}>
-                        Done
-                      </Chip>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    {/* Header */}
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="space-y-1">
-                        <div className="text-sm font-semibold text-zinc-900">Life CFO answer</div>
-                        <div className="text-xs text-zinc-500">
-                          <span className="font-medium text-zinc-600">Question:</span> {ask.question}
-                        </div>
+            <Card className="border-zinc-200 bg-white shadow-none">
+              <CardContent className="p-0">
+                <div className="px-6 py-5">
+                  {ask.status === "loading" ? (
+                    <div className="text-sm text-zinc-700">Thinking…</div>
+                  ) : ask.status === "error" ? (
+                    <div className="space-y-2">
+                      <div className="text-sm font-semibold text-zinc-900">Life CFO</div>
+                      <div className="text-sm text-zinc-700">{ask.message}</div>
+                      <div className="text-xs text-zinc-500">
+                        <span className="font-medium text-zinc-600">You asked:</span> {ask.question}
                       </div>
-
-                      {memo ? (
-                        <div className={"rounded-full px-3 py-1 text-xs font-medium " + tonePill(memo.tone).className}>
-                          {tonePill(memo.tone).label}
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <Chip className="text-xs" title="Try again" onClick={() => void askHome(ask.question)}>
+                          Try again
+                        </Chip>
+                        <Chip className="text-xs" title="Done" onClick={() => setAsk({ status: "idle" })}>
+                          Done
+                        </Chip>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {/* Header */}
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="space-y-1">
+                          <div className="text-sm font-semibold text-zinc-900">Life CFO answer</div>
+                          <div className="text-xs text-zinc-500">
+                            <span className="font-medium text-zinc-600">Question:</span> {ask.question}
+                          </div>
                         </div>
-                      ) : null}
-                    </div>
 
-                    {/* One-sentence headline */}
-                    <div className="text-[16px] leading-relaxed text-zinc-900">
-                      <span className="font-medium">{memo?.headline || ask.answer}</span>
-                    </div>
-
-                    {/* Key points */}
-                    {memo ? (
-                      <div className="space-y-2">
-                        {memo.bullets.length > 0 ? (
-                          <ul className="space-y-1">
-                            {memo.bullets.slice(0, 3).map((b, idx) => (
-                              <li key={idx} className="text-[14px] leading-relaxed text-zinc-800">
-                                <span className="text-zinc-400">• </span>
-                                {b}
-                              </li>
-                            ))}
-                          </ul>
+                        {memo ? (
+                          <div className={"rounded-full px-3 py-1 text-xs font-medium " + tonePill(memo.tone).className}>{tonePill(memo.tone).label}</div>
                         ) : null}
                       </div>
-                    ) : null}
 
-                    {/* Controls */}
-                    <div className="flex flex-wrap gap-2">
-                      <Chip
-                        className="text-xs"
-                        title="Ask follow-up"
-                        onClick={() => {
-                          setFollowUpOpen(true);
-                          scrollToFollowUp();
-                          focusFollowUp();
-                        }}
-                      >
-                        Ask follow-up
-                      </Chip>
+                      {/* One-sentence headline */}
+                      <div className="text-[16px] leading-relaxed text-zinc-900">
+                        <span className="font-medium">{memo?.headline || ask.answer}</span>
+                      </div>
 
-                      <Chip
-                        className="text-xs"
-                        title="Copy"
-                        onClick={async () => {
-                          try {
-                            await navigator.clipboard.writeText((memo?.headline ? memo.headline + "\n\n" : "") + (ask.answer || ""));
-                            toast({ title: "Copied", description: "Ready to paste." });
-                          } catch {
-                            toast({ title: "Couldn’t copy", description: "Your browser blocked clipboard access." });
-                          }
-                        }}
-                      >
-                        Copy
-                      </Chip>
-
-                      {ask.actionHref ? (
-                        <Chip className="text-xs" title="Open" onClick={() => router.push(ask.actionHref!)}>
-                          Open details
-                        </Chip>
+                      {/* Key points */}
+                      {memo ? (
+                        <div className="space-y-2">
+                          {memo.bullets.length > 0 ? (
+                            <ul className="space-y-1">
+                              {memo.bullets.slice(0, 3).map((b, idx) => (
+                                <li key={idx} className="text-[14px] leading-relaxed text-zinc-800">
+                                  <span className="text-zinc-400">• </span>
+                                  {b}
+                                </li>
+                              ))}
+                            </ul>
+                          ) : null}
+                        </div>
                       ) : null}
 
-                      <Chip
-                        className="text-xs"
-                        title="Ask something else"
-                        onClick={() => {
-                          focusInput();
-                          window.setTimeout(() => inputRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }), 40);
-                        }}
-                      >
-                        Ask something else
-                      </Chip>
+                      {/* Controls */}
+                      <div className="flex flex-wrap gap-2">
+                        <Chip
+                          className="text-xs"
+                          title="Ask follow-up"
+                          onClick={() => {
+                            setFollowUpOpen(true);
+                            scrollToFollowUp();
+                            focusFollowUp();
+                          }}
+                        >
+                          Ask follow-up
+                        </Chip>
 
-                      <Chip className="text-xs" title="Done" onClick={() => setAsk({ status: "idle" })}>
-                        Done
-                      </Chip>
-                    </div>
+                        <Chip
+                          className="text-xs"
+                          title="Copy"
+                          onClick={async () => {
+                            try {
+                              await navigator.clipboard.writeText((memo?.headline ? memo.headline + "\n\n" : "") + (ask.answer || ""));
+                              toast({ title: "Copied", description: "Ready to paste." });
+                            } catch {
+                              toast({ title: "Couldn’t copy", description: "Your browser blocked clipboard access." });
+                            }
+                          }}
+                        >
+                          Copy
+                        </Chip>
 
-                    {/* Inline follow-up composer (keeps context visible) */}
-                    <div ref={followUpRef}>
-                      {followUpOpen ? (
-                        <div className="rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3">
-                          <div className="flex items-center justify-between gap-3">
-                            <div className="text-xs font-medium text-zinc-700">Follow-up</div>
-                            <Chip
-                              className="text-xs"
-                              title="Close"
-                              onClick={() => {
-                                setFollowUpOpen(false);
-                                setFollowUpText("");
+                        {ask.actionHref ? (
+                          <Chip className="text-xs" title="Open" onClick={() => router.push(ask.actionHref!)}>
+                            Open details
+                          </Chip>
+                        ) : null}
+
+                        <Chip
+                          className="text-xs"
+                          title="Ask something else"
+                          onClick={() => {
+                            focusInput();
+                            window.setTimeout(() => inputRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }), 40);
+                          }}
+                        >
+                          Ask something else
+                        </Chip>
+
+                        <Chip className="text-xs" title="Done" onClick={() => setAsk({ status: "idle" })}>
+                          Done
+                        </Chip>
+                      </div>
+
+                      {/* Inline follow-up composer (keeps context visible) */}
+                      <div ref={followUpRef}>
+                        {followUpOpen ? (
+                          <div className="rounded-2xl border border-zinc-200 bg-white px-4 py-3">
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="text-xs font-medium text-zinc-700">Follow-up</div>
+                              <Chip
+                                className="text-xs"
+                                title="Close"
+                                onClick={() => {
+                                  setFollowUpOpen(false);
+                                  setFollowUpText("");
+                                }}
+                              >
+                                Close
+                              </Chip>
+                            </div>
+
+                            <textarea
+                              ref={followUpInputRef}
+                              value={followUpText}
+                              onChange={(e) => setFollowUpText(e.target.value)}
+                              placeholder="Ask a follow-up…"
+                              className="mt-2 w-full min-h-[90px] resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[14px] leading-relaxed text-zinc-800 placeholder:text-zinc-500 outline-none focus:ring-2 focus:ring-zinc-200"
+                              onKeyDown={(e) => {
+                                const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+                                const cmdOrCtrl = isMac ? e.metaKey : e.ctrlKey;
+
+                                if (cmdOrCtrl && e.key === "Enter") {
+                                  e.preventDefault();
+                                  void submitFollowUp();
+                                  return;
+                                }
+
+                                if (e.key === "Enter" && !e.shiftKey) {
+                                  e.preventDefault();
+                                  void submitFollowUp();
+                                }
                               }}
-                            >
-                              Close
+                            />
+
+                            <div className="mt-2 flex items-center justify-between">
+                              <div className="text-xs text-zinc-500">This uses the current answer as context.</div>
+                              <div className="flex gap-2">
+                                <Chip className="text-xs" title="Clear" onClick={() => setFollowUpText("")} disabled={!followUpText.trim() || followUpSending}>
+                                  Clear
+                                </Chip>
+                                <Button onClick={() => void submitFollowUp()} disabled={!followUpText.trim() || followUpSending} className="rounded-2xl">
+                                  {followUpSending ? "Sending…" : "Send"}
+                                </Button>
+                              </div>
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+
+                      {/* Optional depth */}
+                      {memo ? (
+                        <div className="space-y-3 pt-1">
+                          <div className="flex flex-wrap gap-2">
+                            <Chip className="text-xs" title="Details" onClick={() => setShowDetails((v) => !v)}>
+                              {showDetails ? "Hide details" : "Details"}
+                            </Chip>
+                            <Chip className="text-xs" title="What would change this?" onClick={() => setShowWhy((v) => !v)}>
+                              {showWhy ? "Hide what would change this" : "What would change this?"}
+                            </Chip>
+                            <Chip className="text-xs" title="Assumptions" onClick={() => setShowAssumptions((v) => !v)}>
+                              {showAssumptions ? "Hide assumptions" : "Assumptions"}
                             </Chip>
                           </div>
 
-                          <textarea
-                            ref={followUpInputRef}
-                            value={followUpText}
-                            onChange={(e) => setFollowUpText(e.target.value)}
-                            placeholder="Ask a follow-up…"
-                            className="mt-2 w-full min-h-[90px] resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[14px] leading-relaxed text-zinc-800 placeholder:text-zinc-500 outline-none focus:ring-2 focus:ring-zinc-200"
-                            onKeyDown={(e) => {
-                              const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
-                              const cmdOrCtrl = isMac ? e.metaKey : e.ctrlKey;
+                          {showDetails ? (
+                            <div className="rounded-2xl border border-zinc-200 bg-white px-4 py-3">
+                              <div className="text-xs font-medium text-zinc-700">Details</div>
+                              <div className="mt-2 whitespace-pre-wrap text-[14px] leading-relaxed text-zinc-800">{memo.body ? memo.body : ask.answer}</div>
+                            </div>
+                          ) : null}
 
-                              if (cmdOrCtrl && e.key === "Enter") {
-                                e.preventDefault();
-                                void submitFollowUp();
-                                return;
-                              }
+                          {showWhy ? (
+                            <div className="rounded-2xl border border-zinc-200 bg-white px-4 py-3">
+                              <div className="text-xs font-medium text-zinc-700">What would change this</div>
+                              <ul className="mt-2 space-y-1">
+                                {calmWhatWouldChange(memo.tone).map((x) => (
+                                  <li key={x} className="text-[14px] leading-relaxed text-zinc-800">
+                                    <span className="text-zinc-400">• </span>
+                                    {x}
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          ) : null}
 
-                              if (e.key === "Enter" && !e.shiftKey) {
-                                e.preventDefault();
-                                void submitFollowUp();
-                              }
+                          {showAssumptions ? (
+                            <div className="rounded-2xl border border-zinc-200 bg-white px-4 py-3">
+                              <div className="text-xs font-medium text-zinc-700">Assumptions</div>
+                              <ul className="mt-2 space-y-1">
+                                {calmAssumptions().map((x) => (
+                                  <li key={x} className="text-[14px] leading-relaxed text-zinc-800">
+                                    <span className="text-zinc-400">• </span>
+                                    {x}
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : null}
+
+                      {/* Permissioned save (post-answer, calm) */}
+                      <div className="pt-2">
+                        <div className="text-xs font-medium text-zinc-600">Want me to hold onto this?</div>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <Chip
+                            className="text-xs"
+                            title="Save a note"
+                            onClick={async () => {
+                              try {
+                                await navigator.clipboard.writeText(ask.question);
+                                toast({ title: "Copied", description: "Paste into Notes." });
+                              } catch {}
+                              router.push("/capture");
                             }}
-                          />
-
-                          <div className="mt-2 flex items-center justify-between">
-                            <div className="text-xs text-zinc-500">This uses the current answer as context.</div>
-                            <div className="flex gap-2">
-                              <Chip className="text-xs" title="Clear" onClick={() => setFollowUpText("")} disabled={!followUpText.trim() || followUpSending}>
-                                Clear
-                              </Chip>
-                              <Button onClick={() => void submitFollowUp()} disabled={!followUpText.trim() || followUpSending} className="rounded-2xl">
-                                {followUpSending ? "Sending…" : "Send"}
-                              </Button>
-                            </div>
-                          </div>
-                        </div>
-                      ) : null}
-                    </div>
-
-                    {/* Optional depth */}
-                    {memo ? (
-                      <div className="space-y-3 pt-1">
-                        <div className="flex flex-wrap gap-2">
-                          <Chip className="text-xs" title="Details" onClick={() => setShowDetails((v) => !v)}>
-                            {showDetails ? "Hide details" : "Details"}
+                          >
+                            Save a note
                           </Chip>
-                          <Chip className="text-xs" title="What would change this?" onClick={() => setShowWhy((v) => !v)}>
-                            {showWhy ? "Hide what would change this" : "What would change this?"}
+
+                          <Chip
+                            className="text-xs"
+                            title="Save a decision"
+                            onClick={async () => {
+                              try {
+                                await navigator.clipboard.writeText(ask.question);
+                                toast({ title: "Copied", description: "Paste into a Decision." });
+                              } catch {}
+                              router.push("/framing");
+                            }}
+                          >
+                            Save a decision
                           </Chip>
-                          <Chip className="text-xs" title="Assumptions" onClick={() => setShowAssumptions((v) => !v)}>
-                            {showAssumptions ? "Hide assumptions" : "Assumptions"}
+
+                          <Chip
+                            className="text-xs"
+                            title="Leave it"
+                            onClick={() => {
+                              toast({ title: "Okay", description: "Nothing saved." });
+                            }}
+                          >
+                            Leave it
                           </Chip>
                         </div>
 
-                        {showDetails ? (
-                          <div className="rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3">
-                            <div className="text-xs font-medium text-zinc-700">Details</div>
-                            <div className="mt-2 whitespace-pre-wrap text-[14px] leading-relaxed text-zinc-800">
-                              {memo.body ? memo.body : ask.answer}
-                            </div>
-                          </div>
-                        ) : null}
-
-                        {showWhy ? (
-                          <div className="rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3">
-                            <div className="text-xs font-medium text-zinc-700">What would change this</div>
-                            <ul className="mt-2 space-y-1">
-                              {calmWhatWouldChange(memo.tone).map((x) => (
-                                <li key={x} className="text-[14px] leading-relaxed text-zinc-800">
-                                  <span className="text-zinc-400">• </span>
-                                  {x}
-                                </li>
-                              ))}
-                            </ul>
-                          </div>
-                        ) : null}
-
-                        {showAssumptions ? (
-                          <div className="rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3">
-                            <div className="text-xs font-medium text-zinc-700">Assumptions</div>
-                            <ul className="mt-2 space-y-1">
-                              {calmAssumptions().map((x) => (
-                                <li key={x} className="text-[14px] leading-relaxed text-zinc-800">
-                                  <span className="text-zinc-400">• </span>
-                                  {x}
-                                </li>
-                              ))}
-                            </ul>
-                          </div>
+                        {"suggestedNext" in ask && ask.suggestedNext === "create_capture" ? (
+                          <div className="mt-2 text-xs text-zinc-500">If you’d like, we can save this so it doesn’t stay in your head.</div>
                         ) : null}
                       </div>
-                    ) : null}
-
-                    {/* Permissioned save (post-answer, calm) */}
-                    <div className="pt-2">
-                      <div className="text-xs font-medium text-zinc-600">Want me to hold onto this?</div>
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        <Chip
-                          className="text-xs"
-                          title="Save a note"
-                          onClick={async () => {
-                            try {
-                              await navigator.clipboard.writeText(ask.question);
-                              toast({ title: "Copied", description: "Paste into Notes." });
-                            } catch {}
-                            router.push("/capture");
-                          }}
-                        >
-                          Save a note
-                        </Chip>
-
-                        <Chip
-                          className="text-xs"
-                          title="Save a decision"
-                          onClick={async () => {
-                            try {
-                              await navigator.clipboard.writeText(ask.question);
-                              toast({ title: "Copied", description: "Paste into a Decision." });
-                            } catch {}
-                            router.push("/framing");
-                          }}
-                        >
-                          Save a decision
-                        </Chip>
-
-                        <Chip
-                          className="text-xs"
-                          title="Leave it"
-                          onClick={() => {
-                            toast({ title: "Okay", description: "Nothing saved." });
-                          }}
-                        >
-                          Leave it
-                        </Chip>
-                      </div>
-
-                      {"suggestedNext" in ask && ask.suggestedNext === "create_capture" ? (
-                        <div className="mt-2 text-xs text-zinc-500">If you’d like, we can save this so it doesn’t stay in your head.</div>
-                      ) : null}
                     </div>
-                  </div>
-                )}
+                  )}
+                </div>
               </CardContent>
             </Card>
           </div>
