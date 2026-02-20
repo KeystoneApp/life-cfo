@@ -381,6 +381,14 @@ export function ConversationPanel(props: {
 
       {/* Messages */}
       <div className="mt-3 max-h-[560px] overflow-auto px-2 py-3 sm:px-4">
+        {askedText?.trim() ? (
+          <div className="mb-4">
+            <div className="max-w-[86%] rounded-2xl bg-zinc-50 px-5 py-4 text-sm leading-relaxed text-zinc-800">
+              <div className="mb-1 text-[11px] font-medium text-zinc-500">Captured</div>
+              <div className="whitespace-pre-wrap">{askedText.trim()}</div>
+            </div>
+          </div>
+        ) : null}
         {loading ? <div className="px-2 text-sm text-zinc-600">Loading…</div> : null}
 
         {!loading && messages.length === 0 ? (
