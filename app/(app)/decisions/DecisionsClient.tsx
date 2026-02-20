@@ -2216,8 +2216,7 @@ export default function DecisionsClient() {
   return (
     <Page title={pageTitle} subtitle={pageSubtitle} right={null}>
       {/* ✅ wider layout so cards fill the page better */}
-      <div className="mx-auto w-full max-w-[1100px] space-y-6 px-2 sm:px-0">
-        <SegTabs
+        <div className="mx-auto w-full max-w-[1100px] space-y-6 px-4 sm:px-6 lg:px-8">        <SegTabs
           tab={tab}
           onTab={(t) => {
             if (t === "new") router.push(buildUrl("new"), { scroll: false });
