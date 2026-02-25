@@ -1,291 +1,271 @@
-// app/(app)/money/page.tsx
+// app/(app)/money/MoneyClient.tsx
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabaseClient";
+import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { Page } from "@/components/Page";
-import { Card, CardContent, Chip, Button } from "@/components/ui";
-import { maybeCrisisIntercept } from "@/lib/safety/guard";
+import { Card, CardContent, Chip, useToast } from "@/components/ui";
 
-/* ---------------- types ---------------- */
-
-type MoneySnapshot = {
-  available_cash: number | null;
-  upcoming_obligations: number | null;
-  buffer: number | null;
-  goals_pressure: number | null;
-  confidence: "high" | "medium" | "low";
+type AccountRow = {
+  id: string;
+  name: string | null;
+  provider: string | null;
+  currency: string | null;
+  current_balance_cents: number | null;
+  archived: boolean | null;
+  updated_at: string | null;
 };
 
-type AskState =
-  | { status: "idle" }
-  | { status: "loading"; question: string }
-  | { status: "done"; question: string; answer: string }
-  | { status: "error"; question: string; message: string };
+type TxRow = {
+  id: string;
+  date: string | null; // YYYY-MM-DD
+  description: string | null;
+  merchant: string | null;
+  category: string | null;
+  pending: boolean | null;
+  amount: number | null; // numeric
+  amount_cents: number | null;
+  currency: string | null;
+  account_id: string | null;
+};
 
-/* ---------------- helpers ---------------- */
-
-function fmt(n: number | null) {
-  if (n == null || Number.isNaN(n)) return "—";
-  return n.toLocaleString(undefined, {
-    style: "currency",
-    currency: "AUD",
-    maximumFractionDigits: 0,
-  });
+function safeStr(v: unknown) {
+  return typeof v === "string" ? v : "";
 }
 
-function confidenceCopy(c: MoneySnapshot["confidence"]) {
-  if (c === "high") return "Based on linked accounts.";
-  if (c === "medium") return "Some figures are estimated.";
-  return "Limited data so far.";
+function moneyFromCents(cents: number, currency: string) {
+  const amt = cents / 100;
+  try {
+    return new Intl.NumberFormat(undefined, { style: "currency", currency }).format(amt);
+  } catch {
+    return `${currency} ${amt.toFixed(2)}`;
+  }
 }
 
-/* ---------------- page ---------------- */
+function moneyFromAmount(amount: number, currency: string) {
+  try {
+    return new Intl.NumberFormat(undefined, { style: "currency", currency }).format(amount);
+  } catch {
+    return `${currency} ${amount.toFixed(2)}`;
+  }
+}
 
-export default function MoneyPage() {
-  const router = useRouter();
+function softDate(isoOrDate: string | null | undefined) {
+  if (!isoOrDate) return "";
+  const ms = Date.parse(isoOrDate);
+  if (!Number.isFinite(ms)) {
+    // try date-only YYYY-MM-DD
+    const ms2 = Date.parse(isoOrDate + "T00:00:00Z");
+    if (!Number.isFinite(ms2)) return "";
+    return new Date(ms2).toLocaleDateString();
+  }
+  return new Date(ms).toLocaleDateString();
+}
 
-  const [userId, setUserId] = useState<string | null>(null);
-  const [snapshot, setSnapshot] = useState<MoneySnapshot | null>(null);
+async function fetchJson<T>(url: string): Promise<T> {
+  const res = await fetch(url, { cache: "no-store" });
+  const json = await res.json();
+  if (!res.ok) throw new Error(json?.error ?? "Request failed");
+  return json as T;
+}
+
+export default function MoneyClient() {
+  const { showToast } = useToast();
+
   const [loading, setLoading] = useState(true);
+  const [accounts, setAccounts] = useState<AccountRow[]>([]);
+  const [tx, setTx] = useState<TxRow[]>([]);
+  const [q, setQ] = useState("");
 
-  const [ask, setAsk] = useState<AskState>({ status: "idle" });
-  const [text, setText] = useState("");
+  const filteredTx = useMemo(() => {
+    const query = q.trim().toLowerCase();
+    if (!query) return tx;
 
-  const inputRef = useRef<HTMLTextAreaElement | null>(null);
-  const answerRef = useRef<HTMLDivElement | null>(null);
+    return tx.filter((t) => {
+      const hay = [
+        safeStr(t.description),
+        safeStr(t.merchant),
+        safeStr(t.category),
+        safeStr(t.date),
+        safeStr(t.currency),
+      ]
+        .join(" ")
+        .toLowerCase();
+      return hay.includes(query);
+    });
+  }, [q, tx]);
 
-  /* ---------------- auth ---------------- */
+  const totalBalance = useMemo(() => {
+    // If you eventually support multi-currency, we’ll show per-currency totals.
+    // For now, if mixed currencies exist we keep it conservative.
+    const byCur = new Map<string, number>();
+    for (const a of accounts) {
+      if (a.archived) continue;
+      const cur = safeStr(a.currency) || "AUD";
+      const cents = typeof a.current_balance_cents === "number" ? a.current_balance_cents : 0;
+      byCur.set(cur, (byCur.get(cur) ?? 0) + cents);
+    }
+    return byCur;
+  }, [accounts]);
 
   useEffect(() => {
     let alive = true;
-    (async () => {
-      const { data } = await supabase.auth.getUser();
-      if (!alive) return;
-      setUserId(data?.user?.id ?? null);
-    })();
-    return () => {
-      alive = false;
-    };
-  }, []);
 
-  /* ---------------- load snapshot ---------------- */
-
-  useEffect(() => {
-    if (!userId) return;
-
-    let alive = true;
     (async () => {
       setLoading(true);
+      try {
+        // Accounts API should already exist from your earlier step
+        const a = await fetchJson<{ ok: boolean; accounts: AccountRow[] }>("/api/money/accounts");
+        const t = await fetchJson<{ ok: boolean; transactions: TxRow[] }>("/api/money/transactions?limit=25");
 
-      /**
-       * This is intentionally simple.
-       * Server-side aggregation can evolve without changing this page.
-       */
-      const { data } = await supabase
-        .from("money_snapshot_latest")
-        .select("available_cash,upcoming_obligations,buffer,goals_pressure,confidence")
-        .eq("user_id", userId)
-        .maybeSingle();
-
-      if (!alive) return;
-
-      setSnapshot(
-        data ?? {
-          available_cash: null,
-          upcoming_obligations: null,
-          buffer: null,
-          goals_pressure: null,
-          confidence: "low",
-        }
-      );
-      setLoading(false);
+        if (!alive) return;
+        setAccounts(a.accounts ?? []);
+        setTx(t.transactions ?? []);
+      } catch (e: any) {
+        if (!alive) return;
+        showToast({ message: e?.message ?? "Couldn’t load money data." }, 2500);
+      } finally {
+        if (!alive) return;
+        setLoading(false);
+      }
     })();
 
     return () => {
       alive = false;
     };
-  }, [userId]);
-
-  /* ---------------- ask (scoped to money) ---------------- */
-
-  async function submitAsk() {
-    const q = text.trim();
-    if (!q || !userId) return;
-
-    setText("");
-    setAsk({ status: "loading", question: q });
-
-    const intercept = maybeCrisisIntercept(q);
-    if (intercept) {
-      setAsk({ status: "done", question: q, answer: intercept.content });
-      return;
-    }
-
-    try {
-      const res = await fetch("/api/home/ask", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          userId,
-          question: q,
-          scope: "money", // <<< IMPORTANT: scoped ask
-        }),
-      });
-
-      const json = await res.json();
-      if (!res.ok) {
-        setAsk({ status: "error", question: q, message: "I couldn’t answer that right now." });
-        return;
-      }
-
-      setAsk({
-        status: "done",
-        question: q,
-        answer: typeof json?.answer === "string" ? json.answer : "",
-      });
-
-      window.setTimeout(() => {
-        answerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-      }, 40);
-    } catch {
-      setAsk({ status: "error", question: q, message: "I couldn’t answer that right now." });
-    }
-  }
-
-  /* ---------------- render ---------------- */
+  }, [showToast]);
 
   return (
-    <Page title="Money" subtitle="A clear picture, without the noise.">
-      <div className="mx-auto max-w-[760px] space-y-6">
-        {/* Snapshot */}
-        <Card className="border-zinc-200 bg-white shadow-none">
-          <CardContent className="p-0">
-            <div className="px-6 py-5">
-              {loading ? (
-                <div className="text-sm text-zinc-600">Loading your snapshot…</div>
+    <Page title="Money" subtitle="A calm view of your accounts and activity.">
+      {/* Top actions */}
+      <div className="flex flex-wrap items-center gap-2">
+        <Chip title="Connect accounts (provider layer next)" onClick={() => showToast({ message: "Connect flow is next." }, 1500)}>
+          Connect accounts
+        </Chip>
+
+        <Link href="/accounts">
+          <Chip>All accounts</Chip>
+        </Link>
+
+        <Link href="/transactions">
+          <Chip>All transactions</Chip>
+        </Link>
+      </div>
+
+      {/* Totals */}
+      <div className="mt-4">
+        <Card className="border-zinc-200 bg-white">
+          <CardContent>
+            <div className="text-sm font-semibold text-zinc-900">Total balance</div>
+            <div className="mt-1 text-xs text-zinc-500">Across active accounts</div>
+
+            <div className="mt-3 space-y-1">
+              {Array.from(totalBalance.entries()).length === 0 ? (
+                <div className="text-sm text-zinc-600">{loading ? "Loading…" : "No accounts yet."}</div>
               ) : (
-                <div className="space-y-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="text-sm font-semibold text-zinc-900">Your current position</div>
-                      <div className="text-xs text-zinc-500">{confidenceCopy(snapshot!.confidence)}</div>
-                    </div>
-
-                    <div className="flex flex-wrap gap-2">
-                      <Chip className="text-xs" onClick={() => router.push("/accounts")}>
-                        Accounts
-                      </Chip>
-                      <Chip className="text-xs" onClick={() => router.push("/bills")}>
-                        Bills
-                      </Chip>
-                      <Chip className="text-xs" onClick={() => router.push("/money/goals")}>
-                        Goals
-                      </Chip>
-                      <Chip className="text-xs" onClick={() => router.push("/buffer")}>
-                        Buffer
-                      </Chip>
-                    </div>
+                Array.from(totalBalance.entries()).map(([cur, cents]) => (
+                  <div key={cur} className="text-lg font-semibold text-zinc-900">
+                    {moneyFromCents(cents, cur)}
                   </div>
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="rounded-2xl border border-zinc-200 bg-white px-4 py-3">
-                      <div className="text-xs text-zinc-500">Available cash</div>
-                      <div className="mt-1 text-lg font-semibold text-zinc-900">{fmt(snapshot!.available_cash)}</div>
-                    </div>
-
-                    <div className="rounded-2xl border border-zinc-200 bg-white px-4 py-3">
-                      <div className="text-xs text-zinc-500">Upcoming obligations</div>
-                      <div className="mt-1 text-lg font-semibold text-zinc-900">{fmt(snapshot!.upcoming_obligations)}</div>
-                    </div>
-
-                    <div className="rounded-2xl border border-zinc-200 bg-white px-4 py-3">
-                      <div className="text-xs text-zinc-500">Goals pressure</div>
-                      <div className="mt-1 text-lg font-semibold text-zinc-900">{fmt(snapshot!.goals_pressure)}</div>
-                    </div>
-
-                    <div className="rounded-2xl border border-zinc-200 bg-white px-4 py-3">
-                      <div className="text-xs text-zinc-500">Buffer</div>
-                      <div className="mt-1 text-lg font-semibold text-zinc-900">{fmt(snapshot!.buffer)}</div>
-                    </div>
-                  </div>
-                </div>
+                ))
               )}
             </div>
           </CardContent>
         </Card>
+      </div>
 
-        {/* Ask (scoped) */}
-        <Card className="border-zinc-200 bg-white shadow-none">
-          <CardContent className="p-0">
-            <div className="px-6 py-5">
-              <div className="text-sm font-semibold text-zinc-900">Ask about your money</div>
-              <div className="mt-1 text-xs text-zinc-500">Questions stay scoped to your money.</div>
-
-              <textarea
-                ref={inputRef}
-                value={text}
-                onChange={(e) => setText(e.target.value)}
-                placeholder="Ask about your money…"
-                className="mt-3 w-full min-h-[120px] resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[15px] leading-relaxed text-zinc-800 placeholder:text-zinc-500 outline-none focus:ring-2 focus:ring-zinc-200"
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    void submitAsk();
-                  }
-                }}
-              />
-
-              <div className="mt-2 flex justify-between text-xs text-zinc-500">
-                <span>Answer-first, then you decide what to do.</span>
-                {ask.status === "loading" ? <span>Thinking…</span> : <span className="h-4" aria-hidden="true" />}
+      {/* Accounts preview */}
+      <div className="mt-4">
+        <Card className="border-zinc-200 bg-white">
+          <CardContent>
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-zinc-900">Accounts</div>
+                <div className="mt-0.5 text-xs text-zinc-500">
+                  {loading ? "Loading…" : accounts.length ? "Most recent accounts" : "No accounts yet."}
+                </div>
               </div>
+              <Link href="/accounts">
+                <Chip>View</Chip>
+              </Link>
+            </div>
 
-              <div className="mt-3 flex gap-2">
-                <Button onClick={() => void submitAsk()} disabled={!text.trim() || ask.status === "loading"} className="rounded-2xl">
-                  Get answer
-                </Button>
-                <Chip className="text-xs" onClick={() => setText("")} disabled={!text.trim() || ask.status === "loading"}>
-                  Clear
-                </Chip>
-              </div>
+            <div className="mt-3 divide-y divide-zinc-100">
+              {(accounts ?? []).filter((a) => !a.archived).slice(0, 5).map((a) => {
+                const cur = safeStr(a.currency) || "AUD";
+                const cents = typeof a.current_balance_cents === "number" ? a.current_balance_cents : 0;
+                return (
+                  <div key={a.id} className="flex items-center justify-between gap-3 py-3">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-medium text-zinc-900">{safeStr(a.name) || "Untitled account"}</div>
+                      <div className="truncate text-xs text-zinc-500">
+                        {[safeStr(a.provider) || "Manual", a.updated_at ? `Updated ${softDate(a.updated_at)}` : null].filter(Boolean).join(" • ")}
+                      </div>
+                    </div>
+                    <div className="shrink-0 text-sm font-semibold text-zinc-900">{moneyFromCents(cents, cur)}</div>
+                  </div>
+                );
+              })}
             </div>
           </CardContent>
         </Card>
+      </div>
 
-        {/* Answer */}
-        {ask.status !== "idle" ? (
-          <div ref={answerRef}>
-            <Card className="border-zinc-200 bg-white shadow-none">
-              <CardContent className="p-0">
-                <div className="px-6 py-5">
-                  {ask.status === "loading" ? (
-                    <div className="text-sm text-zinc-700">Thinking…</div>
-                  ) : ask.status === "error" ? (
-                    <div className="text-sm text-zinc-700">{ask.message}</div>
-                  ) : (
-                    <div className="space-y-3">
-                      <div className="text-xs text-zinc-500">Question</div>
-                      <div className="text-sm font-medium text-zinc-900">{ask.question}</div>
+      {/* Transactions preview */}
+      <div className="mt-4">
+        <Card className="border-zinc-200 bg-white">
+          <CardContent>
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-zinc-900">Recent activity</div>
+                <div className="mt-0.5 text-xs text-zinc-500">{loading ? "Loading…" : tx.length ? "Latest transactions" : "No transactions yet."}</div>
+              </div>
+              <Link href="/transactions">
+                <Chip>View</Chip>
+              </Link>
+            </div>
 
-                      <div className="pt-1 text-[15px] leading-relaxed text-zinc-800 whitespace-pre-wrap">{ask.answer}</div>
+            <div className="mt-3 flex items-center gap-2 rounded-xl border border-zinc-200 bg-white px-3 py-2">
+              <input
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder="Search transactions…"
+                className="w-full bg-transparent text-sm text-zinc-900 outline-none placeholder:text-zinc-400"
+              />
+              <span className="text-xs text-zinc-400">⌘K</span>
+            </div>
 
-                      <div className="pt-3 flex flex-wrap gap-2">
-                        <Chip className="text-xs" onClick={() => setAsk({ status: "idle" })}>
-                          Done
-                        </Chip>
-                        <Chip className="text-xs" onClick={() => inputRef.current?.focus()}>
-                          Ask another
-                        </Chip>
-                      </div>
+            <div className="mt-3 divide-y divide-zinc-100">
+              {(filteredTx ?? []).slice(0, 8).map((t) => {
+                const cur = safeStr(t.currency) || "AUD";
+
+                const amountText =
+                  typeof t.amount_cents === "number"
+                    ? moneyFromCents(t.amount_cents, cur)
+                    : typeof t.amount === "number"
+                    ? moneyFromAmount(t.amount, cur)
+                    : `${cur} 0.00`;
+
+                const title = safeStr(t.merchant) || safeStr(t.description) || "Transaction";
+                const meta = [t.date ? softDate(t.date) : null, safeStr(t.category) || null, t.pending ? "Pending" : null]
+                  .filter(Boolean)
+                  .join(" • ");
+
+                return (
+                  <div key={t.id} className="flex items-center justify-between gap-3 py-3">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-medium text-zinc-900">{title}</div>
+                      <div className="truncate text-xs text-zinc-500">{meta}</div>
                     </div>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        ) : null}
+                    <div className="shrink-0 text-sm font-semibold text-zinc-900">{amountText}</div>
+                  </div>
+                );
+              })}
+
+              {!loading && filteredTx.length === 0 ? <div className="py-3 text-sm text-zinc-500">No matches.</div> : null}
+            </div>
+          </CardContent>
+        </Card>
       </div>
     </Page>
   );
