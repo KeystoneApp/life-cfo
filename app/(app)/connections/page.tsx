@@ -1,0 +1,148 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { Page } from "@/components/Page";
+import { Card, CardContent, Chip, Button, useToast } from "@/components/ui";
+
+type Connection = {
+  id: string;
+  provider: string;
+  status: string;
+  display_name: string | null;
+  last_sync_at: string | null;
+  created_at: string | null;
+};
+
+export default function ConnectionsPage() {
+  const router = useRouter();
+  const { toast } = useToast();
+
+  const [items, setItems] = useState<Connection[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [creating, setCreating] = useState(false);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const res = await fetch("/api/money/connections");
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error || "Load failed");
+      setItems(json.connections ?? []);
+    } catch (e: any) {
+      toast({ title: "Couldn’t load", description: e?.message });
+      setItems([]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  async function createManual() {
+    setCreating(true);
+    try {
+      const res = await fetch("/api/money/connections", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "manual" }),
+      });
+
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error || "Create failed");
+
+      toast({ title: "Connection added", description: "You can refine it anytime." });
+      await load();
+    } catch (e: any) {
+      toast({ title: "Couldn’t create", description: e?.message });
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  function statusChip(status: string) {
+    const base = "border text-xs rounded-full px-3 py-1";
+
+    if (status === "manual")
+      return <span className={`${base} border-zinc-200 bg-zinc-50 text-zinc-700`}>Manual</span>;
+
+    if (status === "needs_auth")
+      return <span className={`${base} border-amber-200 bg-amber-50 text-amber-700`}>Needs auth</span>;
+
+    if (status === "error")
+      return <span className={`${base} border-rose-200 bg-rose-50 text-rose-700`}>Attention</span>;
+
+    return <span className={`${base} border-emerald-200 bg-emerald-50 text-emerald-700`}>Active</span>;
+  }
+
+  return (
+    <Page
+      title="Connections"
+      subtitle="Where your accounts come from."
+      right={
+        <Chip onClick={() => router.push("/money")}>
+          Back to Money
+        </Chip>
+      }
+    >
+      <div className="mx-auto w-full max-w-[760px] space-y-6">
+        <Card className="border-zinc-200 bg-white">
+          <CardContent>
+            <div className="flex items-start justify-between gap-4 flex-wrap">
+              <div className="space-y-1">
+                <div className="text-sm font-medium text-zinc-900">
+                  Data sources
+                </div>
+                <div className="text-xs text-zinc-500">
+                  You can link banks later. For now, manual works perfectly.
+                </div>
+              </div>
+
+              <Button
+                onClick={() => void createManual()}
+                disabled={creating}
+                className="rounded-2xl"
+              >
+                {creating ? "Adding…" : "Add manual"}
+              </Button>
+            </div>
+
+            <div className="mt-6 space-y-3">
+              {loading ? (
+                <div className="text-sm text-zinc-600">Loading…</div>
+              ) : items.length === 0 ? (
+                <div className="text-sm text-zinc-600">
+                  No connections yet.
+                </div>
+              ) : (
+                items.map((c) => (
+                  <div
+                    key={c.id}
+                    className="rounded-2xl border border-zinc-200 bg-white px-4 py-3"
+                  >
+                    <div className="flex items-start justify-between gap-3 flex-wrap">
+                      <div className="min-w-[240px] flex-1">
+                        <div className="text-sm font-medium text-zinc-900">
+                          {c.display_name || c.provider}
+                        </div>
+                        <div className="mt-1 text-xs text-zinc-500">
+                          {c.created_at
+                            ? `Added ${new Date(c.created_at).toLocaleDateString()}`
+                            : ""}
+                        </div>
+                      </div>
+
+                      {statusChip(c.status)}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    </Page>
+  );
+}
