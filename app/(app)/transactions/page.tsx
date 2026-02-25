@@ -279,7 +279,7 @@ export default function TransactionsClient() {
           <Card className="border-zinc-200 bg-white">
             <CardContent>
               <div className="text-sm font-semibold text-zinc-900">Setup needed</div>
-              <div className="mt-1 text-sm text-zinc-600">Keystone can’t read transactions yet.</div>
+              <div className="mt-1 text-sm text-zinc-600">I can’t read transactions yet.</div>
               <div className="mt-2 text-xs text-zinc-500">{error}</div>
             </CardContent>
           </Card>
