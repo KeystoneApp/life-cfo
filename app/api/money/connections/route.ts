@@ -6,11 +6,6 @@ import { createServerClient } from "@supabase/ssr";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function intOr(v: unknown, fallback: number) {
-  const n = typeof v === "string" ? Number(v) : NaN;
-  return Number.isFinite(n) ? n : fallback;
-}
-
 async function supabaseServer() {
   const cookieStore = await cookies();
 
@@ -23,14 +18,12 @@ async function supabaseServer() {
           return cookieStore.getAll();
         },
         setAll(cookiesToSet) {
-          // Route handlers generally can't persist cookies reliably without a Response object.
-          // For our usage (read session + DB writes), this is safe as a best-effort no-op.
           try {
             cookiesToSet.forEach(({ name, value, options }) => {
               cookieStore.set(name, value, options);
             });
           } catch {
-            // ignore
+            // no-op
           }
         },
       },
@@ -39,7 +32,6 @@ async function supabaseServer() {
 }
 
 async function getHouseholdIdForUser(supabase: any, userId: string): Promise<string | null> {
-  // pick the first household link (owner/member) for this user
   const { data, error } = await supabase
     .from("household_members")
     .select("household_id")
@@ -54,19 +46,16 @@ async function getHouseholdIdForUser(supabase: any, userId: string): Promise<str
 function normalizeProvider(input: unknown): string {
   if (typeof input !== "string") return "manual";
   const p = input.trim().toLowerCase();
-  if (!p) return "manual";
-  return p;
+  return p || "manual";
 }
 
 function connectionStatusForProvider(provider: string): string {
-  // Placeholder connections (manual) should not present as authenticated/active.
-  // When Plaid/Basiq link flows exist, adapters can move this to "active".
+  // Manual connections are placeholders, not authenticated
   return provider === "manual" ? "manual" : "needs_auth";
 }
 
 function defaultDisplayName(provider: string): string | null {
   if (provider === "manual") return "Manual";
-  // Keep it simple; can be improved later when provider metadata exists.
   return provider.toUpperCase();
 }
 
@@ -99,7 +88,10 @@ export async function GET() {
 
     return NextResponse.json({ ok: true, connections: data ?? [] });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message ?? "Connections fetch failed" }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, error: e?.message ?? "Connections fetch failed" },
+      { status: 500 }
+    );
   }
 }
 
@@ -131,9 +123,7 @@ export async function POST(req: Request) {
         ? body.display_name
         : defaultDisplayName(provider);
 
-    // 1) Create connection row
-    // NOTE: For now we explicitly set token fields to null for manual/placeholder connections.
-    // Adapters will later fill provider_connection_id + tokens and transition status to "active".
+    // 1️⃣ Create connection row (manual placeholder, no tokens yet)
     const { data: connection, error: connErr } = await supabase
       .from("external_connections")
       .insert({
@@ -143,16 +133,14 @@ export async function POST(req: Request) {
         status,
         display_name,
         provider_connection_id: null,
-        encrypted_access_token: null,
-        encrypted_refresh_token: null,
-        // provider-specific ids/tokens get filled later by adapters
+        encrypted_access_token: null, // must be nullable in DB
       })
       .select("id,provider,status,display_name,created_at")
       .maybeSingle();
 
     if (connErr) throw connErr;
 
-    // 2) Auto-create starter accounts IF user has none (avoid duplicates)
+    // 2️⃣ Seed starter accounts IF none exist
     const { count: existingCount, error: countErr } = await supabase
       .from("accounts")
       .select("id", { count: "exact", head: true })
@@ -199,6 +187,9 @@ export async function POST(req: Request) {
       seeded_accounts,
     });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message ?? "Connection create failed" }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, error: e?.message ?? "Connection create failed" },
+      { status: 500 }
+    );
   }
 }
