@@ -14,7 +14,6 @@ function supabaseServer(cookieStore: any) {
         get(name: string) {
           return cookieStore.get(name)?.value;
         },
-        // no-ops are fine for our read-mostly API routes
         set() {},
         remove() {},
       },
@@ -57,47 +56,48 @@ export async function POST(req: Request) {
     const provider = typeof body?.provider === "string" ? body.provider : "manual";
     const displayName = typeof body?.display_name === "string" ? body.display_name : null;
 
-    // Build insert payload in a way that survives schema differences (eg display_name not yet present)
+    // IMPORTANT: external_connections has NOT NULL columns (e.g. household_id, item_id, encrypted_access_token)
+    // For a placeholder/manual connection, we populate safe placeholders.
     const base: any = {
       user_id: user.id,
       household_id: householdId,
       provider,
       status: "active",
       metadata: { display_name: displayName },
-      // satisfy NOT NULL constraints for “placeholder” connections
       encrypted_access_token: "",
+
+      // ✅ required by your schema
+      item_id: crypto.randomUUID(),
     };
 
-    // If the column exists, nice-to-have
     if (displayName) base.display_name = displayName;
 
-    // Try insert; if we get a “column does not exist” for display_name, retry without it.
+    // Try insert; if display_name column doesn't exist, retry without it.
     let inserted: any = null;
 
-    {
-      const { data, error } = await supabase
-        .from("external_connections")
-        .insert(base)
-        .select("id,provider,status,created_at,updated_at")
-        .maybeSingle();
+    const first = await supabase
+      .from("external_connections")
+      .insert(base)
+      .select("id,provider,status,created_at,updated_at")
+      .maybeSingle();
 
-      if (!error) inserted = data;
-      else {
-        const msg = (error as any)?.message ?? "";
-        if (msg.includes('column "display_name"') || msg.includes("display_name")) {
-          delete base.display_name;
+    if (!first.error) {
+      inserted = first.data;
+    } else {
+      const msg = (first.error as any)?.message ?? "";
+      if (msg.includes("display_name")) {
+        delete base.display_name;
 
-          const retry = await supabase
-            .from("external_connections")
-            .insert(base)
-            .select("id,provider,status,created_at,updated_at")
-            .maybeSingle();
+        const retry = await supabase
+          .from("external_connections")
+          .insert(base)
+          .select("id,provider,status,created_at,updated_at")
+          .maybeSingle();
 
-          if (retry.error) throw retry.error;
-          inserted = retry.data;
-        } else {
-          throw error;
-        }
+        if (retry.error) throw retry.error;
+        inserted = retry.data;
+      } else {
+        throw first.error;
       }
     }
 
@@ -126,7 +126,6 @@ export async function GET() {
       return NextResponse.json({ ok: false, error: "User not linked to a household." }, { status: 400 });
     }
 
-    // Keep select conservative (avoid schema-cache/column mismatch surprises)
     const { data, error } = await supabase
       .from("external_connections")
       .select("id,provider,status,created_at,updated_at")
