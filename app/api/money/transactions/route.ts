@@ -1,8 +1,8 @@
 // app/api/money/transactions/route.ts
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import { createServerClient } from "@supabase/ssr";
+import { supabaseRoute } from "@/lib/supabaseRoute";
 
+export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 function intOr(v: string | null, fallback: number) {
@@ -10,32 +10,9 @@ function intOr(v: string | null, fallback: number) {
   return Number.isFinite(n) ? n : fallback;
 }
 
-async function supabaseServer() {
-  const cookieStore = await Promise.resolve(cookies() as any);
-
-  return createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return cookieStore.getAll?.() ?? [];
-        },
-        setAll(cookiesToSet) {
-          try {
-            cookiesToSet.forEach(({ name, value, options }: any) => cookieStore.set?.(name, value, options));
-          } catch {
-            // ignore
-          }
-        },
-      },
-    }
-  );
-}
-
 export async function GET(req: Request) {
   try {
-    const supabase = await supabaseServer();
+    const supabase = await supabaseRoute();
 
     const { data: auth, error: authErr } = await supabase.auth.getUser();
     if (authErr) throw authErr;
@@ -48,13 +25,16 @@ export async function GET(req: Request) {
     const from = url.searchParams.get("from");
     const to = url.searchParams.get("to");
     const pending = url.searchParams.get("pending");
-    const limit = Math.min(intOr(url.searchParams.get("limit"), 50), 200);
+    const limit = Math.min(intOr(url.searchParams.get("limit"), 50), 250);
 
     let q = supabase
       .from("transactions")
-      .select("id,user_id,date,description,merchant,category,pending,amount,amount_cents,currency,account_id,connection_id,provider,external_id,created_at,updated_at")
+      .select(
+        "id,user_id,date,description,merchant,category,pending,amount,amount_cents,currency,account_id,connection_id,provider,external_id,created_at,updated_at"
+      )
       .eq("user_id", uid)
       .order("date", { ascending: false })
+      .order("created_at", { ascending: false })
       .limit(limit);
 
     if (accountId) q = q.eq("account_id", accountId);

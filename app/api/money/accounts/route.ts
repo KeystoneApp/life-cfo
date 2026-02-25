@@ -1,39 +1,13 @@
 // app/api/money/accounts/route.ts
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import { createServerClient } from "@supabase/ssr";
+import { supabaseRoute } from "@/lib/supabaseRoute";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-async function supabaseServer() {
-  const cookieStore = await Promise.resolve(cookies() as any);
-
-  return createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return cookieStore.getAll?.() ?? [];
-        },
-        setAll(cookiesToSet) {
-          // Route Handlers generally can't persist cookies reliably without a Response object.
-          // For read-only requests, this is fine; keep it safe/no-op.
-          try {
-            cookiesToSet.forEach(({ name, value, options }: any) => cookieStore.set?.(name, value, options));
-          } catch {
-            // ignore
-          }
-        },
-      },
-    }
-  );
-}
-
 export async function GET() {
   try {
-    const supabase = await supabaseServer();
+    const supabase = supabaseRoute();
 
     const { data: auth, error: authErr } = await supabase.auth.getUser();
     if (authErr) throw authErr;
@@ -47,6 +21,7 @@ export async function GET() {
       .eq("user_id", uid)
       .eq("archived", false)
       .order("updated_at", { ascending: false })
+      .order("created_at", { ascending: false })
       .limit(200);
 
     if (error) throw error;

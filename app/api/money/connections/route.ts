@@ -1,35 +1,9 @@
 // app/api/money/connections/route.ts
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import { createServerClient } from "@supabase/ssr";
+import { supabaseRoute } from "@/lib/supabaseRoute";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-async function supabaseServer() {
-  const cookieStore = await cookies();
-
-  return createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return cookieStore.getAll();
-        },
-        setAll(cookiesToSet) {
-          try {
-            cookiesToSet.forEach(({ name, value, options }) => {
-              cookieStore.set(name, value, options);
-            });
-          } catch {
-            // no-op
-          }
-        },
-      },
-    }
-  );
-}
 
 async function getHouseholdIdForUser(supabase: any, userId: string): Promise<string | null> {
   const { data, error } = await supabase
@@ -50,7 +24,6 @@ function normalizeProvider(input: unknown): string {
 }
 
 function connectionStatusForProvider(provider: string): string {
-  // Manual connections are placeholders, not authenticated
   return provider === "manual" ? "manual" : "needs_auth";
 }
 
@@ -61,7 +34,7 @@ function defaultDisplayName(provider: string): string | null {
 
 export async function GET() {
   try {
-    const supabase = await supabaseServer();
+    const supabase = supabaseRoute();
 
     const {
       data: { user },
@@ -88,16 +61,13 @@ export async function GET() {
 
     return NextResponse.json({ ok: true, connections: data ?? [] });
   } catch (e: any) {
-    return NextResponse.json(
-      { ok: false, error: e?.message ?? "Connections fetch failed" },
-      { status: 500 }
-    );
+    return NextResponse.json({ ok: false, error: e?.message ?? "Connections fetch failed" }, { status: 500 });
   }
 }
 
 export async function POST(req: Request) {
   try {
-    const supabase = await supabaseServer();
+    const supabase = supabaseRoute();
 
     const {
       data: { user },
@@ -118,10 +88,7 @@ export async function POST(req: Request) {
     const provider = normalizeProvider(body?.provider);
     const status = connectionStatusForProvider(provider);
 
-    const display_name =
-      typeof body?.display_name === "string"
-        ? body.display_name
-        : defaultDisplayName(provider);
+    const display_name = typeof body?.display_name === "string" ? body.display_name : defaultDisplayName(provider);
 
     // 1️⃣ Create connection row (manual placeholder, no tokens yet)
     const { data: connection, error: connErr } = await supabase
@@ -174,7 +141,7 @@ export async function POST(req: Request) {
       const { data: created, error: seedErr } = await supabase
         .from("accounts")
         .insert(rows)
-        .select("id,name,provider,type,status,currency,current_balance_cents,updated_at");
+        .select("id,name,provider,type,status,currency,current_balance_cents,updated_at,created_at");
 
       if (seedErr) throw seedErr;
 
@@ -187,9 +154,6 @@ export async function POST(req: Request) {
       seeded_accounts,
     });
   } catch (e: any) {
-    return NextResponse.json(
-      { ok: false, error: e?.message ?? "Connection create failed" },
-      { status: 500 }
-    );
+    return NextResponse.json({ ok: false, error: e?.message ?? "Connection create failed" }, { status: 500 });
   }
 }
