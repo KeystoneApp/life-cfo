@@ -10,29 +10,38 @@ function intOr(v: string | null, fallback: number) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+async function supabaseServer() {
+  const cookieStore = await Promise.resolve(cookies() as any);
+
+  return createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        getAll() {
+          return cookieStore.getAll?.() ?? [];
+        },
+        setAll(cookiesToSet) {
+          try {
+            cookiesToSet.forEach(({ name, value, options }: any) => cookieStore.set?.(name, value, options));
+          } catch {
+            // ignore
+          }
+        },
+      },
+    }
+  );
+}
+
 export async function GET(req: Request) {
   try {
-   const cookieStore = await cookies();
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          get(name) {
-            return cookieStore.get(name)?.value;
-          },
-        },
-      }
-    );
+    const supabase = await supabaseServer();
 
-    const {
-      data: { user },
-      error: userErr,
-    } = await supabase.auth.getUser();
+    const { data: auth, error: authErr } = await supabase.auth.getUser();
+    if (authErr) throw authErr;
 
-    if (userErr || !user?.id) {
-      return NextResponse.json({ ok: false, error: "Not signed in." }, { status: 401 });
-    }
+    const uid = auth?.user?.id;
+    if (!uid) return NextResponse.json({ ok: false, error: "Not signed in." }, { status: 401 });
 
     const url = new URL(req.url);
     const accountId = url.searchParams.get("account_id");
@@ -43,8 +52,8 @@ export async function GET(req: Request) {
 
     let q = supabase
       .from("transactions")
-      .select("*")
-      .eq("user_id", user.id)
+      .select("id,user_id,date,description,merchant,category,pending,amount,amount_cents,currency,account_id,connection_id,provider,external_id,created_at,updated_at")
+      .eq("user_id", uid)
       .order("date", { ascending: false })
       .limit(limit);
 
