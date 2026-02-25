@@ -14,6 +14,13 @@ type Connection = {
   created_at: string | null;
 };
 
+function softDate(d: string | null) {
+  if (!d) return "";
+  const parsed = Date.parse(d);
+  if (!Number.isFinite(parsed)) return "";
+  return new Date(parsed).toLocaleDateString();
+}
+
 export default function ConnectionsPage() {
   const router = useRouter();
   const { toast } = useToast();
@@ -25,7 +32,7 @@ export default function ConnectionsPage() {
   async function load() {
     setLoading(true);
     try {
-      const res = await fetch("/api/money/connections");
+      const res = await fetch("/api/money/connections", { cache: "no-store" });
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error || "Load failed");
       setItems(json.connections ?? []);
@@ -53,7 +60,7 @@ export default function ConnectionsPage() {
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error || "Create failed");
 
-      toast({ title: "Connection added", description: "You can refine it anytime." });
+      toast({ title: "Connection added" });
       await load();
     } catch (e: any) {
       toast({ title: "Couldn’t create", description: e?.message });
@@ -63,29 +70,61 @@ export default function ConnectionsPage() {
   }
 
   function statusChip(status: string) {
-    const base = "border text-xs rounded-full px-3 py-1";
+    const base = "text-xs rounded-full px-3 py-1 border";
 
     if (status === "manual")
-      return <span className={`${base} border-zinc-200 bg-zinc-50 text-zinc-700`}>Manual</span>;
+      return (
+        <span className={`${base} border-zinc-200 bg-zinc-50 text-zinc-700`}>
+          Manual
+        </span>
+      );
 
     if (status === "needs_auth")
-      return <span className={`${base} border-amber-200 bg-amber-50 text-amber-700`}>Needs auth</span>;
+      return (
+        <span className={`${base} border-amber-200 bg-amber-50 text-amber-700`}>
+          Needs attention
+        </span>
+      );
 
     if (status === "error")
-      return <span className={`${base} border-rose-200 bg-rose-50 text-rose-700`}>Attention</span>;
+      return (
+        <span className={`${base} border-rose-200 bg-rose-50 text-rose-700`}>
+          Issue
+        </span>
+      );
 
-    return <span className={`${base} border-emerald-200 bg-emerald-50 text-emerald-700`}>Active</span>;
+    return (
+      <span className={`${base} border-emerald-200 bg-emerald-50 text-emerald-700`}>
+        Active
+      </span>
+    );
+  }
+
+  function syncLine(c: Connection) {
+    if (c.last_sync_at) {
+      return `Synced ${softDate(c.last_sync_at)}`;
+    }
+
+    if (c.status === "manual") {
+      return "Manual entry";
+    }
+
+    if (c.status === "needs_auth") {
+      return "Awaiting connection";
+    }
+
+    if (c.status === "error") {
+      return "Needs review";
+    }
+
+    return "";
   }
 
   return (
     <Page
       title="Connections"
       subtitle="Where your accounts come from."
-      right={
-        <Chip onClick={() => router.push("/money")}>
-          Back to Money
-        </Chip>
-      }
+      right={<Chip onClick={() => router.push("/money")}>Back to Money</Chip>}
     >
       <div className="mx-auto w-full max-w-[760px] space-y-6">
         <Card className="border-zinc-200 bg-white">
@@ -96,7 +135,7 @@ export default function ConnectionsPage() {
                   Data sources
                 </div>
                 <div className="text-xs text-zinc-500">
-                  You can link banks later. For now, manual works perfectly.
+                  You can link banks later. Manual works for now.
                 </div>
               </div>
 
@@ -127,10 +166,16 @@ export default function ConnectionsPage() {
                         <div className="text-sm font-medium text-zinc-900">
                           {c.display_name || c.provider}
                         </div>
+
                         <div className="mt-1 text-xs text-zinc-500">
-                          {c.created_at
-                            ? `Added ${new Date(c.created_at).toLocaleDateString()}`
-                            : ""}
+                          {[
+                            syncLine(c),
+                            c.created_at
+                              ? `Added ${softDate(c.created_at)}`
+                              : null,
+                          ]
+                            .filter(Boolean)
+                            .join(" • ")}
                         </div>
                       </div>
 
