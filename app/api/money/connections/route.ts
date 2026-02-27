@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 const COOKIE_NAME = "lifecfo_household";
 
 async function resolveHouseholdId(supabase: any, userId: string): Promise<string | null> {
-  const cookieStore = cookies();
+  const cookieStore = await cookies(); // ✅ FIXED
   const cookieValue = cookieStore.get(COOKIE_NAME)?.value ?? null;
 
   if (cookieValue) {
