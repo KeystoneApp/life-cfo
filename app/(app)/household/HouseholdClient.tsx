@@ -57,10 +57,16 @@ export default function HouseholdClient() {
 
   const [deleteConfirm, setDeleteConfirm] = useState<DeleteConfirm>({ open: false });
 
+  const [showAdvanced, setShowAdvanced] = useState(false);
+
   const active = useMemo(() => {
     if (!activeHouseholdId) return null;
     return households.find((h) => h.id === activeHouseholdId) ?? null;
   }, [households, activeHouseholdId]);
+
+  const ownersCount = useMemo(() => {
+    return members.filter((m) => (m.role ?? "").toLowerCase() === "owner").length;
+  }, [members]);
 
   const load = async () => {
     setLoading(true);
@@ -262,11 +268,21 @@ export default function HouseholdClient() {
               <div className="space-y-1">
                 <div className="text-sm text-zinc-900">{active.name}</div>
                 <div className="text-xs text-zinc-500">Your role: {active.role}</div>
-                <div className="text-xs text-zinc-500">
-                  <button onClick={() => void copyText(active.id, "Household ID copied")} className="underline underline-offset-2">
-                    Copy Household ID
-                  </button>
+
+                <div className="pt-1">
+                  <Chip onClick={() => setShowAdvanced((v) => !v)}>{showAdvanced ? "Hide advanced" : "Advanced"}</Chip>
                 </div>
+
+                {showAdvanced ? (
+                  <div className="text-xs text-zinc-500">
+                    <button
+                      onClick={() => void copyText(active.id, "Household ID copied")}
+                      className="underline underline-offset-2"
+                    >
+                      Copy household ID
+                    </button>
+                  </div>
+                ) : null}
               </div>
             )}
           </CardContent>
@@ -288,38 +304,49 @@ export default function HouseholdClient() {
               <div className="grid gap-2">
                 {members.map((m) => {
                   const label = m.label ?? `Member ${maskId(m.user_id)}`;
+                  const isOnlyOwnerMe = !!m.is_me && (m.role ?? "").toLowerCase() === "owner" && ownersCount <= 1;
+
                   return (
                     <div
                       key={m.user_id}
-                      className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-zinc-200 px-3 py-2"
+                      className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-zinc-200 px-3 py-2"
                     >
                       <div className="min-w-0">
                         <div className="truncate text-sm font-medium text-zinc-900">{label}</div>
                         <div className="text-xs text-zinc-500">{m.role}</div>
-                        <div className="text-xs text-zinc-500">
-                          <button
-                            onClick={() => void copyText(m.user_id, "Member ID copied")}
-                            className="underline underline-offset-2"
-                          >
-                            Copy member ID
-                          </button>
-                        </div>
+                        {isOnlyOwnerMe ? <div className="text-xs text-zinc-500">You’re the only owner.</div> : null}
+
+                        {showAdvanced ? (
+                          <div className="text-xs text-zinc-500">
+                            <button
+                              onClick={() => void copyText(m.user_id, "Member ID copied")}
+                              className="underline underline-offset-2"
+                            >
+                              Copy member ID
+                            </button>
+                          </div>
+                        ) : null}
                       </div>
 
                       {allowMemberEdits ? (
                         <div className="flex items-center gap-2">
-                          <select
-                            className="rounded-xl border border-zinc-200 bg-white px-2 py-2 text-sm text-zinc-800"
-                            value={m.role}
-                            onChange={(e) => void updateRole(m.user_id, e.target.value)}
-                            disabled={m.is_me && m.role === "owner" && members.filter((x) => x.role === "owner").length <= 1}
-                          >
-                            <option value="owner">owner</option>
-                            <option value="editor">editor</option>
-                            <option value="viewer">viewer</option>
-                          </select>
+                          {isOnlyOwnerMe ? (
+                            <span className="inline-flex items-center rounded-full border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-800">
+                              Owner
+                            </span>
+                          ) : (
+                            <select
+                              className="rounded-xl border border-zinc-200 bg-white px-2 py-2 text-sm text-zinc-800"
+                              value={m.role}
+                              onChange={(e) => void updateRole(m.user_id, e.target.value)}
+                            >
+                              <option value="owner">owner</option>
+                              <option value="editor">editor</option>
+                              <option value="viewer">viewer</option>
+                            </select>
+                          )}
 
-                          <Chip onClick={() => requestRemove(m.user_id, label)} disabled={m.is_me && m.role === "owner" && members.filter((x) => x.role === "owner").length <= 1}>
+                          <Chip onClick={() => requestRemove(m.user_id, label)} disabled={isOnlyOwnerMe}>
                             Remove
                           </Chip>
                         </div>
@@ -345,7 +372,10 @@ export default function HouseholdClient() {
 
                 <div className="mt-4 flex items-center justify-end gap-2">
                   <Chip onClick={() => setDeleteConfirm({ open: false })}>Cancel</Chip>
-                  <Chip onClick={() => void performRemove()} className="border-zinc-900 bg-zinc-900 text-white hover:bg-zinc-800">
+                  <Chip
+                    onClick={() => void performRemove()}
+                    className="border-zinc-900 bg-zinc-900 text-white hover:bg-zinc-800"
+                  >
                     Remove
                   </Chip>
                 </div>
