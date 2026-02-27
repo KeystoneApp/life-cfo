@@ -5,53 +5,73 @@ import { supabaseRoute } from "@/lib/supabaseRoute";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-async function getDefaultHouseholdIdForUser(supabase: any, userId: string): Promise<string | null> {
+async function getMemberRole(supabase: any, userId: string, householdId: string): Promise<string | null> {
   const { data, error } = await supabase
+    .from("household_members")
+    .select("role")
+    .eq("user_id", userId)
+    .eq("household_id", householdId)
+    .limit(1);
+
+  if (error) throw error;
+  return (data?.[0]?.role as string | undefined) ?? null;
+}
+
+async function resolveHouseholdId(supabase: any, userId: string, requested?: string | null) {
+  // 1) explicit request (persist)
+  if (requested) {
+    const role = await getMemberRole(supabase, userId, requested);
+    if (role) {
+      await supabase
+        .from("household_preferences")
+        .upsert({ user_id: userId, active_household_id: requested }, { onConflict: "user_id" });
+      return requested;
+    }
+  }
+
+  // 2) preference
+  const { data: pref, error: prefErr } = await supabase
+    .from("household_preferences")
+    .select("active_household_id")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (prefErr) throw prefErr;
+
+  const preferred = pref?.active_household_id as string | undefined;
+  if (preferred) {
+    const role = await getMemberRole(supabase, userId, preferred);
+    if (role) return preferred;
+  }
+
+  // 3) fallback
+  const { data: hm, error: hmErr } = await supabase
     .from("household_members")
     .select("household_id")
     .eq("user_id", userId)
     .order("created_at", { ascending: true })
     .limit(1);
 
-  if (error) throw error;
-  return data?.[0]?.household_id ?? null;
+  if (hmErr) throw hmErr;
+  return (hm?.[0]?.household_id as string | undefined) ?? null;
 }
 
-async function requireOwnerOrEditor(supabase: any, householdId: string, userId: string) {
-  const { data, error } = await supabase
-    .from("household_members")
-    .select("role")
-    .eq("household_id", householdId)
-    .eq("user_id", userId)
-    .in("role", ["owner", "editor"])
-    .maybeSingle();
-
-  if (error) throw error;
-  if (!data?.role) {
-    return { ok: false as const, error: "You don’t have permission to do that." };
-  }
-  return { ok: true as const };
-}
-
-function normalizeProvider(input: unknown): "manual" | "plaid" | "basiq" {
+function normalizeProvider(input: unknown): string {
   if (typeof input !== "string") return "manual";
   const p = input.trim().toLowerCase();
-  if (p === "plaid") return "plaid";
-  if (p === "basiq") return "basiq";
-  return "manual";
+  return p || "manual";
 }
 
 function connectionStatusForProvider(provider: string): string {
-  // manual = placeholder
   return provider === "manual" ? "manual" : "needs_auth";
 }
 
-function defaultDisplayName(provider: string): string {
-  if (provider === "manual") return "Manual connection";
+function defaultDisplayName(provider: string): string | null {
+  if (provider === "manual") return "Manual";
   return provider.toUpperCase();
 }
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
     const supabase = await supabaseRoute();
 
@@ -64,12 +84,14 @@ export async function GET() {
       return NextResponse.json({ ok: false, error: "Not signed in." }, { status: 401 });
     }
 
-    const householdId = await getDefaultHouseholdIdForUser(supabase, user.id);
+    const url = new URL(req.url);
+    const requestedHouseholdId = url.searchParams.get("household_id");
+
+    const householdId = await resolveHouseholdId(supabase, user.id, requestedHouseholdId);
     if (!householdId) {
       return NextResponse.json({ ok: false, error: "User not linked to a household." }, { status: 400 });
     }
 
-    // Household scoped (RLS also applies)
     const { data, error } = await supabase
       .from("external_connections")
       .select("id,household_id,provider,status,provider_connection_id,display_name,last_sync_at,created_at,updated_at")
@@ -78,7 +100,7 @@ export async function GET() {
 
     if (error) throw error;
 
-    return NextResponse.json({ ok: true, connections: data ?? [] });
+    return NextResponse.json({ ok: true, household_id: householdId, connections: data ?? [] });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message ?? "Connections fetch failed" }, { status: 500 });
   }
@@ -97,47 +119,44 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: false, error: "Not signed in." }, { status: 401 });
     }
 
-    const householdId = await getDefaultHouseholdIdForUser(supabase, user.id);
+    const body = await req.json().catch(() => ({}));
+
+    const requestedHouseholdId = typeof body?.household_id === "string" ? body.household_id : null;
+    const householdId = await resolveHouseholdId(supabase, user.id, requestedHouseholdId);
+
     if (!householdId) {
       return NextResponse.json({ ok: false, error: "User not linked to a household." }, { status: 400 });
     }
 
-    // ✅ enforce owner/editor at API level (RLS should also enforce)
-    const perm = await requireOwnerOrEditor(supabase, householdId, user.id);
-    if (!perm.ok) {
-      return NextResponse.json({ ok: false, error: perm.error }, { status: 403 });
-    }
+    const role = await getMemberRole(supabase, user.id, householdId);
+    if (!role) return NextResponse.json({ ok: false, error: "Not a member of that household." }, { status: 403 });
 
-    const body = await req.json().catch(() => ({}));
+    // enforce: only owner/editor can create connections
+    if (role !== "owner" && role !== "editor") {
+      return NextResponse.json({ ok: false, error: "You don’t have permission to connect accounts for this household." }, { status: 403 });
+    }
 
     const provider = normalizeProvider(body?.provider);
     const status = connectionStatusForProvider(provider);
+    const display_name = typeof body?.display_name === "string" ? body.display_name : defaultDisplayName(provider);
 
-    const display_name =
-      typeof body?.display_name === "string" && body.display_name.trim()
-        ? body.display_name.trim()
-        : defaultDisplayName(provider);
-
-    // 1) create connection row (placeholder for manual; provider link later)
     const { data: connection, error: connErr } = await supabase
       .from("external_connections")
       .insert({
+        user_id: user.id,
         household_id: householdId,
-        user_id: user.id, // keep for audit/creator; NOT the access boundary
         provider,
         status,
         display_name,
         provider_connection_id: null,
-        encrypted_access_token: null, // must be nullable in DB
-        item_id: null,
-        metadata: null,
+        encrypted_access_token: null,
       })
       .select("id,household_id,provider,status,display_name,created_at")
       .maybeSingle();
 
     if (connErr) throw connErr;
 
-    // 2) seed starter accounts IF none exist for this household
+    // Seed accounts only if household has no accounts yet (household-scoped!)
     const { count: existingCount, error: countErr } = await supabase
       .from("accounts")
       .select("id", { count: "exact", head: true })
@@ -159,7 +178,7 @@ export async function POST(req: Request) {
 
       const rows = seed.map((s) => ({
         household_id: householdId,
-        user_id: user.id, // creator/audit only
+        user_id: user.id,
         provider,
         name: s.name,
         type: s.type,
@@ -167,20 +186,18 @@ export async function POST(req: Request) {
         currency,
         current_balance_cents: 0,
         archived: false,
-        connection_id: connection?.id ?? null,
       }));
 
       const { data: created, error: seedErr } = await supabase
         .from("accounts")
         .insert(rows)
-        .select("id,household_id,name,provider,type,status,currency,current_balance_cents,updated_at,created_at");
+        .select("id,name,provider,type,status,currency,current_balance_cents,updated_at,created_at");
 
       if (seedErr) throw seedErr;
-
       seeded_accounts = created ?? [];
     }
 
-    return NextResponse.json({ ok: true, connection, seeded_accounts });
+    return NextResponse.json({ ok: true, household_id: householdId, connection, seeded_accounts });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message ?? "Connection create failed" }, { status: 500 });
   }
