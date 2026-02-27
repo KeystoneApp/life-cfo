@@ -16,11 +16,14 @@ export async function GET(req: Request) {
 
     const {
       data: { user },
-      error: userErr,
+      error: authErr,
     } = await supabase.auth.getUser();
 
-    if (userErr || !user?.id) {
-      return NextResponse.json({ ok: false, error: "Not signed in." }, { status: 401 });
+    if (authErr || !user) {
+      return NextResponse.json(
+        { ok: false, error: "Not signed in." },
+        { status: 401 }
+      );
     }
 
     const url = new URL(req.url);
@@ -33,9 +36,8 @@ export async function GET(req: Request) {
     let q = supabase
       .from("transactions")
       .select(
-        "id,user_id,date,description,merchant,category,pending,amount,amount_cents,currency,account_id,connection_id,provider,external_id,created_at,updated_at"
+        "id,date,description,merchant,category,pending,amount,amount_cents,currency,account_id,connection_id,provider,external_id,created_at,updated_at"
       )
-      .eq("user_id", user.id)
       .order("date", { ascending: false })
       .order("created_at", { ascending: false })
       .limit(limit);
@@ -51,6 +53,9 @@ export async function GET(req: Request) {
 
     return NextResponse.json({ ok: true, transactions: data ?? [] });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message ?? "Transactions fetch failed" }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, error: e?.message ?? "Transactions fetch failed" },
+      { status: 500 }
+    );
   }
 }

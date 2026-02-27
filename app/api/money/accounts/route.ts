@@ -9,19 +9,24 @@ export async function GET() {
   try {
     const supabase = await supabaseRoute();
 
+    // Just confirm user is signed in (RLS handles visibility)
     const {
       data: { user },
-      error: userErr,
+      error: authErr,
     } = await supabase.auth.getUser();
 
-    if (userErr || !user?.id) {
-      return NextResponse.json({ ok: false, error: "Not signed in." }, { status: 401 });
+    if (authErr || !user) {
+      return NextResponse.json(
+        { ok: false, error: "Not signed in." },
+        { status: 401 }
+      );
     }
 
     const { data, error } = await supabase
       .from("accounts")
-      .select("id,user_id,name,provider,type,status,archived,current_balance_cents,currency,updated_at,created_at")
-      .eq("user_id", user.id)
+      .select(
+        "id,household_id,name,provider,type,status,archived,current_balance_cents,currency,updated_at,created_at"
+      )
       .eq("archived", false)
       .order("updated_at", { ascending: false })
       .order("created_at", { ascending: false })
@@ -31,6 +36,9 @@ export async function GET() {
 
     return NextResponse.json({ ok: true, accounts: data ?? [] });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message ?? "Accounts fetch failed" }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, error: e?.message ?? "Accounts fetch failed" },
+      { status: 500 }
+    );
   }
 }
