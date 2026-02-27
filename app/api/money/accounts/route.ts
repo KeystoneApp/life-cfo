@@ -8,8 +8,11 @@ export const dynamic = "force-dynamic";
 
 const COOKIE_NAME = "lifecfo_household";
 
-async function resolveHouseholdId(supabase: any, userId: string): Promise<string | null> {
-  const cookieStore = cookies();
+async function resolveHouseholdId(
+  supabase: any,
+  userId: string
+): Promise<string | null> {
+  const cookieStore = await cookies(); // ✅ FIXED
   const cookieValue = cookieStore.get(COOKIE_NAME)?.value ?? null;
 
   if (cookieValue) {
@@ -43,14 +46,27 @@ export async function GET() {
       error: userErr,
     } = await supabase.auth.getUser();
 
-    if (userErr || !user?.id) return NextResponse.json({ ok: false, error: "Not signed in." }, { status: 401 });
+    if (userErr || !user?.id) {
+      return NextResponse.json(
+        { ok: false, error: "Not signed in." },
+        { status: 401 }
+      );
+    }
 
     const householdId = await resolveHouseholdId(supabase, user.id);
-    if (!householdId) return NextResponse.json({ ok: false, error: "User not linked to a household." }, { status: 400 });
+
+    if (!householdId) {
+      return NextResponse.json(
+        { ok: false, error: "User not linked to a household." },
+        { status: 400 }
+      );
+    }
 
     const { data, error } = await supabase
       .from("accounts")
-      .select("id,household_id,name,provider,type,status,archived,current_balance_cents,currency,updated_at,created_at")
+      .select(
+        "id,household_id,name,provider,type,status,archived,current_balance_cents,currency,updated_at,created_at"
+      )
       .eq("household_id", householdId)
       .eq("archived", false)
       .order("updated_at", { ascending: false })
@@ -59,8 +75,15 @@ export async function GET() {
 
     if (error) throw error;
 
-    return NextResponse.json({ ok: true, household_id: householdId, accounts: data ?? [] });
+    return NextResponse.json({
+      ok: true,
+      household_id: householdId,
+      accounts: data ?? [],
+    });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message ?? "Accounts fetch failed" }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, error: e?.message ?? "Accounts fetch failed" },
+      { status: 500 }
+    );
   }
 }
