@@ -6,7 +6,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 type Role = "owner" | "editor" | "viewer";
-const isRole = (v: unknown): v is Role => v === "owner" || v === "editor" || v === "viewer";
+const isRole = (v: unknown): v is Role =>
+  v === "owner" || v === "editor" || v === "viewer";
 
 export async function GET(req: Request) {
   try {
@@ -18,17 +19,23 @@ export async function GET(req: Request) {
     } = await supabase.auth.getUser();
 
     if (userErr || !user?.id) {
-      return NextResponse.json({ ok: false, error: "Not signed in." }, { status: 401 });
+      return NextResponse.json(
+        { ok: false, error: "Not signed in." },
+        { status: 401 }
+      );
     }
 
     const url = new URL(req.url);
     const household_id = url.searchParams.get("household_id");
 
     if (!household_id) {
-      return NextResponse.json({ ok: false, error: "Missing household_id." }, { status: 400 });
+      return NextResponse.json(
+        { ok: false, error: "Missing household_id." },
+        { status: 400 }
+      );
     }
 
-    const { data, error } = await supabase
+    const { data: members, error } = await supabase
       .from("household_members")
       .select("user_id, role, created_at")
       .eq("household_id", household_id)
@@ -36,9 +43,27 @@ export async function GET(req: Request) {
 
     if (error) throw error;
 
-    return NextResponse.json({ ok: true, members: data ?? [] });
+    // ⚠️ Requires service role key in supabaseRoute()
+    const enriched = await Promise.all(
+      (members ?? []).map(async (m) => {
+        const { data: authUser } =
+          await supabase.auth.admin.getUserById(m.user_id);
+
+        return {
+          user_id: m.user_id,
+          role: m.role,
+          created_at: m.created_at,
+          email: authUser?.user?.email ?? "Unknown",
+        };
+      })
+    );
+
+    return NextResponse.json({ ok: true, members: enriched });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message ?? "Members fetch failed" }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, error: e?.message ?? "Members fetch failed" },
+      { status: 500 }
+    );
   }
 }
 
@@ -52,19 +77,36 @@ export async function PATCH(req: Request) {
     } = await supabase.auth.getUser();
 
     if (userErr || !user?.id) {
-      return NextResponse.json({ ok: false, error: "Not signed in." }, { status: 401 });
+      return NextResponse.json(
+        { ok: false, error: "Not signed in." },
+        { status: 401 }
+      );
     }
 
     const body = await req.json().catch(() => ({}));
-    const household_id = typeof body?.household_id === "string" ? body.household_id : null;
-    const target_user_id = typeof body?.user_id === "string" ? body.user_id : null;
+    const household_id =
+      typeof body?.household_id === "string" ? body.household_id : null;
+    const target_user_id =
+      typeof body?.user_id === "string" ? body.user_id : null;
     const role = body?.role;
 
-    if (!household_id) return NextResponse.json({ ok: false, error: "Missing household_id." }, { status: 400 });
-    if (!target_user_id) return NextResponse.json({ ok: false, error: "Missing user_id." }, { status: 400 });
-    if (!isRole(role)) return NextResponse.json({ ok: false, error: "Invalid role." }, { status: 400 });
+    if (!household_id)
+      return NextResponse.json(
+        { ok: false, error: "Missing household_id." },
+        { status: 400 }
+      );
+    if (!target_user_id)
+      return NextResponse.json(
+        { ok: false, error: "Missing user_id." },
+        { status: 400 }
+      );
+    if (!isRole(role))
+      return NextResponse.json(
+        { ok: false, error: "Invalid role." },
+        { status: 400 }
+      );
 
-    // Guard: do not demote the last owner
+    // Prevent demoting last owner
     if (role !== "owner") {
       const { data: owners, error: ownersErr } = await supabase
         .from("household_members")
@@ -75,10 +117,14 @@ export async function PATCH(req: Request) {
       if (ownersErr) throw ownersErr;
 
       const ownerCount = owners?.length ?? 0;
-      const isTargetOwner = owners?.some((o) => o.user_id === target_user_id) ?? false;
+      const isTargetOwner =
+        owners?.some((o) => o.user_id === target_user_id) ?? false;
 
       if (isTargetOwner && ownerCount <= 1) {
-        return NextResponse.json({ ok: false, error: "cannot_demote_last_owner" }, { status: 400 });
+        return NextResponse.json(
+          { ok: false, error: "cannot_demote_last_owner" },
+          { status: 400 }
+        );
       }
     }
 
@@ -92,7 +138,10 @@ export async function PATCH(req: Request) {
 
     return NextResponse.json({ ok: true });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message ?? "Role update failed" }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, error: e?.message ?? "Role update failed" },
+      { status: 500 }
+    );
   }
 }
 
@@ -106,17 +155,30 @@ export async function DELETE(req: Request) {
     } = await supabase.auth.getUser();
 
     if (userErr || !user?.id) {
-      return NextResponse.json({ ok: false, error: "Not signed in." }, { status: 401 });
+      return NextResponse.json(
+        { ok: false, error: "Not signed in." },
+        { status: 401 }
+      );
     }
 
     const body = await req.json().catch(() => ({}));
-    const household_id = typeof body?.household_id === "string" ? body.household_id : null;
-    const target_user_id = typeof body?.user_id === "string" ? body.user_id : null;
+    const household_id =
+      typeof body?.household_id === "string" ? body.household_id : null;
+    const target_user_id =
+      typeof body?.user_id === "string" ? body.user_id : null;
 
-    if (!household_id) return NextResponse.json({ ok: false, error: "Missing household_id." }, { status: 400 });
-    if (!target_user_id) return NextResponse.json({ ok: false, error: "Missing user_id." }, { status: 400 });
+    if (!household_id)
+      return NextResponse.json(
+        { ok: false, error: "Missing household_id." },
+        { status: 400 }
+      );
+    if (!target_user_id)
+      return NextResponse.json(
+        { ok: false, error: "Missing user_id." },
+        { status: 400 }
+      );
 
-    // Guard: do not remove the last owner
+    // Prevent removing last owner
     const { data: owners, error: ownersErr } = await supabase
       .from("household_members")
       .select("user_id")
@@ -126,10 +188,14 @@ export async function DELETE(req: Request) {
     if (ownersErr) throw ownersErr;
 
     const ownerCount = owners?.length ?? 0;
-    const isTargetOwner = owners?.some((o) => o.user_id === target_user_id) ?? false;
+    const isTargetOwner =
+      owners?.some((o) => o.user_id === target_user_id) ?? false;
 
     if (isTargetOwner && ownerCount <= 1) {
-      return NextResponse.json({ ok: false, error: "cannot_remove_last_owner" }, { status: 400 });
+      return NextResponse.json(
+        { ok: false, error: "cannot_remove_last_owner" },
+        { status: 400 }
+      );
     }
 
     const { error } = await supabase
@@ -142,6 +208,9 @@ export async function DELETE(req: Request) {
 
     return NextResponse.json({ ok: true });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message ?? "Remove failed" }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, error: e?.message ?? "Remove failed" },
+      { status: 500 }
+    );
   }
 }
