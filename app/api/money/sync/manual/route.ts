@@ -1,10 +1,39 @@
 // app/api/money/sync/manual/route.ts
 import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
 import { supabaseRoute } from "@/lib/supabaseRoute";
 import crypto from "crypto";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+const COOKIE_NAME = "lifecfo_household";
+
+async function resolveHouseholdId(supabase: any, userId: string): Promise<string | null> {
+  const cookieStore = await cookies();
+  const cookieValue = cookieStore.get(COOKIE_NAME)?.value ?? null;
+
+  if (cookieValue) {
+    const { data, error } = await supabase
+      .from("household_members")
+      .select("id")
+      .eq("user_id", userId)
+      .eq("household_id", cookieValue)
+      .limit(1);
+
+    if (!error && data?.length) return cookieValue;
+  }
+
+  const { data, error } = await supabase
+    .from("household_members")
+    .select("household_id")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: true })
+    .limit(1);
+
+  if (error) throw error;
+  return data?.[0]?.household_id ?? null;
+}
 
 function hashExternalId(parts: Array<string | null | undefined>) {
   const raw = parts.map((p) => (p ?? "").trim()).join("|");
@@ -15,24 +44,42 @@ export async function POST(req: Request) {
   try {
     const supabase = await supabaseRoute();
 
-    const { data: auth, error: authErr } = await supabase.auth.getUser();
-    if (authErr) throw authErr;
+    const {
+      data: { user },
+      error: authErr,
+    } = await supabase.auth.getUser();
 
-    const uid = auth?.user?.id;
-    if (!uid) return NextResponse.json({ ok: false, error: "Not signed in." }, { status: 401 });
+    if (authErr || !user?.id) return NextResponse.json({ ok: false, error: "Not signed in." }, { status: 401 });
+
+    const uid = user.id;
+
+    const householdId = await resolveHouseholdId(supabase, uid);
+    if (!householdId) return NextResponse.json({ ok: false, error: "User not linked to a household." }, { status: 400 });
 
     const body = await req.json().catch(() => ({}));
     const provider = typeof body?.provider === "string" ? body.provider : "manual";
     const currency = typeof body?.currency === "string" ? body.currency : "AUD";
 
-    // Optional: if you want to tie this to an existing connection row
+    // Optional: tie to an existing connection row (must be in this household)
     const connectionId = typeof body?.connection_id === "string" ? body.connection_id : null;
 
-    // 1) Ensure some starter accounts exist (safe upsert by id is fine, but here we "insert if none")
+    if (connectionId) {
+      const { data: c, error: cErr } = await supabase
+        .from("external_connections")
+        .select("id")
+        .eq("id", connectionId)
+        .eq("household_id", householdId)
+        .limit(1);
+
+      if (cErr) throw cErr;
+      if (!c?.length) return NextResponse.json({ ok: false, error: "Connection not found for this household." }, { status: 404 });
+    }
+
+    // 1) Ensure some starter accounts exist
     const { count: existingCount, error: countErr } = await supabase
       .from("accounts")
       .select("id", { count: "exact", head: true })
-      .eq("user_id", uid)
+      .eq("household_id", householdId)
       .eq("archived", false);
 
     if (countErr) throw countErr;
@@ -50,7 +97,7 @@ export async function POST(req: Request) {
         .from("accounts")
         .insert(
           seedAccounts.map((a) => ({
-            user_id: uid,
+            household_id: householdId,
             provider,
             name: a.name,
             type: a.type,
@@ -68,7 +115,7 @@ export async function POST(req: Request) {
       const { data: acctRows, error: acctErr } = await supabase
         .from("accounts")
         .select("id")
-        .eq("user_id", uid)
+        .eq("household_id", householdId)
         .eq("archived", false)
         .order("updated_at", { ascending: false })
         .limit(5);
@@ -84,7 +131,6 @@ export async function POST(req: Request) {
     const dd = String(now.getDate()).padStart(2, "0");
     const today = `${yyyy}-${mm}-${dd}`;
 
-    // If caller provided transactions, use them; otherwise seed a small set.
     const incoming = Array.isArray(body?.transactions) ? body.transactions : null;
 
     const txSeed =
@@ -113,13 +159,11 @@ export async function POST(req: Request) {
 
       const acctId = typeof t?.account_id === "string" ? t.account_id : defaultAccountId;
 
-      // IMPORTANT: external_id must be stable so re-sync doesn't duplicate.
-      // If a provider gives you an ID later, you’ll use that instead.
       const external_id =
         typeof t?.external_id === "string" && t.external_id.trim()
           ? t.external_id.trim()
           : hashExternalId([
-              uid,
+              householdId,
               provider,
               acctId ?? "",
               date,
@@ -133,7 +177,7 @@ export async function POST(req: Request) {
             ]);
 
       return {
-        user_id: uid,
+        household_id: householdId,
         provider,
         external_id,
         connection_id: connectionId,
@@ -144,16 +188,16 @@ export async function POST(req: Request) {
         category,
         pending,
         amount_cents,
-        amount: amount_cents / 100, // keep numeric in sync with cents
+        amount: amount_cents / 100,
         currency,
         updated_at: new Date().toISOString(),
       };
     });
 
-    // 3) Upsert with dedupe key (NO DUPES)
+    // 3) Upsert with household dedupe key (NO DUPES)
     const { data: upserted, error: upErr } = await supabase
       .from("transactions")
-      .upsert(rows as any, { onConflict: "user_id,provider,external_id" })
+      .upsert(rows as any, { onConflict: "household_id,provider,external_id" })
       .select("id,external_id");
 
     if (upErr) throw upErr;
@@ -164,14 +208,14 @@ export async function POST(req: Request) {
         .from("external_connections")
         .update({ last_sync_at: new Date().toISOString(), updated_at: new Date().toISOString() })
         .eq("id", connectionId)
-        .eq("user_id", uid);
-      // ignore errors here—sync data is the priority
+        .eq("household_id", householdId);
     }
 
     return NextResponse.json({
       ok: true,
+      household_id: householdId,
       inserted_or_updated: upserted?.length ?? 0,
-      dedupe_key: "user_id,provider,external_id",
+      dedupe_key: "household_id,provider,external_id",
     });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message ?? "Manual sync failed" }, { status: 500 });
