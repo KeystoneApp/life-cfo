@@ -13,6 +13,7 @@ type Cadence = "weekly" | "fortnightly" | "monthly" | "yearly";
 type RecurringBill = {
   id: string;
   user_id: string;
+  household_id: string;
 
   name: string;
   amount_cents: number;
@@ -31,6 +32,8 @@ type RecurringBill = {
 type BillPayment = {
   id: string;
   user_id: string;
+  household_id: string;
+
   bill_id: string;
   paid_at: string;
   amount_cents: number;
@@ -39,6 +42,13 @@ type BillPayment = {
   source: string;
   created_at: string;
 };
+
+type HouseholdMembership = {
+  household_id: string;
+  role: string | null;
+};
+
+const COOKIE_NAME = "lifecfo_household";
 
 /* -------------------- money formatting helpers -------------------- */
 
@@ -228,6 +238,48 @@ function nextDueDefaultForCadence(c: Cadence) {
 }
 // -------------------- end suggestions --------------------
 
+function readCookie(name: string): string | null {
+  if (typeof document === "undefined") return null;
+  const raw = document.cookie || "";
+  const parts = raw.split(";").map((s) => s.trim());
+  for (const p of parts) {
+    if (!p) continue;
+    const idx = p.indexOf("=");
+    if (idx <= 0) continue;
+    const k = decodeURIComponent(p.slice(0, idx).trim());
+    const v = decodeURIComponent(p.slice(idx + 1).trim());
+    if (k === name) return v || null;
+  }
+  return null;
+}
+
+async function resolveActiveHouseholdId(userId: string): Promise<string | null> {
+  // cookie-first, validated by membership
+  const preferred = readCookie(COOKIE_NAME);
+
+  if (preferred) {
+    const { data: okRows, error: okErr } = await supabase
+      .from("household_members")
+      .select("household_id")
+      .eq("user_id", userId)
+      .eq("household_id", preferred)
+      .limit(1);
+
+    if (!okErr && okRows?.length) return preferred;
+  }
+
+  // fallback to first membership
+  const { data, error } = await supabase
+    .from("household_members")
+    .select("household_id")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: true })
+    .limit(1);
+
+  if (error) throw error;
+  return data?.[0]?.household_id ?? null;
+}
+
 export default function BillsPage() {
   const toastApi: any = useToast();
   const showToast =
@@ -249,6 +301,11 @@ export default function BillsPage() {
   };
 
   const [userId, setUserId] = useState<string | null>(null);
+  const [householdId, setHouseholdId] = useState<string | null>(null);
+  const [role, setRole] = useState<string | null>(null);
+
+  const canWrite = role === "owner" || role === "editor";
+
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -283,7 +340,7 @@ export default function BillsPage() {
   // Mark paid busy map
   const [markingPaid, setMarkingPaid] = useState<Record<string, boolean>>({});
 
-  async function loadBills(uid: string, opts?: { silent?: boolean }) {
+  async function loadBills(hid: string, opts?: { silent?: boolean }) {
     const silent = !!opts?.silent;
 
     const now = Date.now();
@@ -292,7 +349,7 @@ export default function BillsPage() {
         if (pendingSilentReloadRef.current) window.clearTimeout(pendingSilentReloadRef.current);
         pendingSilentReloadRef.current = window.setTimeout(() => {
           pendingSilentReloadRef.current = null;
-          loadBills(uid, { silent: true });
+          loadBills(hid, { silent: true });
         }, LOAD_THROTTLE_MS);
         return;
       }
@@ -304,7 +361,7 @@ export default function BillsPage() {
     const { data, error } = await supabase
       .from("recurring_bills")
       .select("*")
-      .eq("user_id", uid)
+      .eq("household_id", hid)
       .order("active", { ascending: false })
       .order("next_due_at", { ascending: true });
 
@@ -315,14 +372,14 @@ export default function BillsPage() {
     setBills((data || []) as RecurringBill[]);
   }
 
-  async function loadPayments(uid: string, opts?: { silent?: boolean }) {
+  async function loadPayments(hid: string, opts?: { silent?: boolean }) {
     const silent = !!opts?.silent;
     if (!silent) setPaymentsError(null);
 
     const { data, error } = await supabase
       .from("bill_payments")
       .select("*")
-      .eq("user_id", uid)
+      .eq("household_id", hid)
       .order("paid_at", { ascending: false })
       .limit(20);
 
@@ -331,6 +388,11 @@ export default function BillsPage() {
       return;
     }
     setPayments((data || []) as BillPayment[]);
+  }
+
+  async function refreshAll(opts?: { silent?: boolean }) {
+    if (!householdId) return;
+    await Promise.all([loadBills(householdId, opts), loadPayments(householdId, { silent: true })]);
   }
 
   useEffect(() => {
@@ -348,9 +410,35 @@ export default function BillsPage() {
       const landing = readBillsFilterFromUrl();
       setFilter(landing);
 
-      setUserId(data.user.id);
-      await Promise.all([loadBills(data.user.id), loadPayments(data.user.id, { silent: true })]);
-      setLoading(false);
+      const uid = data.user.id;
+      setUserId(uid);
+
+      try {
+        const hid = await resolveActiveHouseholdId(uid);
+        if (!hid) {
+          setError("User not linked to a household.");
+          setLoading(false);
+          return;
+        }
+        setHouseholdId(hid);
+
+        // role (for write gating)
+        const { data: mem, error: memErr } = await supabase
+          .from("household_members")
+          .select("household_id, role")
+          .eq("user_id", uid)
+          .eq("household_id", hid)
+          .limit(1)
+          .maybeSingle();
+
+        if (!memErr && mem) setRole((mem as HouseholdMembership).role ?? null);
+
+        await Promise.all([loadBills(hid), loadPayments(hid, { silent: true })]);
+      } catch (e: any) {
+        setError(e?.message ?? "Failed to load Bills.");
+      } finally {
+        setLoading(false);
+      }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -365,15 +453,15 @@ export default function BillsPage() {
     setUrlFilter(next);
   }
 
-  // Realtime patching (user-scoped)
+  // Realtime patching (household-scoped)
   useEffect(() => {
-    if (!userId) return;
+    if (!householdId) return;
 
     setLive("connecting");
 
     const channel = supabase
-      .channel(`recurring_bills:${userId}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "recurring_bills", filter: `user_id=eq.${userId}` }, (payload) => {
+      .channel(`recurring_bills:${householdId}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "recurring_bills", filter: `household_id=eq.${householdId}` }, (payload) => {
         try {
           const evt = payload.eventType;
 
@@ -418,12 +506,12 @@ export default function BillsPage() {
             return;
           }
 
-          loadBills(userId, { silent: true });
+          loadBills(householdId, { silent: true });
         } catch {
-          loadBills(userId, { silent: true });
+          loadBills(householdId, { silent: true });
         }
       })
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "bill_payments", filter: `user_id=eq.${userId}` }, (payload) => {
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "bill_payments", filter: `household_id=eq.${householdId}` }, (payload) => {
         try {
           const row = payload.new as BillPayment;
           setPayments((prev) => {
@@ -432,7 +520,7 @@ export default function BillsPage() {
             return merged.slice(0, 20);
           });
         } catch {
-          loadPayments(userId, { silent: true });
+          loadPayments(householdId, { silent: true });
         }
       })
       .subscribe((status) => {
@@ -444,18 +532,18 @@ export default function BillsPage() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [userId]);
+  }, [householdId]);
 
   // Focus refresh (silent)
   useEffect(() => {
     const onFocus = () => {
-      if (!userId) return;
-      loadBills(userId, { silent: true });
-      loadPayments(userId, { silent: true });
+      if (!householdId) return;
+      loadBills(householdId, { silent: true });
+      loadPayments(householdId, { silent: true });
     };
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
-  }, [userId]);
+  }, [householdId]);
 
   const activeBills = useMemo(() => bills.filter((b) => b.active), [bills]);
 
@@ -480,12 +568,11 @@ export default function BillsPage() {
   }, [bills, filter]);
 
   const VISIBLE_LIMIT = 5;
-
   const visibleBills = useMemo(() => filteredBills.slice(0, VISIBLE_LIMIT), [filteredBills]);
   const hiddenBillsCount = Math.max(0, filteredBills.length - visibleBills.length);
 
   async function addBill() {
-    if (!userId) return;
+    if (!userId || !householdId) return;
 
     const trimmed = name.trim();
     if (!trimmed) {
@@ -493,10 +580,16 @@ export default function BillsPage() {
       return;
     }
 
+    if (!canWrite) {
+      notify({ title: "Not allowed", description: "You don’t have permission to edit in this household." });
+      return;
+    }
+
     setSaving(true);
     try {
       const payload = {
-        user_id: userId,
+        household_id: householdId,
+        user_id: userId, // audit/creator
         name: trimmed,
         amount_cents: centsFromInput(amount),
         currency: "AUD",
@@ -517,7 +610,7 @@ export default function BillsPage() {
       setActive(true);
 
       notify({ title: "Saved", description: "Recurring bill added." });
-      await loadBills(userId, { silent: true });
+      await loadBills(householdId, { silent: true });
     } catch (e: any) {
       notify({ title: "Error", description: e?.message ?? "Failed to add bill." });
     } finally {
@@ -545,7 +638,12 @@ export default function BillsPage() {
   }
 
   async function saveEdit(id: string) {
-    if (!userId) return;
+    if (!householdId) return;
+    if (!canWrite) {
+      notify({ title: "Not allowed", description: "You don’t have permission to edit in this household." });
+      return;
+    }
+
     const d = drafts[id];
     if (!d) return;
 
@@ -569,13 +667,17 @@ export default function BillsPage() {
 
       if (typeof d.next_due_local === "string") updatePayload.next_due_at = fromLocalInputValue(d.next_due_local);
 
-      const { error } = await supabase.from("recurring_bills").update(updatePayload).eq("id", id).eq("user_id", userId);
+      const { error } = await supabase
+        .from("recurring_bills")
+        .update(updatePayload)
+        .eq("id", id)
+        .eq("household_id", householdId);
 
       if (error) throw error;
 
       notify({ title: "Saved", description: "Bill updated." });
       cancelEdit(id);
-      await loadBills(userId, { silent: true });
+      await loadBills(householdId, { silent: true });
     } catch (e: any) {
       notify({ title: "Error", description: e?.message ?? "Failed to update bill." });
     } finally {
@@ -584,7 +686,11 @@ export default function BillsPage() {
   }
 
   async function toggleActive(b: RecurringBill) {
-    if (!userId) return;
+    if (!householdId) return;
+    if (!canWrite) {
+      notify({ title: "Not allowed", description: "You don’t have permission to edit in this household." });
+      return;
+    }
 
     const newValue = !b.active;
     const previous = b.active;
@@ -592,7 +698,11 @@ export default function BillsPage() {
     setBills((prev) => prev.map((x) => (x.id === b.id ? { ...x, active: newValue } : x)));
 
     try {
-      const { error } = await supabase.from("recurring_bills").update({ active: newValue }).eq("id", b.id).eq("user_id", userId);
+      const { error } = await supabase
+        .from("recurring_bills")
+        .update({ active: newValue })
+        .eq("id", b.id)
+        .eq("household_id", householdId);
 
       if (error) throw error;
 
@@ -607,7 +717,11 @@ export default function BillsPage() {
   }
 
   async function markPaidWithReceipt(b: RecurringBill) {
-    if (!userId) return;
+    if (!userId || !householdId) return;
+    if (!canWrite) {
+      notify({ title: "Not allowed", description: "You don’t have permission to edit in this household." });
+      return;
+    }
     if (markingPaid[b.id]) return;
 
     setMarkingPaid((prev) => ({ ...prev, [b.id]: true }));
@@ -622,6 +736,7 @@ export default function BillsPage() {
       const { data: paymentRow, error: payErr } = await supabase
         .from("bill_payments")
         .insert({
+          household_id: householdId,
           user_id: userId,
           bill_id: b.id,
           paid_at: new Date().toISOString(),
@@ -638,10 +753,14 @@ export default function BillsPage() {
       const paymentId = (paymentRow as any)?.id as string | undefined;
       if (!paymentId) throw new Error("Receipt inserted but missing id (unexpected).");
 
-      const { error: upErr } = await supabase.from("recurring_bills").update({ next_due_at: nextDue }).eq("id", b.id).eq("user_id", userId);
+      const { error: upErr } = await supabase
+        .from("recurring_bills")
+        .update({ next_due_at: nextDue })
+        .eq("id", b.id)
+        .eq("household_id", householdId);
 
       if (upErr) {
-        await supabase.from("bill_payments").delete().eq("id", paymentId).eq("user_id", userId);
+        await supabase.from("bill_payments").delete().eq("id", paymentId).eq("household_id", householdId);
         throw upErr;
       }
 
@@ -652,11 +771,20 @@ export default function BillsPage() {
           setBills((prev) => prev.map((x) => (x.id === b.id ? { ...x, next_due_at: prevDue } : x)));
           setPayments((prev) => prev.filter((p) => p.id !== paymentId));
 
-          const { error: dueErr } = await supabase.from("recurring_bills").update({ next_due_at: prevDue }).eq("id", b.id).eq("user_id", userId);
-          const { error: delErr } = await supabase.from("bill_payments").delete().eq("id", paymentId).eq("user_id", userId);
+          const { error: dueErr } = await supabase
+            .from("recurring_bills")
+            .update({ next_due_at: prevDue })
+            .eq("id", b.id)
+            .eq("household_id", householdId);
+
+          const { error: delErr } = await supabase
+            .from("bill_payments")
+            .delete()
+            .eq("id", paymentId)
+            .eq("household_id", householdId);
 
           if (dueErr || delErr) {
-            await Promise.all([loadBills(userId, { silent: true }), loadPayments(userId, { silent: true })]);
+            await Promise.all([loadBills(householdId, { silent: true }), loadPayments(householdId, { silent: true })]);
             showToast({ message: (dueErr?.message || delErr?.message || "Undo failed") as string });
             return;
           }
@@ -665,18 +793,22 @@ export default function BillsPage() {
         },
       });
 
-      await Promise.all([loadBills(userId, { silent: true }), loadPayments(userId, { silent: true })]);
+      await Promise.all([loadBills(householdId, { silent: true }), loadPayments(householdId, { silent: true })]);
     } catch (e: any) {
       setBills((prev) => prev.map((x) => (x.id === b.id ? { ...x, next_due_at: prevDue } : x)));
       notify({ title: "Mark paid failed", description: e?.message ?? "Couldn’t mark paid." });
-      await Promise.all([loadBills(userId, { silent: true }), loadPayments(userId, { silent: true })]);
+      await Promise.all([loadBills(householdId, { silent: true }), loadPayments(householdId, { silent: true })]);
     } finally {
       setMarkingPaid((prev) => ({ ...prev, [b.id]: false }));
     }
   }
 
   async function deleteBill(b: RecurringBill) {
-    if (!userId) return;
+    if (!householdId) return;
+    if (!canWrite) {
+      notify({ title: "Not allowed", description: "You don’t have permission to edit in this household." });
+      return;
+    }
 
     const snapshot = bills;
     setBills((prev) => prev.filter((x) => x.id !== b.id));
@@ -689,7 +821,8 @@ export default function BillsPage() {
         try {
           const payload = {
             id: b.id,
-            user_id: userId,
+            household_id: householdId,
+            user_id: b.user_id, // preserve audit
             name: b.name,
             amount_cents: b.amount_cents,
             currency: b.currency,
@@ -702,7 +835,7 @@ export default function BillsPage() {
           const { error } = await supabase.from("recurring_bills").insert(payload as any);
           if (error) throw error;
 
-          await loadBills(userId, { silent: true });
+          await loadBills(householdId, { silent: true });
           showToast({ message: "Restored." });
         } catch (e: any) {
           showToast({ message: e?.message ?? "Failed to restore." });
@@ -710,7 +843,11 @@ export default function BillsPage() {
       },
     });
 
-    const { error } = await supabase.from("recurring_bills").delete().eq("id", b.id).eq("user_id", userId);
+    const { error } = await supabase
+      .from("recurring_bills")
+      .delete()
+      .eq("id", b.id)
+      .eq("household_id", householdId);
 
     if (error) {
       setBills(snapshot);
@@ -745,10 +882,10 @@ export default function BillsPage() {
   const right = (
     <div className="flex items-center gap-2">
       <Chip className={liveChipClass}>{live === "live" ? "Live" : live === "offline" ? "Offline" : "Connecting"}</Chip>
-      {userId ? (
+      {householdId ? (
         <Chip
           onClick={async () => {
-            await Promise.all([loadBills(userId), loadPayments(userId, { silent: true })]);
+            await refreshAll();
           }}
           title="Refresh"
         >
@@ -758,354 +895,365 @@ export default function BillsPage() {
     </div>
   );
 
-  const cardClass = "border-zinc-200 bg-white";
-
   return (
     <Page title="Bills" subtitle="Inputs only. Keystone doesn’t guess — it only reminds." right={right}>
-      <div className="mx-auto w-full max-w-[860px] px-4 sm:px-6">
-        <div className="grid gap-4">
-          {/* Search bills (escape hatch) */}
-          <Card className={cardClass}>
-            <CardContent>
-              <AssistedSearch scope="bills" placeholder="Search bills…" />
-            </CardContent>
-          </Card>
+      <div className="grid gap-4">
+        {/* Search bills (escape hatch) */}
+        <Card>
+          <CardContent>
+            <AssistedSearch scope="bills" placeholder="Search bills…" />
+          </CardContent>
+        </Card>
 
-          {/* Summary + calm filters */}
-          <Card className={cardClass}>
-            <CardContent>
-              <div className="flex items-center justify-between gap-3 flex-wrap">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <Badge>Active: {activeBills.length}</Badge>
-                  <Badge>Due 7d: {due7.length}</Badge>
-                  <Badge>Due 14d: {due14.length}</Badge>
-                  <Badge>Autopay risk: {autopayRiskCount}</Badge>
-                </div>
-
-                <div className="flex items-center gap-2 flex-wrap">
-                  {loading ? <Chip>Loading…</Chip> : <Chip>{bills.length} total</Chip>}
-                  {error ? <Chip>{error}</Chip> : null}
-                  {paymentsError ? <Chip>Receipts: {paymentsError}</Chip> : null}
-                </div>
+        {/* Summary + calm filters */}
+        <Card>
+          <CardContent>
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div className="flex items-center gap-2 flex-wrap">
+                <Badge>Active: {activeBills.length}</Badge>
+                <Badge>Due 7d: {due7.length}</Badge>
+                <Badge>Due 14d: {due14.length}</Badge>
+                <Badge>Autopay risk: {autopayRiskCount}</Badge>
               </div>
 
-              <div className="mt-3 flex flex-wrap items-center gap-2">
-                <div className="text-xs text-zinc-500 mr-1">Filter</div>
-                <Chip active={!filter} onClick={() => applyFilter(null)} title="Show all">
-                  All
-                </Chip>
-                <Chip active={filter === "due7"} onClick={() => applyFilter("due7")} title="Bills due in 7 days">
-                  Due 7d
-                </Chip>
-                <Chip active={filter === "due14"} onClick={() => applyFilter("due14")} title="Bills due in 14 days">
-                  Due 14d
-                </Chip>
-                <Chip active={filter === "autopay_risk"} onClick={() => applyFilter("autopay_risk")} title="Due soon and not autopay">
-                  Autopay risk
-                </Chip>
-
-                {filterLabel ? (
-                  <div className="ml-2 flex items-center gap-2">
-                    <span className="text-xs text-zinc-500">{filterLabel}</span>
-                    <Chip onClick={clearFilter} title="Clear filter">
-                      Clear
-                    </Chip>
-                  </div>
-                ) : null}
+              <div className="flex items-center gap-2 flex-wrap">
+                {loading ? <Chip>Loading…</Chip> : <Chip>{bills.length} total</Chip>}
+                {error ? <Chip>{error}</Chip> : null}
+                {paymentsError ? <Chip>Receipts: {paymentsError}</Chip> : null}
+                {!canWrite && householdId ? <Chip title="You can view, but can’t edit in this household.">View only</Chip> : null}
               </div>
-            </CardContent>
-          </Card>
+            </div>
 
-          {/* Quick add suggestions */}
-          <Card className={cardClass}>
-            <CardContent>
-              <div className="flex items-center justify-between gap-3 flex-wrap">
-                <div className="text-sm font-semibold text-zinc-900">Quick add</div>
-                <div className="text-xs text-zinc-500">Tap to prefill. You can still edit before saving.</div>
-              </div>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <div className="text-xs text-zinc-500 mr-1">Filter</div>
+              <Chip active={!filter} onClick={() => applyFilter(null)} title="Show all">
+                All
+              </Chip>
+              <Chip active={filter === "due7"} onClick={() => applyFilter("due7")} title="Bills due in 7 days">
+                Due 7d
+              </Chip>
+              <Chip active={filter === "due14"} onClick={() => applyFilter("due14")} title="Bills due in 14 days">
+                Due 14d
+              </Chip>
+              <Chip active={filter === "autopay_risk"} onClick={() => applyFilter("autopay_risk")} title="Due soon and not autopay">
+                Autopay risk
+              </Chip>
 
-              <div className="mt-3 flex flex-wrap gap-2">
-                {SUGGESTIONS.map((s) => (
-                  <Chip key={s.label} onClick={() => applySuggestion(s)} title={`${s.cadence}${s.autopayDefault ? " • autopay" : ""}`}>
-                    {s.label}
-                  </Chip>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Add bill form */}
-          <Card className={cardClass}>
-            <CardContent>
-              <div className="text-sm font-semibold text-zinc-900 mb-2">Add recurring bill</div>
-
-              <div className="grid gap-3 md:grid-cols-6">
-                <div className="md:col-span-2">
-                  <div className="text-xs text-zinc-500 mb-1">Name</div>
-                  <input
-                    className="w-full rounded-xl border border-zinc-200 px-3 py-2 bg-transparent text-sm"
-                    placeholder="Rent, Internet, Insurance…"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                  />
-                </div>
-
-                <div>
-                  <div className="text-xs text-zinc-500 mb-1">Amount (AUD)</div>
-                  <input
-                    className="w-full rounded-xl border border-zinc-200 px-3 py-2 bg-transparent text-sm"
-                    placeholder="e.g. $120.00"
-                    value={amount}
-                    onChange={(e) => setAmount(formatCurrencyInput(e.target.value))}
-                    inputMode="decimal"
-                  />
-                </div>
-
-                <div>
-                  <div className="text-xs text-zinc-500 mb-1">Cadence</div>
-                  <select
-                    className="w-full rounded-xl border border-zinc-200 px-3 py-2 bg-transparent text-sm"
-                    value={cadence}
-                    onChange={(e) => setCadence(e.target.value as Cadence)}
-                  >
-                    <option value="weekly">Weekly</option>
-                    <option value="fortnightly">Fortnightly</option>
-                    <option value="monthly">Monthly</option>
-                    <option value="yearly">Yearly</option>
-                  </select>
-                </div>
-
-                <div className="md:col-span-2">
-                  <div className="text-xs text-zinc-500 mb-1">Next due</div>
-                  <input
-                    className="w-full rounded-xl border border-zinc-200 px-3 py-2 bg-transparent text-sm"
-                    type="datetime-local"
-                    value={nextDueLocal}
-                    onChange={(e) => setNextDueLocal(e.target.value)}
-                  />
-                </div>
-
-                <div className="md:col-span-6 flex items-center justify-between gap-3 flex-wrap">
-                  <div className="flex items-center gap-4">
-                    <label className="flex items-center gap-2 text-sm text-zinc-700">
-                      <input type="checkbox" checked={autopay} onChange={(e) => setAutopay(e.target.checked)} />
-                      Autopay
-                    </label>
-
-                    <label className="flex items-center gap-2 text-sm text-zinc-700">
-                      <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} />
-                      Active
-                    </label>
-                  </div>
-
-                  <Button disabled={saving || !userId} onClick={addBill}>
-                    {saving ? "Saving…" : "Add bill"}
-                  </Button>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Bills list */}
-          <Card className={cardClass}>
-            <CardContent>
-              <div className="flex items-center justify-between gap-3 flex-wrap mb-2">
-                <div className="text-sm font-semibold text-zinc-900">Your bills</div>
-                <div className="text-xs text-zinc-500">Mark paid writes a receipt and bumps the due date.</div>
-              </div>
-
-              <div className="grid gap-2">
-                {visibleBills.length === 0 ? (
-                  <div className="text-sm text-zinc-600">{bills.length === 0 ? "No bills yet." : "No bills match this filter."}</div>
-                ) : (
-                  visibleBills.map((b) => {
-                    const editing = !!drafts[b.id];
-                    const d = drafts[b.id];
-                    const busyPaid = !!markingPaid[b.id];
-                    const lastPaid = lastPaymentByBillId[b.id];
-                    const risk = isAutopayRisk(b);
-
-                    return (
-                      <div key={b.id} className="rounded-xl border border-zinc-200 p-3">
-                        <div className="flex items-start justify-between gap-3 flex-wrap">
-                          <div className="min-w-[240px] flex-1">
-                            {!editing ? (
-                              <>
-                                <div className="font-semibold text-zinc-900 flex items-center gap-2 flex-wrap">
-                                  {b.name}
-                                  {b.active ? <Badge>Active</Badge> : <Badge>Paused</Badge>}
-                                  {b.autopay ? <Chip>Autopay</Chip> : null}
-                                  <Chip>{b.cadence}</Chip>
-                                  {risk ? <Chip title="Due soon and not autopay">Risk</Chip> : null}
-                                </div>
-
-                                <div className="text-sm text-zinc-700 mt-1">
-                                  {formatMoneyFromCents(b.amount_cents, b.currency)} • Next due {fmtDateTime(b.next_due_at)}
-                                </div>
-
-                                {lastPaid ? (
-                                  <div className="text-xs text-zinc-500 mt-1">
-                                    Last paid {fmtDateTime(lastPaid.paid_at)} • {formatMoneyFromCents(lastPaid.amount_cents, lastPaid.currency)}
-                                  </div>
-                                ) : (
-                                  <div className="text-xs text-zinc-500 mt-1">No receipts yet.</div>
-                                )}
-                              </>
-                            ) : (
-                              <div className="grid gap-2 md:grid-cols-6">
-                                <div className="md:col-span-2">
-                                  <div className="text-xs text-zinc-500 mb-1">Name</div>
-                                  <input
-                                    className="w-full rounded-xl border border-zinc-200 px-3 py-2 bg-transparent text-sm"
-                                    value={String(d?.name ?? "")}
-                                    onChange={(e) => setDrafts((prev) => ({ ...prev, [b.id]: { ...prev[b.id], name: e.target.value } }))}
-                                  />
-                                </div>
-
-                                <div>
-                                  <div className="text-xs text-zinc-500 mb-1">Amount</div>
-                                  <input
-                                    className="w-full rounded-xl border border-zinc-200 px-3 py-2 bg-transparent text-sm"
-                                    value={String(d?.amount_input ?? "")}
-                                    onChange={(e) =>
-                                      setDrafts((prev) => ({
-                                        ...prev,
-                                        [b.id]: { ...prev[b.id], amount_input: formatCurrencyInput(e.target.value) },
-                                      }))
-                                    }
-                                    inputMode="decimal"
-                                  />
-                                </div>
-
-                                <div>
-                                  <div className="text-xs text-zinc-500 mb-1">Cadence</div>
-                                  <select
-                                    className="w-full rounded-xl border border-zinc-200 px-3 py-2 bg-transparent text-sm"
-                                    value={(d?.cadence as Cadence) ?? b.cadence}
-                                    onChange={(e) => setDrafts((prev) => ({ ...prev, [b.id]: { ...prev[b.id], cadence: e.target.value as Cadence } }))}
-                                  >
-                                    <option value="weekly">Weekly</option>
-                                    <option value="fortnightly">Fortnightly</option>
-                                    <option value="monthly">Monthly</option>
-                                    <option value="yearly">Yearly</option>
-                                  </select>
-                                </div>
-
-                                <div className="md:col-span-2">
-                                  <div className="text-xs text-zinc-500 mb-1">Next due</div>
-                                  <input
-                                    className="w-full rounded-xl border border-zinc-200 px-3 py-2 bg-transparent text-sm"
-                                    type="datetime-local"
-                                    value={String(d?.next_due_local ?? toLocalInputValue(b.next_due_at))}
-                                    onChange={(e) => setDrafts((prev) => ({ ...prev, [b.id]: { ...prev[b.id], next_due_local: e.target.value } }))}
-                                  />
-                                </div>
-
-                                <div className="md:col-span-6 flex items-center gap-4 flex-wrap">
-                                  <label className="flex items-center gap-2 text-sm text-zinc-700">
-                                    <input
-                                      type="checkbox"
-                                      checked={!!d?.autopay}
-                                      onChange={(e) => setDrafts((prev) => ({ ...prev, [b.id]: { ...prev[b.id], autopay: e.target.checked } }))}
-                                    />
-                                    Autopay
-                                  </label>
-
-                                  <label className="flex items-center gap-2 text-sm text-zinc-700">
-                                    <input
-                                      type="checkbox"
-                                      checked={!!d?.active}
-                                      onChange={(e) => setDrafts((prev) => ({ ...prev, [b.id]: { ...prev[b.id], active: e.target.checked } }))}
-                                    />
-                                    Active
-                                  </label>
-                                </div>
-                              </div>
-                            )}
-                          </div>
-
-                          <div className="flex items-center gap-2 flex-wrap">
-                            {!editing ? (
-                              <>
-                                <Chip onClick={() => markPaidWithReceipt(b)} disabled={saving || !userId || busyPaid} title="Writes a receipt + bumps next due date">
-                                  {busyPaid ? "Marking…" : "Mark paid"}
-                                </Chip>
-
-                                <Chip onClick={() => toggleActive(b)} disabled={saving} title={b.active ? "Pause bill" : "Activate bill"}>
-                                  {b.active ? "Pause" : "Activate"}
-                                </Chip>
-
-                                <Chip onClick={() => beginEdit(b)} disabled={saving} title="Edit bill">
-                                  Edit
-                                </Chip>
-
-                                <Chip
-                                  onClick={() => deleteBill(b)}
-                                  disabled={saving}
-                                  title="Remove bill (undo available)"
-                                  className="border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100"
-                                >
-                                  Delete
-                                </Chip>
-                              </>
-                            ) : (
-                              <>
-                                <Chip onClick={() => saveEdit(b.id)} disabled={saving} title="Save changes">
-                                  Save
-                                </Chip>
-                                <Chip onClick={() => cancelEdit(b.id)} disabled={saving} title="Cancel editing">
-                                  Cancel
-                                </Chip>
-                              </>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-
-              {hiddenBillsCount > 0 ? <div className="mt-2 text-xs text-zinc-500">{hiddenBillsCount} more hidden — use search to find anything.</div> : null}
-            </CardContent>
-          </Card>
-
-          {/* Receipts moved to the bottom (quiet) */}
-          <Card className={cardClass}>
-            <CardContent>
-              <div className="flex items-center justify-between gap-3 flex-wrap">
-                <div className="text-sm font-semibold text-zinc-900">Receipts</div>
-                <div className="flex items-center gap-2">
-                  <Chip onClick={() => setReceiptsOpen((v) => !v)} title="Show more or less">
-                    {receiptsOpen ? "Show less" : "Show more"}
+              {filterLabel ? (
+                <div className="ml-2 flex items-center gap-2">
+                  <span className="text-xs text-zinc-500">{filterLabel}</span>
+                  <Chip onClick={clearFilter} title="Clear filter">
+                    Clear
                   </Chip>
                 </div>
+              ) : null}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Quick add suggestions */}
+        <Card>
+          <CardContent>
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div className="font-semibold">Quick add</div>
+              <div className="text-sm opacity-70">Tap to prefill. You can still edit before saving.</div>
+            </div>
+
+            <div className="mt-3 flex flex-wrap gap-2">
+              {SUGGESTIONS.map((s) => (
+                <Chip key={s.label} onClick={() => applySuggestion(s)} title={`${s.cadence}${s.autopayDefault ? " • autopay" : ""}`}>
+                  {s.label}
+                </Chip>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Add bill form */}
+        <Card>
+          <CardContent>
+            <div className="font-semibold mb-2">Add recurring bill</div>
+
+            <div className="grid gap-3 md:grid-cols-6">
+              <div className="md:col-span-2">
+                <div className="text-sm mb-1 opacity-70">Name</div>
+                <input
+                  className="w-full rounded-md border px-3 py-2 bg-transparent"
+                  placeholder="Rent, Internet, Insurance…"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  disabled={!canWrite}
+                />
               </div>
 
-              <div className="mt-1 text-xs text-zinc-500">A tiny trail — just enough to prove what happened.</div>
+              <div>
+                <div className="text-sm mb-1 opacity-70">Amount (AUD)</div>
+                <input
+                  className="w-full rounded-md border px-3 py-2 bg-transparent"
+                  placeholder="e.g. $120.00"
+                  value={amount}
+                  onChange={(e) => setAmount(formatCurrencyInput(e.target.value))}
+                  inputMode="decimal"
+                  disabled={!canWrite}
+                />
+              </div>
 
-              {recentReceipts.length === 0 ? (
-                <div className="mt-2 text-sm text-zinc-600">No receipts yet. Mark a bill paid to create one.</div>
+              <div>
+                <div className="text-sm mb-1 opacity-70">Cadence</div>
+                <select
+                  className="w-full rounded-md border px-3 py-2 bg-transparent"
+                  value={cadence}
+                  onChange={(e) => setCadence(e.target.value as Cadence)}
+                  disabled={!canWrite}
+                >
+                  <option value="weekly">Weekly</option>
+                  <option value="fortnightly">Fortnightly</option>
+                  <option value="monthly">Monthly</option>
+                  <option value="yearly">Yearly</option>
+                </select>
+              </div>
+
+              <div className="md:col-span-2">
+                <div className="text-sm mb-1 opacity-70">Next due</div>
+                <input
+                  className="w-full rounded-md border px-3 py-2 bg-transparent"
+                  type="datetime-local"
+                  value={nextDueLocal}
+                  onChange={(e) => setNextDueLocal(e.target.value)}
+                  disabled={!canWrite}
+                />
+              </div>
+
+              <div className="md:col-span-6 flex items-center justify-between gap-3 flex-wrap">
+                <div className="flex items-center gap-3">
+                  <label className="flex items-center gap-2 text-sm">
+                    <input type="checkbox" checked={autopay} onChange={(e) => setAutopay(e.target.checked)} disabled={!canWrite} />
+                    Autopay
+                  </label>
+
+                  <label className="flex items-center gap-2 text-sm">
+                    <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} disabled={!canWrite} />
+                    Active
+                  </label>
+                </div>
+
+                <Button disabled={saving || !userId || !householdId || !canWrite} onClick={addBill}>
+                  {saving ? "Saving…" : "Add bill"}
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Bills list */}
+        <Card>
+          <CardContent>
+            <div className="flex items-center justify-between gap-3 flex-wrap mb-2">
+              <div className="font-semibold">Your bills</div>
+              <div className="text-sm opacity-70">Mark paid writes a receipt and bumps the due date.</div>
+            </div>
+
+            <div className="grid gap-2">
+              {visibleBills.length === 0 ? (
+                <div className="opacity-70 text-sm">{bills.length === 0 ? "No bills yet." : "No bills match this filter."}</div>
               ) : (
-                <div className="mt-3 grid gap-2">
-                  {recentReceipts.map((p) => (
-                    <div key={p.id} className="rounded-xl border border-zinc-200 p-3">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="font-semibold text-zinc-900">
-                          {billNameById[p.bill_id] ?? "Bill"} • {formatMoneyFromCents(p.amount_cents, p.currency)}
+                visibleBills.map((b) => {
+                  const editing = !!drafts[b.id];
+                  const d = drafts[b.id];
+                  const busyPaid = !!markingPaid[b.id];
+                  const lastPaid = lastPaymentByBillId[b.id];
+                  const risk = isAutopayRisk(b);
+
+                  return (
+                    <div key={b.id} className="rounded-lg border p-3">
+                      <div className="flex items-start justify-between gap-3 flex-wrap">
+                        <div className="min-w-[240px] flex-1">
+                          {!editing ? (
+                            <>
+                              <div className="font-semibold flex items-center gap-2 flex-wrap">
+                                {b.name}
+                                {b.active ? <Badge>Active</Badge> : <Badge>Paused</Badge>}
+                                {b.autopay ? <Chip>Autopay</Chip> : null}
+                                <Chip>{b.cadence}</Chip>
+                                {risk ? <Chip title="Due soon and not autopay">Risk</Chip> : null}
+                              </div>
+
+                              <div className="text-sm opacity-75 mt-1">
+                                {formatMoneyFromCents(b.amount_cents, b.currency)} • Next due {fmtDateTime(b.next_due_at)}
+                              </div>
+
+                              {lastPaid ? (
+                                <div className="text-xs text-zinc-600 mt-1">
+                                  Last paid {fmtDateTime(lastPaid.paid_at)} • {formatMoneyFromCents(lastPaid.amount_cents, lastPaid.currency)}
+                                </div>
+                              ) : (
+                                <div className="text-xs text-zinc-500 mt-1">No receipts yet.</div>
+                              )}
+                            </>
+                          ) : (
+                            <div className="grid gap-2 md:grid-cols-6">
+                              <div className="md:col-span-2">
+                                <div className="text-xs opacity-70 mb-1">Name</div>
+                                <input
+                                  className="w-full rounded-md border px-3 py-2 bg-transparent"
+                                  value={String(d?.name ?? "")}
+                                  onChange={(e) => setDrafts((prev) => ({ ...prev, [b.id]: { ...prev[b.id], name: e.target.value } }))}
+                                  disabled={!canWrite}
+                                />
+                              </div>
+
+                              <div>
+                                <div className="text-xs opacity-70 mb-1">Amount</div>
+                                <input
+                                  className="w-full rounded-md border px-3 py-2 bg-transparent"
+                                  value={String(d?.amount_input ?? "")}
+                                  onChange={(e) =>
+                                    setDrafts((prev) => ({
+                                      ...prev,
+                                      [b.id]: { ...prev[b.id], amount_input: formatCurrencyInput(e.target.value) },
+                                    }))
+                                  }
+                                  inputMode="decimal"
+                                  disabled={!canWrite}
+                                />
+                              </div>
+
+                              <div>
+                                <div className="text-xs opacity-70 mb-1">Cadence</div>
+                                <select
+                                  className="w-full rounded-md border px-3 py-2 bg-transparent"
+                                  value={(d?.cadence as Cadence) ?? b.cadence}
+                                  onChange={(e) => setDrafts((prev) => ({ ...prev, [b.id]: { ...prev[b.id], cadence: e.target.value as Cadence } }))}
+                                  disabled={!canWrite}
+                                >
+                                  <option value="weekly">Weekly</option>
+                                  <option value="fortnightly">Fortnightly</option>
+                                  <option value="monthly">Monthly</option>
+                                  <option value="yearly">Yearly</option>
+                                </select>
+                              </div>
+
+                              <div className="md:col-span-2">
+                                <div className="text-xs opacity-70 mb-1">Next due</div>
+                                <input
+                                  className="w-full rounded-md border px-3 py-2 bg-transparent"
+                                  type="datetime-local"
+                                  value={String(d?.next_due_local ?? toLocalInputValue(b.next_due_at))}
+                                  onChange={(e) => setDrafts((prev) => ({ ...prev, [b.id]: { ...prev[b.id], next_due_local: e.target.value } }))}
+                                  disabled={!canWrite}
+                                />
+                              </div>
+
+                              <div className="md:col-span-6 flex items-center gap-4 flex-wrap">
+                                <label className="flex items-center gap-2 text-sm">
+                                  <input
+                                    type="checkbox"
+                                    checked={!!d?.autopay}
+                                    onChange={(e) => setDrafts((prev) => ({ ...prev, [b.id]: { ...prev[b.id], autopay: e.target.checked } }))}
+                                    disabled={!canWrite}
+                                  />
+                                  Autopay
+                                </label>
+
+                                <label className="flex items-center gap-2 text-sm">
+                                  <input
+                                    type="checkbox"
+                                    checked={!!d?.active}
+                                    onChange={(e) => setDrafts((prev) => ({ ...prev, [b.id]: { ...prev[b.id], active: e.target.checked } }))}
+                                    disabled={!canWrite}
+                                  />
+                                  Active
+                                </label>
+                              </div>
+                            </div>
+                          )}
                         </div>
-                        <div className="text-xs text-zinc-500">{fmtDateTime(p.paid_at)}</div>
-                      </div>
-                      <div className="mt-1 text-xs text-zinc-500">
-                        {p.note ? p.note : "—"} • source: {p.source}
+
+                        <div className="flex items-center gap-2 flex-wrap">
+                          {!editing ? (
+                            <>
+                              <Chip
+                                onClick={() => markPaidWithReceipt(b)}
+                                disabled={saving || !userId || !householdId || busyPaid || !canWrite}
+                                title="Writes a receipt + bumps next due date"
+                              >
+                                {busyPaid ? "Marking…" : "Mark paid"}
+                              </Chip>
+
+                              <Chip onClick={() => toggleActive(b)} disabled={saving || !canWrite} title={b.active ? "Pause bill" : "Activate bill"}>
+                                {b.active ? "Pause" : "Activate"}
+                              </Chip>
+
+                              <Chip onClick={() => beginEdit(b)} disabled={saving || !canWrite} title="Edit bill">
+                                Edit
+                              </Chip>
+
+                              <Chip
+                                onClick={() => deleteBill(b)}
+                                disabled={saving || !canWrite}
+                                title="Remove bill (undo available)"
+                                className="border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100"
+                              >
+                                Delete
+                              </Chip>
+                            </>
+                          ) : (
+                            <>
+                              <Chip onClick={() => saveEdit(b.id)} disabled={saving || !canWrite} title="Save changes">
+                                Save
+                              </Chip>
+                              <Chip onClick={() => cancelEdit(b.id)} disabled={saving} title="Cancel editing">
+                                Cancel
+                              </Chip>
+                            </>
+                          )}
+                        </div>
                       </div>
                     </div>
-                  ))}
-                </div>
+                  );
+                })
               )}
-            </CardContent>
-          </Card>
-        </div>
+            </div>
+
+            {hiddenBillsCount > 0 ? <div className="mt-2 text-xs text-zinc-500">{hiddenBillsCount} more hidden — use search to find anything.</div> : null}
+          </CardContent>
+        </Card>
+
+        {/* Receipts moved to the bottom (quiet) */}
+        <Card>
+          <CardContent>
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div className="font-semibold">Receipts</div>
+              <div className="flex items-center gap-2">
+                <Chip onClick={() => setReceiptsOpen((v) => !v)} title="Show more or less">
+                  {receiptsOpen ? "Show less" : "Show more"}
+                </Chip>
+              </div>
+            </div>
+
+            <div className="mt-1 text-sm opacity-70">A tiny trail — just enough to prove what happened.</div>
+
+            {recentReceipts.length === 0 ? (
+              <div className="mt-2 text-sm text-zinc-600">No receipts yet. Mark a bill paid to create one.</div>
+            ) : (
+              <div className="mt-3 grid gap-2">
+                {recentReceipts.map((p) => (
+                  <div key={p.id} className="rounded-lg border p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="font-semibold">
+                        {billNameById[p.bill_id] ?? "Bill"} • {formatMoneyFromCents(p.amount_cents, p.currency)}
+                      </div>
+                      <div className="text-xs text-zinc-500">{fmtDateTime(p.paid_at)}</div>
+                    </div>
+                    <div className="mt-1 text-xs text-zinc-600">
+                      {p.note ? p.note : "—"} • source: {p.source}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
       </div>
     </Page>
   );
