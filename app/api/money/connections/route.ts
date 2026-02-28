@@ -1,38 +1,9 @@
-// app/api/money/connections/route.ts
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
 import { supabaseRoute } from "@/lib/supabaseRoute";
+import { resolveHouseholdIdRoute } from "@/lib/households/resolveHouseholdIdRoute";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-const COOKIE_NAME = "lifecfo_household";
-
-async function resolveHouseholdId(supabase: any, userId: string): Promise<string | null> {
-  const cookieStore = await cookies(); // ✅ FIXED
-  const cookieValue = cookieStore.get(COOKIE_NAME)?.value ?? null;
-
-  if (cookieValue) {
-    const { data, error } = await supabase
-      .from("household_members")
-      .select("id")
-      .eq("user_id", userId)
-      .eq("household_id", cookieValue)
-      .limit(1);
-
-    if (!error && data?.length) return cookieValue;
-  }
-
-  const { data, error } = await supabase
-    .from("household_members")
-    .select("household_id")
-    .eq("user_id", userId)
-    .order("created_at", { ascending: true })
-    .limit(1);
-
-  if (error) throw error;
-  return data?.[0]?.household_id ?? null;
-}
 
 function normalizeProvider(input: unknown): string {
   if (typeof input !== "string") return "manual";
@@ -60,7 +31,7 @@ export async function GET() {
 
     if (userErr || !user?.id) return NextResponse.json({ ok: false, error: "Not signed in." }, { status: 401 });
 
-    const householdId = await resolveHouseholdId(supabase, user.id);
+    const householdId = await resolveHouseholdIdRoute(supabase, user.id);
     if (!householdId) return NextResponse.json({ ok: false, error: "User not linked to a household." }, { status: 400 });
 
     const { data, error } = await supabase
@@ -88,7 +59,7 @@ export async function POST(req: Request) {
 
     if (userErr || !user?.id) return NextResponse.json({ ok: false, error: "Not signed in." }, { status: 401 });
 
-    const householdId = await resolveHouseholdId(supabase, user.id);
+    const householdId = await resolveHouseholdIdRoute(supabase, user.id);
     if (!householdId) return NextResponse.json({ ok: false, error: "User not linked to a household." }, { status: 400 });
 
     const body = await req.json().catch(() => ({}));
