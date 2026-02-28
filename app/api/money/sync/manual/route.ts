@@ -1,8 +1,7 @@
-// app/api/money/sync/manual/route.ts
 import { NextResponse } from "next/server";
 import { supabaseRoute } from "@/lib/supabaseRoute";
-import crypto from "crypto";
 import { resolveHouseholdIdRoute } from "@/lib/households/resolveHouseholdIdRoute";
+import crypto from "crypto";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

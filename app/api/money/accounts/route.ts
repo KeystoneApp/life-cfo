@@ -1,4 +1,3 @@
-// app/api/money/accounts/route.ts
 import { NextResponse } from "next/server";
 import { supabaseRoute } from "@/lib/supabaseRoute";
 import { resolveHouseholdIdRoute } from "@/lib/households/resolveHouseholdIdRoute";

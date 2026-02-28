@@ -1,4 +1,3 @@
-// app/api/money/sync/[connectionId]/route.ts
 import { NextResponse } from "next/server";
 import { supabaseRoute } from "@/lib/supabaseRoute";
 import { getProvider } from "@/lib/money/providers";
@@ -49,6 +48,7 @@ export async function POST(_req: Request, { params }: { params: { connectionId: 
     const provider = getProvider(connection.provider);
 
     // IMPORTANT: provider.sync should behave household-safely.
+    // For now we pass the connection id as before.
     const result = await provider.sync(connection.id);
 
     // 4) Update last_sync_at
