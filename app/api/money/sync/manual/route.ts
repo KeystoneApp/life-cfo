@@ -1,3 +1,4 @@
+// app/api/money/sync/manual/route.ts
 import { NextResponse } from "next/server";
 import { supabaseRoute } from "@/lib/supabaseRoute";
 import crypto from "crypto";
