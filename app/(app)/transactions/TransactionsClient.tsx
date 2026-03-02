@@ -2,7 +2,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Page } from "@/components/Page";
 import { Card, CardContent, Chip, Badge } from "@/components/ui";
 import { AssistedSearch } from "@/components/AssistedSearch";
@@ -22,12 +22,13 @@ type Tx = {
   updated_at: string | null;
 };
 
-type LiveState = "connecting" | "live" | "offline";
+type AccountLite = {
+  id: string;
+  name: string | null;
+  archived: boolean | null;
+};
 
-function safeNumber(v: unknown) {
-  const n = typeof v === "number" ? v : Number(v);
-  return Number.isFinite(n) ? n : 0;
-}
+type LiveState = "connecting" | "live" | "offline";
 
 function safeDate(iso: string | null | undefined) {
   if (!iso) return null;
@@ -55,19 +56,6 @@ function formatMoneyFromCents(c: number, currency = "AUD") {
   }
 }
 
-function formatMoneyFromAmount(a: number, currency = "AUD") {
-  try {
-    return new Intl.NumberFormat("en-AU", {
-      style: "currency",
-      currency,
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    }).format(a);
-  } catch {
-    return `${currency} ${a.toFixed(2)}`;
-  }
-}
-
 function signLabel(amountCents: number) {
   if (amountCents > 0) return "In";
   if (amountCents < 0) return "Out";
@@ -81,10 +69,18 @@ async function fetchJson<T>(url: string): Promise<T> {
   return json as T;
 }
 
+function isoDate(d: Date) {
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
 export const dynamic = "force-dynamic";
 
 export default function TransactionsClient() {
   const router = useRouter();
+  const sp = useSearchParams();
 
   const [statusLine, setStatusLine] = useState("Loading…");
   const [error, setError] = useState<string | null>(null);
@@ -96,7 +92,65 @@ export default function TransactionsClient() {
   // local filter (separate to AssistedSearch)
   const [q, setQ] = useState("");
 
+  // server filters
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [pendingMode, setPendingMode] = useState<"all" | "pending" | "posted">("all");
+  const [rangeMode, setRangeMode] = useState<"30d" | "90d" | "custom" | "all">("30d");
+  const [from, setFrom] = useState<string>("");
+  const [to, setTo] = useState<string>("");
+  const [accountId, setAccountId] = useState<string>("");
+
+  const [accounts, setAccounts] = useState<AccountLite[]>([]);
+
   const isMountedRef = useRef(true);
+
+  // read ?open=
+  useEffect(() => {
+    const open = sp?.get("open");
+    if (open) setOpenId(open);
+  }, [sp]);
+
+  // fetch accounts (for filter dropdown)
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const json = await fetchJson<{ ok: boolean; accounts: AccountLite[] }>("/api/money/accounts");
+        if (!alive) return;
+        setAccounts((json.accounts ?? []).filter((a) => !a.archived));
+      } catch {
+        // ignore; filters still work without dropdown
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  function buildTxUrl(limit: number) {
+    const url = new URL("/api/money/transactions", window.location.origin);
+    url.searchParams.set("limit", String(limit));
+
+    if (accountId) url.searchParams.set("account_id", accountId);
+
+    if (pendingMode === "pending") url.searchParams.set("pending", "true");
+    if (pendingMode === "posted") url.searchParams.set("pending", "false");
+
+    // range presets
+    if (rangeMode === "30d" || rangeMode === "90d") {
+      const days = rangeMode === "30d" ? 30 : 90;
+      const dTo = new Date();
+      const dFrom = new Date();
+      dFrom.setDate(dFrom.getDate() - days);
+      url.searchParams.set("from", isoDate(dFrom));
+      url.searchParams.set("to", isoDate(dTo));
+    } else if (rangeMode === "custom") {
+      if (from) url.searchParams.set("from", from);
+      if (to) url.searchParams.set("to", to);
+    }
+
+    return url.pathname + "?" + url.searchParams.toString();
+  }
 
   async function load(silent = false) {
     if (!silent) {
@@ -106,15 +160,19 @@ export default function TransactionsClient() {
     }
 
     try {
-      const json = await fetchJson<{ ok: boolean; transactions: Tx[] }>(
-        "/api/money/transactions?limit=200"
-      );
+      const url = buildTxUrl(250);
+      const json = await fetchJson<{ ok: boolean; transactions: Tx[] }>(url);
 
       if (!isMountedRef.current) return;
 
-      setItems((json.transactions ?? []) as Tx[]);
-      setStatusLine((json.transactions?.length ?? 0) ? "Loaded." : "No transactions yet.");
+      const tx = (json.transactions ?? []) as Tx[];
+      setItems(tx);
+      setStatusLine(tx.length ? "Loaded." : "No transactions yet.");
       setLive("live");
+
+      // if ?open= is present, try keep it open (even if item not found, no harm)
+      const open = sp?.get("open");
+      if (open) setOpenId(open);
     } catch (e: any) {
       if (!isMountedRef.current) return;
       setItems([]);
@@ -130,13 +188,21 @@ export default function TransactionsClient() {
     return () => {
       isMountedRef.current = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // reload when filters change (silent)
+  useEffect(() => {
+    void load(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingMode, rangeMode, from, to, accountId]);
 
   // focus refresh (silent)
   useEffect(() => {
     const onFocus = () => void load(true);
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const liveChipClass =
@@ -166,7 +232,7 @@ export default function TransactionsClient() {
     const needle = q.trim().toLowerCase();
     if (!needle) return items;
     return items.filter((t) => {
-      const hay = [t.description ?? "", t.merchant ?? "", t.category ?? ""].join(" ").toLowerCase();
+      const hay = [t.description ?? "", t.merchant ?? "", t.category ?? "", t.date ?? ""].join(" ").toLowerCase();
       return hay.includes(needle);
     });
   }, [items, q]);
@@ -190,6 +256,118 @@ export default function TransactionsClient() {
     <Page title="Transactions" subtitle="Inputs only. Calm, not accounting." right={right}>
       <div className="mx-auto w-full max-w-[760px] space-y-4">
         <AssistedSearch scope="transactions" placeholder="Search transactions…" />
+
+        <div className="flex flex-wrap items-center gap-2">
+          <Chip onClick={() => setFiltersOpen((v) => !v)}>{filtersOpen ? "Hide filters" : "Filters"}</Chip>
+
+          {pendingMode !== "all" ? (
+            <Chip onClick={() => setPendingMode("all")} title="Clear pending filter">
+              Pending: {pendingMode}
+            </Chip>
+          ) : null}
+
+          {rangeMode !== "30d" ? (
+            <Chip onClick={() => setRangeMode("30d")} title="Reset date range">
+              Range: {rangeMode}
+            </Chip>
+          ) : null}
+
+          {accountId ? (
+            <Chip onClick={() => setAccountId("")} title="Clear account filter">
+              Account filter
+            </Chip>
+          ) : null}
+        </div>
+
+        {filtersOpen ? (
+          <Card className="border-zinc-200 bg-white">
+            <CardContent className="space-y-3">
+              <div className="text-sm font-semibold text-zinc-900">Filters</div>
+              <div className="text-xs text-zinc-500">Quiet helpers. Nothing required.</div>
+
+              <div className="flex flex-wrap gap-2">
+                <Chip onClick={() => setPendingMode("all")} className={pendingMode === "all" ? "border border-zinc-300" : ""}>
+                  Pending: All
+                </Chip>
+                <Chip onClick={() => setPendingMode("pending")} className={pendingMode === "pending" ? "border border-zinc-300" : ""}>
+                  Pending: Yes
+                </Chip>
+                <Chip onClick={() => setPendingMode("posted")} className={pendingMode === "posted" ? "border border-zinc-300" : ""}>
+                  Pending: No
+                </Chip>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <Chip onClick={() => setRangeMode("30d")} className={rangeMode === "30d" ? "border border-zinc-300" : ""}>
+                  Last 30 days
+                </Chip>
+                <Chip onClick={() => setRangeMode("90d")} className={rangeMode === "90d" ? "border border-zinc-300" : ""}>
+                  Last 90 days
+                </Chip>
+                <Chip onClick={() => setRangeMode("all")} className={rangeMode === "all" ? "border border-zinc-300" : ""}>
+                  All time
+                </Chip>
+                <Chip onClick={() => setRangeMode("custom")} className={rangeMode === "custom" ? "border border-zinc-300" : ""}>
+                  Custom
+                </Chip>
+              </div>
+
+              {rangeMode === "custom" ? (
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <div className="rounded-xl border border-zinc-200 bg-white px-3 py-2">
+                    <div className="text-xs text-zinc-500">From</div>
+                    <input
+                      type="date"
+                      value={from}
+                      onChange={(e) => setFrom(e.target.value)}
+                      className="w-full bg-transparent text-sm text-zinc-900 outline-none"
+                    />
+                  </div>
+                  <div className="rounded-xl border border-zinc-200 bg-white px-3 py-2">
+                    <div className="text-xs text-zinc-500">To</div>
+                    <input
+                      type="date"
+                      value={to}
+                      onChange={(e) => setTo(e.target.value)}
+                      className="w-full bg-transparent text-sm text-zinc-900 outline-none"
+                    />
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="rounded-xl border border-zinc-200 bg-white px-3 py-2">
+                <div className="text-xs text-zinc-500">Account</div>
+                <select
+                  value={accountId}
+                  onChange={(e) => setAccountId(e.target.value)}
+                  className="w-full bg-transparent text-sm text-zinc-900 outline-none"
+                >
+                  <option value="">All accounts</option>
+                  {accounts.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.name || "Untitled account"}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="flex flex-wrap gap-2 pt-1">
+                <Chip
+                  onClick={() => {
+                    setPendingMode("all");
+                    setRangeMode("30d");
+                    setFrom("");
+                    setTo("");
+                    setAccountId("");
+                  }}
+                >
+                  Reset filters
+                </Chip>
+                <Chip onClick={() => void load(false)}>Refresh</Chip>
+              </div>
+            </CardContent>
+          </Card>
+        ) : null}
 
         <div className="text-xs text-zinc-500">{statusLine}</div>
 
@@ -290,7 +468,17 @@ export default function TransactionsClient() {
                         <div className="mt-3 space-y-2">
                           <div className="text-sm text-zinc-600">No notes.</div>
                           <div className="flex flex-wrap gap-2 pt-1">
-                            <Chip onClick={() => setOpenId(null)}>Done</Chip>
+                            <Chip
+                              onClick={() => {
+                                setOpenId(null);
+                                // keep URL clean if it had open=
+                                const u = new URL(window.location.href);
+                                u.searchParams.delete("open");
+                                router.replace(u.pathname + (u.search ? u.search : ""));
+                              }}
+                            >
+                              Done
+                            </Chip>
                           </div>
                         </div>
                       ) : null}

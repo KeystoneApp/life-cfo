@@ -68,16 +68,20 @@ function routeForCapture(inboxId: string) {
 function routeForBill() {
   return `/bills`;
 }
-function routeForAccount() {
-  return `/accounts`;
+
+/**
+ * Accounts & Transactions now support deep-link open.
+ */
+function routeForAccount(accountId: string) {
+  return `/accounts?open=${encodeURIComponent(accountId)}`;
 }
+
 function routeForInvestment() {
   return `/investments`;
 }
-function routeForTransaction() {
-  // Current Transactions UI doesn’t reliably support deep-link open,
-  // so we land on the list.
-  return `/transactions`;
+
+function routeForTransaction(txId: string) {
+  return `/transactions?open=${encodeURIComponent(txId)}`;
 }
 
 type DecisionRow = {
@@ -273,7 +277,7 @@ async function fetchTopAccountSuggestionsHousehold(): Promise<Suggestion[]> {
     const currency = safeStr(a?.currency) || "AUD";
     const subtitle = [archived ? "Archived" : "Active", `${currency} ${(cents / 100).toFixed(2)}`].filter(Boolean).join(" • ");
 
-    return { kind: "account", id: String(a?.id), title, subtitle, href: routeForAccount() };
+    return { kind: "account", id: String(a?.id), title, subtitle, href: routeForAccount(String(a?.id)) };
   });
 }
 
@@ -300,7 +304,7 @@ async function fetchAccountMatchesHousehold(q: string): Promise<Suggestion[]> {
     const currency = safeStr(a?.currency) || "AUD";
     const subtitle = [archived ? "Archived" : "Active", `${currency} ${(cents / 100).toFixed(2)}`].filter(Boolean).join(" • ");
 
-    return { kind: "account", id: String(a.id), title, subtitle, href: routeForAccount() };
+    return { kind: "account", id: String(a.id), title, subtitle, href: routeForAccount(String(a.id)) };
   });
 }
 
@@ -328,7 +332,7 @@ async function fetchTopAccountSuggestionsUser(): Promise<Suggestion[]> {
     const currency = safeStr(a?.currency) || "AUD";
     const subtitle = [archived ? "Archived" : "Active", `${currency} ${(cents / 100).toFixed(2)}`].filter(Boolean).join(" • ");
 
-    return { kind: "account", id: String(a?.id), title, subtitle, href: routeForAccount() };
+    return { kind: "account", id: String(a?.id), title, subtitle, href: routeForAccount(String(a?.id)) };
   });
 }
 
@@ -355,7 +359,7 @@ async function fetchAccountMatchesUser(q: string): Promise<Suggestion[]> {
     const currency = safeStr(a?.currency) || "AUD";
     const subtitle = [archived ? "Archived" : "Active", `${currency} ${(cents / 100).toFixed(2)}`].filter(Boolean).join(" • ");
 
-    return { kind: "account", id: String(a.id), title, subtitle, href: routeForAccount() };
+    return { kind: "account", id: String(a.id), title, subtitle, href: routeForAccount(String(a.id)) };
   });
 }
 
@@ -381,7 +385,7 @@ async function fetchTopTransactionSuggestionsHousehold(): Promise<Suggestion[]> 
       .filter(Boolean)
       .join(" • ");
 
-    return { kind: "transaction", id: String(row.id), title, subtitle: meta || undefined, href: routeForTransaction() };
+    return { kind: "transaction", id: String(row.id), title, subtitle: meta || undefined, href: routeForTransaction(String(row.id)) };
   });
 }
 
@@ -392,7 +396,6 @@ async function fetchTransactionMatchesHousehold(q: string): Promise<Suggestion[]
   const query = q.trim();
   if (!query) return fetchTopTransactionSuggestionsHousehold();
 
-  // Search across a few text fields (best-effort; no full-text index assumed)
   const or = [`description.ilike.%${query}%`, `merchant.ilike.%${query}%`, `category.ilike.%${query}%`].join(",");
 
   const { data, error } = await supabase
@@ -413,7 +416,7 @@ async function fetchTransactionMatchesHousehold(q: string): Promise<Suggestion[]
       .filter(Boolean)
       .join(" • ");
 
-    return { kind: "transaction", id: String(row.id), title, subtitle: meta || undefined, href: routeForTransaction() };
+    return { kind: "transaction", id: String(row.id), title, subtitle: meta || undefined, href: routeForTransaction(String(row.id)) };
   });
 }
 
@@ -577,14 +580,12 @@ async function fetchInvestmentMatches(): Promise<Suggestion[]> {
 
 /* ---------------------- MONEY (meta-scope) ---------------------- */
 async function fetchTopMoneySuggestions(): Promise<Suggestion[]> {
-  // A small, calm mix (no flooding)
   const [accounts, transactions, bills] = await Promise.all([
     fetchTopAccountSuggestionsHousehold(),
     fetchTopTransactionSuggestionsHousehold(),
     fetchTopBillSuggestions(), // still user-scoped for now
   ]);
 
-  // order: accounts first (orientation), then activity, then bills
   return [...accounts, ...transactions, ...bills].slice(0, 12);
 }
 
@@ -598,7 +599,6 @@ async function fetchMoneyMatches(q: string): Promise<Suggestion[]> {
     fetchBillMatches(query),
   ]);
 
-  // Keep it tight and useful
   return [...accounts, ...transactions, ...bills].slice(0, 12);
 }
 
@@ -610,7 +610,6 @@ async function fetchTopSuggestions(scope: Scope): Promise<Suggestion[]> {
   if (scope === "bills") return fetchTopBillSuggestions();
 
   if (scope === "accounts") {
-    // Prefer household where available, fallback to user-scoped
     const household = await fetchTopAccountSuggestionsHousehold();
     return household.length ? household : fetchTopAccountSuggestionsUser();
   }
@@ -648,23 +647,33 @@ export function AssistedSearch({
   placeholder?: string;
 }) {
   const router = useRouter();
+
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const [loading, setLoading] = useState(false);
   const [items, setItems] = useState<Suggestion[]>([]);
+  const [activeIndex, setActiveIndex] = useState<number>(0);
+
   const boxRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
 
   const debouncedQ = useMemo(() => q, [q]);
 
+  // Fetch suggestions / matches (debounced)
   useEffect(() => {
     let alive = true;
     setLoading(true);
 
     const t = window.setTimeout(async () => {
-      const next = debouncedQ.trim() ? await fetchMatches(scope, debouncedQ) : await fetchTopSuggestions(scope);
-      if (!alive) return;
-      setItems(next);
-      setLoading(false);
+      try {
+        const next = debouncedQ.trim() ? await fetchMatches(scope, debouncedQ) : await fetchTopSuggestions(scope);
+        if (!alive) return;
+        setItems(next);
+        setActiveIndex(0);
+      } finally {
+        if (!alive) return;
+        setLoading(false);
+      }
     }, 140);
 
     return () => {
@@ -673,6 +682,7 @@ export function AssistedSearch({
     };
   }, [debouncedQ, scope]);
 
+  // Close on outside click
   useEffect(() => {
     function onDocClick(e: MouseEvent) {
       if (!boxRef.current) return;
@@ -682,15 +692,95 @@ export function AssistedSearch({
     return () => document.removeEventListener("mousedown", onDocClick);
   }, []);
 
+  // Cmd/Ctrl+K focuses this search input (best-effort)
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const isK = e.key.toLowerCase() === "k";
+      if (!isK) return;
+
+      const isMeta = e.metaKey || e.ctrlKey;
+      if (!isMeta) return;
+
+      // only if this component is on screen
+      if (!boxRef.current) return;
+
+      e.preventDefault();
+      setOpen(true);
+      window.setTimeout(() => inputRef.current?.focus(), 0);
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  // Keyboard navigation when the input is focused
+  const onInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (!open && (e.key === "ArrowDown" || e.key === "Enter")) {
+      setOpen(true);
+      return;
+    }
+
+    if (e.key === "Escape") {
+      setOpen(false);
+      (e.target as HTMLInputElement).blur();
+      return;
+    }
+
+    if (!open) return;
+
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setActiveIndex((i) => Math.min(i + 1, Math.max(0, items.length - 1)));
+      return;
+    }
+
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setActiveIndex((i) => Math.max(i - 1, 0));
+      return;
+    }
+
+    if (e.key === "Enter") {
+      const it = items[activeIndex];
+      if (!it) return;
+      e.preventDefault();
+      setOpen(false);
+      router.push(it.href);
+      return;
+    }
+  };
+
+  const labelForKind = (k: Suggestion["kind"]) =>
+    k === "decision"
+      ? "Decision"
+      : k === "bill"
+      ? "Bill"
+      : k === "account"
+      ? "Account"
+      : k === "transaction"
+      ? "Transaction"
+      : k === "investment"
+      ? "Investment"
+      : k === "capture"
+      ? "Capture"
+      : "Item";
+
   return (
     <div ref={boxRef} className={cn("relative", className)}>
       <div className="flex items-center gap-2 rounded-xl border border-zinc-200 bg-white px-3 py-2">
         <input
+          ref={inputRef}
           value={q}
-          onChange={(e) => setQ(e.target.value)}
+          onChange={(e) => {
+            setQ(e.target.value);
+            if (!open) setOpen(true);
+          }}
           onFocus={() => setOpen(true)}
+          onKeyDown={onInputKeyDown}
           placeholder={placeholder}
           className="w-full bg-transparent text-sm text-zinc-900 outline-none placeholder:text-zinc-400"
+          aria-expanded={open}
+          aria-autocomplete="list"
         />
         {loading ? <span className="text-xs text-zinc-400">…</span> : <span className="text-xs text-zinc-400">⌘K</span>}
       </div>
@@ -703,36 +793,30 @@ export function AssistedSearch({
             {items.length === 0 ? (
               <div className="px-3 py-3 text-sm text-zinc-500">No matches.</div>
             ) : (
-              items.map((it) => (
-                <button
-                  key={`${it.kind}-${it.id}`}
-                  className="flex w-full items-center justify-between gap-3 px-3 py-3 text-left hover:bg-zinc-50"
-                  onClick={() => {
-                    setOpen(false);
-                    router.push(it.href);
-                  }}
-                >
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-medium text-zinc-900">{it.title}</div>
-                    {it.subtitle ? <div className="truncate text-xs text-zinc-500">{it.subtitle}</div> : null}
-                  </div>
-                  <Chip className="shrink-0 text-xs">
-                    {it.kind === "decision"
-                      ? "Decision"
-                      : it.kind === "bill"
-                      ? "Bill"
-                      : it.kind === "account"
-                      ? "Account"
-                      : it.kind === "transaction"
-                      ? "Transaction"
-                      : it.kind === "investment"
-                      ? "Investment"
-                      : it.kind === "capture"
-                      ? "Capture"
-                      : "Item"}
-                  </Chip>
-                </button>
-              ))
+              items.map((it, idx) => {
+                const isActive = idx === activeIndex;
+                return (
+                  <button
+                    key={`${it.kind}-${it.id}`}
+                    className={cn(
+                      "flex w-full items-center justify-between gap-3 px-3 py-3 text-left",
+                      isActive ? "bg-zinc-50" : "hover:bg-zinc-50"
+                    )}
+                    onMouseEnter={() => setActiveIndex(idx)}
+                    onClick={() => {
+                      setOpen(false);
+                      router.push(it.href);
+                    }}
+                    aria-selected={isActive}
+                  >
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-medium text-zinc-900">{it.title}</div>
+                      {it.subtitle ? <div className="truncate text-xs text-zinc-500">{it.subtitle}</div> : null}
+                    </div>
+                    <Chip className="shrink-0 text-xs">{labelForKind(it.kind)}</Chip>
+                  </button>
+                );
+              })
             )}
           </div>
         </div>
