@@ -377,11 +377,7 @@ async function fetchTopTransactionSuggestionsHousehold(): Promise<Suggestion[]> 
   return (data ?? []).map((t: any) => {
     const row: TxRow = t as TxRow;
     const title = safeStr(row.merchant) || safeStr(row.description) || "Transaction";
-    const meta = [
-      row.date ? softDate(row.date) : null,
-      safeStr(row.category) || null,
-      row.pending ? "Pending" : null,
-    ]
+    const meta = [row.date ? softDate(row.date) : null, safeStr(row.category) || null, row.pending ? "Pending" : null]
       .filter(Boolean)
       .join(" • ");
 
@@ -397,11 +393,7 @@ async function fetchTransactionMatchesHousehold(q: string): Promise<Suggestion[]
   if (!query) return fetchTopTransactionSuggestionsHousehold();
 
   // Search across a few text fields (best-effort; no full-text index assumed)
-  const or = [
-    `description.ilike.%${query}%`,
-    `merchant.ilike.%${query}%`,
-    `category.ilike.%${query}%`,
-  ].join(",");
+  const or = [`description.ilike.%${query}%`, `merchant.ilike.%${query}%`, `category.ilike.%${query}%`].join(",");
 
   const { data, error } = await supabase
     .from("transactions")
@@ -417,11 +409,7 @@ async function fetchTransactionMatchesHousehold(q: string): Promise<Suggestion[]
   return (data ?? []).map((t: any) => {
     const row: TxRow = t as TxRow;
     const title = safeStr(row.merchant) || safeStr(row.description) || "Transaction";
-    const meta = [
-      row.date ? softDate(row.date) : null,
-      safeStr(row.category) || null,
-      row.pending ? "Pending" : null,
-    ]
+    const meta = [row.date ? softDate(row.date) : null, safeStr(row.category) || null, row.pending ? "Pending" : null]
       .filter(Boolean)
       .join(" • ");
 
@@ -491,10 +479,7 @@ async function fetchTopDecisionSuggestions(scope: Scope): Promise<Suggestion[]> 
 
   const filter = scopeDecisionFilter(scope);
 
-  let q = supabase
-    .from("decisions")
-    .select("id,title,status,created_at,decided_at,review_at,chaptered_at")
-    .eq("user_id", uid);
+  let q = supabase.from("decisions").select("id,title,status,created_at,decided_at,review_at,chaptered_at").eq("user_id", uid);
 
   if ("statusEq" in filter) {
     q = q.eq("status", filter.statusEq);
