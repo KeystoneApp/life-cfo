@@ -7,6 +7,7 @@ import { cn } from "@/lib/cn";
 import { Chip } from "@/components/ui";
 
 export type Scope =
+  | "money"
   | "thinking"
   | "decisions"
   | "revisit"
@@ -18,7 +19,7 @@ export type Scope =
   | "transactions";
 
 type Suggestion = {
-  kind: "decision" | "bill" | "account" | "investment" | "capture";
+  kind: "decision" | "bill" | "account" | "investment" | "capture" | "transaction";
   id: string;
   title: string;
   subtitle?: string;
@@ -73,6 +74,11 @@ function routeForAccount() {
 function routeForInvestment() {
   return `/investments`;
 }
+function routeForTransaction() {
+  // Current Transactions UI doesn’t reliably support deep-link open,
+  // so we land on the list.
+  return `/transactions`;
+}
 
 type DecisionRow = {
   id: string;
@@ -113,6 +119,21 @@ type CaptureRow = {
   attachment_count?: number | null;
 };
 
+type TxRow = {
+  id: string;
+  date: string | null; // YYYY-MM-DD
+  description: string | null;
+  merchant: string | null;
+  category: string | null;
+  pending: boolean | null;
+  amount: number | null;
+  amount_cents: number | null;
+  currency: string | null;
+  account_id: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
 function scopeDecisionFilter(scope: Scope) {
   if (scope === "thinking") return { statusEq: "draft" as const };
   if (scope === "chapters") return { statusEq: "chapter" as const };
@@ -125,6 +146,24 @@ async function getUserId(): Promise<string | null> {
   const { data: auth, error } = await supabase.auth.getUser();
   if (error || !auth?.user?.id) return null;
   return auth.user.id;
+}
+
+/**
+ * Household-safe lookup for Money search.
+ * Uses the same API your AppShell relies on.
+ */
+async function getActiveHouseholdId(): Promise<string | null> {
+  try {
+    const res = await fetch("/api/households", { method: "GET", cache: "no-store" });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) return null;
+    if (!json?.ok) return null;
+    if (json?.needs_household) return null;
+    const hid = typeof json?.active_household_id === "string" ? json.active_household_id : null;
+    return hid || null;
+  } catch {
+    return null;
+  }
 }
 
 /* --------------------- ATTACHMENTS HINT --------------------- */
@@ -155,7 +194,7 @@ function hasAttachmentsHint(row: CaptureRow): boolean {
   return /"attachments"\s*:/.test(body);
 }
 
-/* ----------------------- BILLS ----------------------- */
+/* ----------------------- BILLS (user-scoped, unchanged) ----------------------- */
 async function fetchTopBillSuggestions(): Promise<Suggestion[]> {
   const uid = await getUserId();
   if (!uid) return [];
@@ -213,8 +252,63 @@ async function fetchBillMatches(q: string): Promise<Suggestion[]> {
   });
 }
 
-/* ---------------------- ACCOUNTS ---------------------- */
-async function fetchTopAccountSuggestions(): Promise<Suggestion[]> {
+/* ---------------------- ACCOUNTS (household-safe when scope=money/accounts) ---------------------- */
+async function fetchTopAccountSuggestionsHousehold(): Promise<Suggestion[]> {
+  const householdId = await getActiveHouseholdId();
+  if (!householdId) return [];
+
+  const { data, error } = await supabase
+    .from("accounts")
+    .select("id,name,current_balance_cents,currency,archived,created_at")
+    .eq("household_id", householdId)
+    .order("created_at", { ascending: false })
+    .limit(7);
+
+  if (error) return [];
+
+  return (data ?? []).map((a: any) => {
+    const title = safeStr(a?.name) || "Untitled account";
+    const archived = !!a?.archived;
+    const cents = typeof a?.current_balance_cents === "number" ? a.current_balance_cents : 0;
+    const currency = safeStr(a?.currency) || "AUD";
+    const subtitle = [archived ? "Archived" : "Active", `${currency} ${(cents / 100).toFixed(2)}`].filter(Boolean).join(" • ");
+
+    return { kind: "account", id: String(a?.id), title, subtitle, href: routeForAccount() };
+  });
+}
+
+async function fetchAccountMatchesHousehold(q: string): Promise<Suggestion[]> {
+  const householdId = await getActiveHouseholdId();
+  if (!householdId) return [];
+  const query = q.trim();
+  if (!query) return fetchTopAccountSuggestionsHousehold();
+
+  const { data, error } = await supabase
+    .from("accounts")
+    .select("id,name,current_balance_cents,currency,archived,created_at")
+    .eq("household_id", householdId)
+    .ilike("name", `%${query}%`)
+    .order("created_at", { ascending: false })
+    .limit(10);
+
+  if (error) return [];
+
+  return (data ?? []).map((a: AccountRow) => {
+    const title = safeStr(a?.name) || "Untitled account";
+    const archived = !!a?.archived;
+    const cents = typeof a?.current_balance_cents === "number" ? a.current_balance_cents : 0;
+    const currency = safeStr(a?.currency) || "AUD";
+    const subtitle = [archived ? "Archived" : "Active", `${currency} ${(cents / 100).toFixed(2)}`].filter(Boolean).join(" • ");
+
+    return { kind: "account", id: String(a.id), title, subtitle, href: routeForAccount() };
+  });
+}
+
+/**
+ * Back-compat (user-scoped) accounts search.
+ * Kept in case some environments still use user_id. Not used for scope=money.
+ */
+async function fetchTopAccountSuggestionsUser(): Promise<Suggestion[]> {
   const uid = await getUserId();
   if (!uid) return [];
 
@@ -238,11 +332,11 @@ async function fetchTopAccountSuggestions(): Promise<Suggestion[]> {
   });
 }
 
-async function fetchAccountMatches(q: string): Promise<Suggestion[]> {
+async function fetchAccountMatchesUser(q: string): Promise<Suggestion[]> {
   const uid = await getUserId();
   if (!uid) return [];
   const query = q.trim();
-  if (!query) return fetchTopAccountSuggestions();
+  if (!query) return fetchTopAccountSuggestionsUser();
 
   const { data, error } = await supabase
     .from("accounts")
@@ -265,7 +359,77 @@ async function fetchAccountMatches(q: string): Promise<Suggestion[]> {
   });
 }
 
-/* --------------------- CAPTURE --------------------- */
+/* ---------------------- TRANSACTIONS (household-safe) ---------------------- */
+async function fetchTopTransactionSuggestionsHousehold(): Promise<Suggestion[]> {
+  const householdId = await getActiveHouseholdId();
+  if (!householdId) return [];
+
+  const { data, error } = await supabase
+    .from("transactions")
+    .select("id,date,description,merchant,category,pending,amount,amount_cents,currency,account_id,created_at,updated_at")
+    .eq("household_id", householdId)
+    .order("date", { ascending: false })
+    .order("created_at", { ascending: false })
+    .limit(7);
+
+  if (error) return [];
+
+  return (data ?? []).map((t: any) => {
+    const row: TxRow = t as TxRow;
+    const title = safeStr(row.merchant) || safeStr(row.description) || "Transaction";
+    const meta = [
+      row.date ? softDate(row.date) : null,
+      safeStr(row.category) || null,
+      row.pending ? "Pending" : null,
+    ]
+      .filter(Boolean)
+      .join(" • ");
+
+    return { kind: "transaction", id: String(row.id), title, subtitle: meta || undefined, href: routeForTransaction() };
+  });
+}
+
+async function fetchTransactionMatchesHousehold(q: string): Promise<Suggestion[]> {
+  const householdId = await getActiveHouseholdId();
+  if (!householdId) return [];
+
+  const query = q.trim();
+  if (!query) return fetchTopTransactionSuggestionsHousehold();
+
+  // Search across a few text fields (best-effort; no full-text index assumed)
+  const or = [
+    `description.ilike.%${query}%`,
+    `merchant.ilike.%${query}%`,
+    `category.ilike.%${query}%`,
+  ].join(",");
+
+  const { data, error } = await supabase
+    .from("transactions")
+    .select("id,date,description,merchant,category,pending,amount,amount_cents,currency,account_id,created_at,updated_at")
+    .eq("household_id", householdId)
+    .or(or)
+    .order("date", { ascending: false })
+    .order("created_at", { ascending: false })
+    .limit(10);
+
+  if (error) return [];
+
+  return (data ?? []).map((t: any) => {
+    const row: TxRow = t as TxRow;
+    const title = safeStr(row.merchant) || safeStr(row.description) || "Transaction";
+    const meta = [
+      row.date ? softDate(row.date) : null,
+      safeStr(row.category) || null,
+      row.pending ? "Pending" : null,
+    ]
+      .filter(Boolean)
+      .join(" • ");
+
+    return { kind: "transaction", id: String(row.id), title, subtitle: meta || undefined, href: routeForTransaction() };
+  });
+}
+
+/* --------------------- CAPTURE (user-scoped, unchanged) --------------------- */
 async function fetchTopCaptureSuggestions(): Promise<Suggestion[]> {
   const uid = await getUserId();
   if (!uid) return [];
@@ -320,7 +484,7 @@ async function fetchCaptureMatches(q: string): Promise<Suggestion[]> {
   });
 }
 
-/* --------------------- DECISIONS --------------------- */
+/* --------------------- DECISIONS (user-scoped, unchanged) --------------------- */
 async function fetchTopDecisionSuggestions(scope: Scope): Promise<Suggestion[]> {
   const uid = await getUserId();
   if (!uid) return [];
@@ -426,20 +590,66 @@ async function fetchInvestmentMatches(): Promise<Suggestion[]> {
   return [];
 }
 
+/* ---------------------- MONEY (meta-scope) ---------------------- */
+async function fetchTopMoneySuggestions(): Promise<Suggestion[]> {
+  // A small, calm mix (no flooding)
+  const [accounts, transactions, bills] = await Promise.all([
+    fetchTopAccountSuggestionsHousehold(),
+    fetchTopTransactionSuggestionsHousehold(),
+    fetchTopBillSuggestions(), // still user-scoped for now
+  ]);
+
+  // order: accounts first (orientation), then activity, then bills
+  return [...accounts, ...transactions, ...bills].slice(0, 12);
+}
+
+async function fetchMoneyMatches(q: string): Promise<Suggestion[]> {
+  const query = q.trim();
+  if (!query) return fetchTopMoneySuggestions();
+
+  const [accounts, transactions, bills] = await Promise.all([
+    fetchAccountMatchesHousehold(query),
+    fetchTransactionMatchesHousehold(query),
+    fetchBillMatches(query),
+  ]);
+
+  // Keep it tight and useful
+  return [...accounts, ...transactions, ...bills].slice(0, 12);
+}
+
 /* ---------------------- ROUTER ---------------------- */
 async function fetchTopSuggestions(scope: Scope): Promise<Suggestion[]> {
+  if (scope === "money") return fetchTopMoneySuggestions();
+
   if (scope === "capture") return fetchTopCaptureSuggestions();
   if (scope === "bills") return fetchTopBillSuggestions();
-  if (scope === "accounts") return fetchTopAccountSuggestions();
+
+  if (scope === "accounts") {
+    // Prefer household where available, fallback to user-scoped
+    const household = await fetchTopAccountSuggestionsHousehold();
+    return household.length ? household : fetchTopAccountSuggestionsUser();
+  }
+
+  if (scope === "transactions") return fetchTopTransactionSuggestionsHousehold();
   if (scope === "investments") return fetchTopInvestmentSuggestions();
+
   return fetchTopDecisionSuggestions(scope);
 }
 
 async function fetchMatches(scope: Scope, q: string): Promise<Suggestion[]> {
+  if (scope === "money") return fetchMoneyMatches(q);
+
   if (scope === "capture") return fetchCaptureMatches(q);
   if (scope === "bills") return fetchBillMatches(q);
-  if (scope === "accounts") return fetchAccountMatches(q);
+
+  if (scope === "accounts") {
+    const household = await fetchAccountMatchesHousehold(q);
+    return household.length ? household : fetchAccountMatchesUser(q);
+  }
+
+  if (scope === "transactions") return fetchTransactionMatchesHousehold(q);
   if (scope === "investments") return fetchInvestmentMatches();
+
   return fetchDecisionMatches(scope, q);
 }
 
@@ -528,6 +738,8 @@ export function AssistedSearch({
                       ? "Bill"
                       : it.kind === "account"
                       ? "Account"
+                      : it.kind === "transaction"
+                      ? "Transaction"
                       : it.kind === "investment"
                       ? "Investment"
                       : it.kind === "capture"
