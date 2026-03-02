@@ -1,0 +1,189 @@
+// app/(app)/accounts/AccountsPage.tsx
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { Page } from "@/components/Page";
+import { Card, CardContent, Chip, useToast } from "@/components/ui";
+import { AssistedSearch } from "@/components/AssistedSearch";
+
+type AccountRow = {
+  id: string;
+  name: string | null;
+  provider: string | null;
+  type: string | null;
+  status: string | null;
+  archived: boolean | null;
+  currency: string | null;
+  current_balance_cents: number | null;
+  updated_at: string | null;
+  created_at: string | null;
+};
+
+function safeStr(v: unknown) {
+  return typeof v === "string" ? v : "";
+}
+
+function moneyFromCents(cents: number, currency: string) {
+  const amt = (typeof cents === "number" ? cents : 0) / 100;
+  const cur = safeStr(currency) || "AUD";
+  try {
+    return new Intl.NumberFormat(undefined, { style: "currency", currency: cur }).format(amt);
+  } catch {
+    return `${cur} ${amt.toFixed(2)}`;
+  }
+}
+
+function softDate(isoOrDate: string | null | undefined) {
+  if (!isoOrDate) return "";
+  const ms = Date.parse(isoOrDate);
+  if (!Number.isFinite(ms)) {
+    const ms2 = Date.parse(isoOrDate + "T00:00:00Z");
+    if (!Number.isFinite(ms2)) return "";
+    return new Date(ms2).toLocaleDateString();
+  }
+  return new Date(ms).toLocaleDateString();
+}
+
+async function fetchJson<T>(url: string): Promise<T> {
+  const res = await fetch(url, { cache: "no-store" });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((json as any)?.error ?? "Request failed");
+  return json as T;
+}
+
+export const dynamic = "force-dynamic";
+
+export default function AccountsPage() {
+  const { showToast } = useToast();
+
+  const [loading, setLoading] = useState(true);
+  const [accounts, setAccounts] = useState<AccountRow[]>([]);
+  const [q, setQ] = useState("");
+
+  const filtered = useMemo(() => {
+    const query = q.trim().toLowerCase();
+    if (!query) return accounts;
+
+    return accounts.filter((a) => {
+      const hay = [safeStr(a.name), safeStr(a.provider), safeStr(a.type), safeStr(a.status), safeStr(a.currency)]
+        .join(" ")
+        .toLowerCase();
+      return hay.includes(query);
+    });
+  }, [accounts, q]);
+
+  useEffect(() => {
+    let alive = true;
+
+    (async () => {
+      setLoading(true);
+      try {
+        const data = await fetchJson<{ ok: boolean; accounts: AccountRow[]; household_id?: string }>("/api/money/accounts");
+        if (!alive) return;
+        setAccounts(data.accounts ?? []);
+      } catch (e: any) {
+        if (!alive) return;
+        showToast({ message: e?.message ?? "Couldn’t load accounts." }, 2500);
+      } finally {
+        if (!alive) return;
+        setLoading(false);
+      }
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, [showToast]);
+
+  const cardClass = "border-zinc-200 bg-white";
+
+  return (
+    <Page title="Accounts" subtitle="Your active accounts.">
+      <div className="mx-auto w-full max-w-[860px] px-4 sm:px-6">
+        {/* Toolbar */}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Link href="/money">
+              <Chip>Back to Money</Chip>
+            </Link>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Link href="/connections">
+              <Chip>Manage connections</Chip>
+            </Link>
+          </div>
+        </div>
+
+        <div className="mt-5 grid gap-4">
+          {/* Assisted search */}
+          <Card className={cardClass}>
+            <CardContent className="space-y-2">
+              <div className="text-sm font-semibold text-zinc-900">Find anything</div>
+              <div className="text-xs text-zinc-500">Search-first. No scrolling.</div>
+              <AssistedSearch scope="accounts" placeholder="Search accounts…" />
+            </CardContent>
+          </Card>
+
+          {/* List */}
+          <Card className={cardClass}>
+            <CardContent>
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold text-zinc-900">Accounts</div>
+                  <div className="mt-0.5 text-xs text-zinc-500">
+                    {loading ? "Loading…" : accounts.length ? "All active accounts" : "No accounts yet."}
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-3 flex items-center gap-2 rounded-xl border border-zinc-200 bg-white px-3 py-2">
+                <input
+                  value={q}
+                  onChange={(e) => setQ(e.target.value)}
+                  placeholder="Filter locally…"
+                  className="w-full bg-transparent text-sm text-zinc-900 outline-none placeholder:text-zinc-400"
+                />
+                {q.trim() ? <Chip onClick={() => setQ("")}>Clear</Chip> : null}
+              </div>
+
+              <div className="mt-3 divide-y divide-zinc-100">
+                {filtered
+                  .filter((a) => !a.archived)
+                  .map((a) => {
+                    const cur = safeStr(a.currency) || "AUD";
+                    const cents = typeof a.current_balance_cents === "number" ? a.current_balance_cents : 0;
+
+                    return (
+                      <div key={a.id} className="flex items-center justify-between gap-3 py-3">
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-medium text-zinc-900">{safeStr(a.name) || "Untitled account"}</div>
+                          <div className="truncate text-xs text-zinc-500">
+                            {[
+                              safeStr(a.provider) || "Manual",
+                              safeStr(a.type) || null,
+                              safeStr(a.status) || null,
+                              a.updated_at ? `Updated ${softDate(a.updated_at)}` : null,
+                            ]
+                              .filter(Boolean)
+                              .join(" • ")}
+                          </div>
+                        </div>
+
+                        <div className="shrink-0 text-sm font-semibold text-zinc-900">{moneyFromCents(cents, cur)}</div>
+                      </div>
+                    );
+                  })}
+
+                {!loading && filtered.filter((a) => !a.archived).length === 0 ? (
+                  <div className="py-3 text-sm text-zinc-500">No matches.</div>
+                ) : null}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    </Page>
+  );
+}
