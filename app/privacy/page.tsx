@@ -9,7 +9,7 @@ export default function PrivacyPage() {
     <main className="max-w-3xl mx-auto px-6 py-12 prose prose-neutral">
       <h1>Privacy Policy</h1>
 
-      <p><strong>Effective Date:</strong> [Insert Today’s Date]</p>
+      <p><strong>Effective Date:</strong> [04/03/2026]</p>
 
       <p>
         Life CFO ("we", "us", or "our") provides a financial decision-support
