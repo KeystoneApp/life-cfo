@@ -4,23 +4,17 @@ import type { MoneyProvider } from "./types";
 const BASIQ_BASE_URL = process.env.BASIQ_BASE_URL || "https://au-api.basiq.io";
 const BASIQ_API_KEY = (process.env.BASIQ_API_KEY || "").trim();
 
-// Basiq uses a version header; docs mention valid versions like 2.0-2.1.
-// We'll use 2.1 by default.
-const BASIQ_VERSION = (process.env.BASIQ_VERSION || "2.1").trim();
+// v3.0 is current in the Quickstart examples; you can override via env if needed.
+const BASIQ_VERSION = (process.env.BASIQ_VERSION || "3.0").trim();
+
+// Token scopes: Quickstart uses SERVER_ACCESS for server-to-server API use.
+const BASIQ_TOKEN_SCOPE = (process.env.BASIQ_TOKEN_SCOPE || "SERVER_ACCESS").trim();
 
 function assertEnv() {
   if (!BASIQ_API_KEY) throw new Error("Missing BASIQ_API_KEY");
 }
 
-function buildBasicAuthHeader(apiKey: string) {
-  // Basiq token endpoint uses Basic auth with apiKey as username and blank password.
-  // That means base64("apiKey:")
-  const raw = `${apiKey}:`;
-  const encoded = Buffer.from(raw, "utf8").toString("base64");
-  return `Basic ${encoded}`;
-}
-
-// Simple in-memory token cache (Node runtime). Token is valid ~1 hour.
+// Simple in-memory token cache (Node runtime). Token is valid ~60 minutes.
 let cachedToken: { token: string; expiresAtMs: number } | null = null;
 
 async function getBasiqBearerToken(): Promise<string> {
@@ -31,14 +25,19 @@ async function getBasiqBearerToken(): Promise<string> {
     return cachedToken.token;
   }
 
+  // IMPORTANT: /token expects x-www-form-urlencoded body with scope
+  const form = new URLSearchParams();
+  form.set("scope", BASIQ_TOKEN_SCOPE);
+
   const res = await fetch(`${BASIQ_BASE_URL}/token`, {
     method: "POST",
     headers: {
-      Authorization: buildBasicAuthHeader(BASIQ_API_KEY),
+      Authorization: `Basic ${BASIQ_API_KEY}`,
       Accept: "application/json",
-      "Content-Type": "application/json",
+      "Content-Type": "application/x-www-form-urlencoded",
       "basiq-version": BASIQ_VERSION,
     },
+    body: form.toString(),
     cache: "no-store",
   });
 
@@ -48,12 +47,10 @@ async function getBasiqBearerToken(): Promise<string> {
   }
 
   const json: any = await res.json();
-  const token = String(json?.access_token || json?.token || "");
+  const token = String(json?.access_token || "");
   const expiresInSec = Number(json?.expires_in ?? 3600);
 
-  if (!token) {
-    throw new Error("Basiq token response missing access_token");
-  }
+  if (!token) throw new Error("Basiq token response missing access_token");
 
   cachedToken = {
     token,
@@ -69,11 +66,12 @@ export async function basiqFetch(path: string, options: RequestInit = {}) {
   const res = await fetch(`${BASIQ_BASE_URL}${path}`, {
     ...options,
     headers: {
-      Authorization: `Bearer ${bearer}`,
       Accept: "application/json",
       "Content-Type": "application/json",
       "basiq-version": BASIQ_VERSION,
       ...(options.headers || {}),
+      // keep Authorization LAST so nothing overrides it
+      Authorization: `Bearer ${bearer}`,
     },
     cache: "no-store",
   });
@@ -86,7 +84,7 @@ export async function basiqFetch(path: string, options: RequestInit = {}) {
   return res.json();
 }
 
-// Low-level helpers (expect a BASIQ userId) — used later in sync
+// Low-level helpers (expect a BASIQ userId)
 export async function getBasiqAccounts(basiqUserId: string) {
   const data: any = await basiqFetch(`/users/${basiqUserId}/accounts`);
   return data?.data ?? data ?? [];
@@ -97,12 +95,12 @@ export async function getBasiqTransactions(basiqUserId: string) {
   return data?.data ?? data ?? [];
 }
 
-// Provider stub for now — we’ll wire sync once we store basiq_user_id in external_connections.item_id
+// Provider stub for now
 export const basiqProvider: MoneyProvider = {
   name: "basiq",
   async sync() {
     throw new Error(
-      "basiqProvider.sync() not wired yet: need basiq_user_id stored on external_connections (we'll do next)."
+      "basiqProvider.sync() not wired yet: need basiq_user_id stored on external_connections.item_id (we'll do next)."
     );
   },
 };
