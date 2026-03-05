@@ -4,23 +4,23 @@ import type { MoneyProvider } from "./types";
 const BASIQ_BASE_URL = process.env.BASIQ_BASE_URL || "https://au-api.basiq.io";
 const BASIQ_API_KEY = (process.env.BASIQ_API_KEY || "").trim();
 
-// Basiq docs / quickstart currently use basiq-version: 3.0
-const BASIQ_VERSION = (process.env.BASIQ_VERSION || "3.0").trim();
+// Basiq uses a version header; docs mention valid versions like 2.0-2.1.
+// We'll use 2.1 by default.
+const BASIQ_VERSION = (process.env.BASIQ_VERSION || "2.1").trim();
 
 function assertEnv() {
   if (!BASIQ_API_KEY) throw new Error("Missing BASIQ_API_KEY");
-
-  // Very common pitfall: copying only the base64-looking part, but the full key is often like:
-  // basiq-api-key=xxxxxxxx
-  // If there is no '=' at all, it's extremely likely the key was pasted incomplete.
-  if (!BASIQ_API_KEY.includes("=")) {
-    throw new Error(
-      "BASIQ_API_KEY looks incomplete (no '=' found). Paste the FULL key exactly as shown in the Basiq dashboard (it often includes a prefix like 'basiq-api-key=...')."
-    );
-  }
 }
 
-// Simple in-memory token cache (Node runtime). Token expires ~60 mins; refresh early.
+function buildBasicAuthHeader(apiKey: string) {
+  // Basiq token endpoint uses Basic auth with apiKey as username and blank password.
+  // That means base64("apiKey:")
+  const raw = `${apiKey}:`;
+  const encoded = Buffer.from(raw, "utf8").toString("base64");
+  return `Basic ${encoded}`;
+}
+
+// Simple in-memory token cache (Node runtime). Token is valid ~1 hour.
 let cachedToken: { token: string; expiresAtMs: number } | null = null;
 
 async function getBasiqBearerToken(): Promise<string> {
@@ -31,24 +31,14 @@ async function getBasiqBearerToken(): Promise<string> {
     return cachedToken.token;
   }
 
-  // Basiq: POST /token
-  // Headers:
-  //  - Authorization: Basic <YOUR_API_KEY>
-  //  - Content-Type: application/x-www-form-urlencoded
-  //  - basiq-version: 3.0
-  // Body:
-  //  - scope=SERVER_ACCESS
-  const body = new URLSearchParams({ scope: "SERVER_ACCESS" });
-
   const res = await fetch(`${BASIQ_BASE_URL}/token`, {
     method: "POST",
     headers: {
-      Authorization: `Basic ${BASIQ_API_KEY}`,
-      "Content-Type": "application/x-www-form-urlencoded",
-      "basiq-version": BASIQ_VERSION,
+      Authorization: buildBasicAuthHeader(BASIQ_API_KEY),
       Accept: "application/json",
+      "Content-Type": "application/json",
+      "basiq-version": BASIQ_VERSION,
     },
-    body,
     cache: "no-store",
   });
 
@@ -58,10 +48,12 @@ async function getBasiqBearerToken(): Promise<string> {
   }
 
   const json: any = await res.json();
-  const token = String(json?.access_token || "");
+  const token = String(json?.access_token || json?.token || "");
   const expiresInSec = Number(json?.expires_in ?? 3600);
 
-  if (!token) throw new Error("Basiq token response missing access_token");
+  if (!token) {
+    throw new Error("Basiq token response missing access_token");
+  }
 
   cachedToken = {
     token,
@@ -94,7 +86,7 @@ export async function basiqFetch(path: string, options: RequestInit = {}) {
   return res.json();
 }
 
-// Low-level helpers (expect a basiq userId) — used later in sync
+// Low-level helpers (expect a BASIQ userId) — used later in sync
 export async function getBasiqAccounts(basiqUserId: string) {
   const data: any = await basiqFetch(`/users/${basiqUserId}/accounts`);
   return data?.data ?? data ?? [];
@@ -105,7 +97,7 @@ export async function getBasiqTransactions(basiqUserId: string) {
   return data?.data ?? data ?? [];
 }
 
-// Provider stub for now — we’ll wire sync once we store basiq_user_id in external_connections
+// Provider stub for now — we’ll wire sync once we store basiq_user_id in external_connections.item_id
 export const basiqProvider: MoneyProvider = {
   name: "basiq",
   async sync() {
