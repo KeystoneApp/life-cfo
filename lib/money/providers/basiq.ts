@@ -2,44 +2,43 @@
 import type { MoneyProvider } from "./types";
 
 const BASIQ_BASE_URL = process.env.BASIQ_BASE_URL || "https://au-api.basiq.io";
-const BASIQ_API_KEY = process.env.BASIQ_API_KEY || "";
+const BASIQ_API_KEY = (process.env.BASIQ_API_KEY || "").trim();
 
-// Basiq docs show current examples using basiq-version 3.0
-// (You can override via env if you want.)
-const BASIQ_VERSION = process.env.BASIQ_VERSION || "3.0";
+// Basiq docs / quickstart currently use basiq-version: 3.0
+const BASIQ_VERSION = (process.env.BASIQ_VERSION || "3.0").trim();
 
 function assertEnv() {
   if (!BASIQ_API_KEY) throw new Error("Missing BASIQ_API_KEY");
+
+  // Very common pitfall: copying only the base64-looking part, but the full key is often like:
+  // basiq-api-key=xxxxxxxx
+  // If there is no '=' at all, it's extremely likely the key was pasted incomplete.
+  if (!BASIQ_API_KEY.includes("=")) {
+    throw new Error(
+      "BASIQ_API_KEY looks incomplete (no '=' found). Paste the FULL key exactly as shown in the Basiq dashboard (it often includes a prefix like 'basiq-api-key=...')."
+    );
+  }
 }
 
-/**
- * In-memory token cache (Node runtime). Tokens expire ~60 minutes.
- * We'll refresh a bit early.
- */
-let cachedToken: { token: string; expiresAtMs: number; scopeKey: string } | null = null;
+// Simple in-memory token cache (Node runtime). Token expires ~60 mins; refresh early.
+let cachedToken: { token: string; expiresAtMs: number } | null = null;
 
-type TokenScope = "SERVER_ACCESS" | "CLIENT_ACCESS";
-
-async function getBasiqAccessToken(scope: TokenScope, userId?: string): Promise<string> {
+async function getBasiqBearerToken(): Promise<string> {
   assertEnv();
 
-  const scopeKey = scope === "CLIENT_ACCESS" ? `${scope}:${userId || ""}` : scope;
-
   const now = Date.now();
-  if (cachedToken && cachedToken.scopeKey === scopeKey && cachedToken.expiresAtMs > now + 30_000) {
+  if (cachedToken && cachedToken.expiresAtMs > now + 30_000) {
     return cachedToken.token;
   }
 
-  // Basiq expects x-www-form-urlencoded with scope (and userId for CLIENT_ACCESS)
-  // Authorization must be: Basic <YOUR_API_KEY>
-  // https://au-api.basiq.io/token
-  // :contentReference[oaicite:1]{index=1}
-  const form = new URLSearchParams();
-  form.set("scope", scope);
-  if (scope === "CLIENT_ACCESS") {
-    if (!userId) throw new Error("Missing basiq userId for CLIENT_ACCESS token.");
-    form.set("userId", userId);
-  }
+  // Basiq: POST /token
+  // Headers:
+  //  - Authorization: Basic <YOUR_API_KEY>
+  //  - Content-Type: application/x-www-form-urlencoded
+  //  - basiq-version: 3.0
+  // Body:
+  //  - scope=SERVER_ACCESS
+  const body = new URLSearchParams({ scope: "SERVER_ACCESS" });
 
   const res = await fetch(`${BASIQ_BASE_URL}/token`, {
     method: "POST",
@@ -49,7 +48,7 @@ async function getBasiqAccessToken(scope: TokenScope, userId?: string): Promise<
       "basiq-version": BASIQ_VERSION,
       Accept: "application/json",
     },
-    body: form.toString(),
+    body,
     cache: "no-store",
   });
 
@@ -58,19 +57,14 @@ async function getBasiqAccessToken(scope: TokenScope, userId?: string): Promise<
     throw new Error(`Basiq token error (${res.status}): ${text}`);
   }
 
-  const json: any = await res.json().catch(() => ({}));
-
-  // Common shapes: { access_token, expires_in } (docs) or { token }
-  const token = String(json?.access_token || json?.token || "");
+  const json: any = await res.json();
+  const token = String(json?.access_token || "");
   const expiresInSec = Number(json?.expires_in ?? 3600);
 
-  if (!token) {
-    throw new Error("Basiq token response missing access_token");
-  }
+  if (!token) throw new Error("Basiq token response missing access_token");
 
   cachedToken = {
     token,
-    scopeKey,
     expiresAtMs: Date.now() + Math.max(60, expiresInSec) * 1000,
   };
 
@@ -78,9 +72,7 @@ async function getBasiqAccessToken(scope: TokenScope, userId?: string): Promise<
 }
 
 export async function basiqFetch(path: string, options: RequestInit = {}) {
-  // For general server-side API calls, SERVER_ACCESS is what Basiq uses in their quickstart.
-  // :contentReference[oaicite:2]{index=2}
-  const bearer = await getBasiqAccessToken("SERVER_ACCESS");
+  const bearer = await getBasiqBearerToken();
 
   const res = await fetch(`${BASIQ_BASE_URL}${path}`, {
     ...options,
@@ -102,7 +94,7 @@ export async function basiqFetch(path: string, options: RequestInit = {}) {
   return res.json();
 }
 
-// Helpers (expect a BASIQ userId) — used later in sync
+// Low-level helpers (expect a basiq userId) — used later in sync
 export async function getBasiqAccounts(basiqUserId: string) {
   const data: any = await basiqFetch(`/users/${basiqUserId}/accounts`);
   return data?.data ?? data ?? [];
@@ -113,7 +105,7 @@ export async function getBasiqTransactions(basiqUserId: string) {
   return data?.data ?? data ?? [];
 }
 
-// Provider stub for now — we’ll wire sync once we store basiq_user_id in external_connections.item_id
+// Provider stub for now — we’ll wire sync once we store basiq_user_id in external_connections
 export const basiqProvider: MoneyProvider = {
   name: "basiq",
   async sync() {
