@@ -2,14 +2,14 @@
 import { NextResponse } from "next/server";
 import { supabaseRoute } from "@/lib/supabaseRoute";
 import { resolveHouseholdIdRoute } from "@/lib/households/resolveHouseholdIdRoute";
-import { basiqFetch } from "@/lib/money/providers/basiq";
+import { basiqFetch, getBasiqClientToken } from "@/lib/money/providers/basiq";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 type ItemIdPayload = {
   basiq_user_id: string;
-  basiq_authlink_id?: string;
+  basiq_authlink_id?: string; // legacy; not used now
 };
 
 function safeJsonParse<T>(input: unknown): T | null {
@@ -149,7 +149,9 @@ export async function POST(req: Request) {
       .maybeSingle();
 
     if (connErr) throw connErr;
-    if (!conn) return NextResponse.json({ ok: false, error: "Connection not found." }, { status: 404 });
+    if (!conn) {
+      return NextResponse.json({ ok: false, error: "Connection not found." }, { status: 404 });
+    }
     if (conn.provider !== "basiq") {
       return NextResponse.json({ ok: false, error: "Not a Basiq connection." }, { status: 400 });
     }
@@ -204,80 +206,44 @@ export async function POST(req: Request) {
       await persistItemId(supabase, connectionId, householdId, payload, "needs_auth");
     }
 
-    // Create AuthLink (hosted connect flow)
-    // NOTE: Basiq commonly uses a user-scoped endpoint for auth link creation.
-    let authlink: any;
+    // Create CLIENT_ACCESS token bound to userId, then redirect user to Consent UI
+    // Basiq quickstart: scope=CLIENT_ACCESS + userId, then:
+    // https://consent.basiq.io/home?token=<client_token> :contentReference[oaicite:1]{index=1}
+    let clientToken = "";
     try {
-      authlink = await basiqFetch(`/users/${basiqUserId}/auth_link`, {
-        method: "POST",
-        body: JSON.stringify({
-          description: `Life CFO (${conn.display_name ?? "Basiq"})`,
-        }),
-      });
-    } catch (e1: any) {
-      // Fallback path some setups use
-      try {
-        authlink = await basiqFetch(`/users/${basiqUserId}/authlink`, {
-          method: "POST",
-          body: JSON.stringify({
-            description: `Life CFO (${conn.display_name ?? "Basiq"})`,
-          }),
-        });
-      } catch {
-        const u = unwrapBasiq(e1);
-
-        if (payload?.basiq_user_id) {
-          try {
-            await persistItemId(supabase, connectionId, householdId, payload, "needs_auth");
-          } catch {
-            // ignore secondary failure
-          }
-        }
-
-        return NextResponse.json(
-          {
-            ok: false,
-            step: u.stage || "create_authlink",
-            status: u.status,
-            error: u.message,
-            basiq: u.basiq,
-            basiq_user_id: basiqUserId,
-            diag,
-          },
-          { status: 500 }
-        );
-      }
-    }
-
-    const authLinkUrl = String(
-      authlink?.link ||
-        authlink?.url ||
-        authlink?.authLinkUrl ||
-        authlink?.data?.link ||
-        authlink?.data?.url ||
-        ""
-    );
-    const authLinkId = String(authlink?.id || authlink?.data?.id || "");
-    if (!authLinkUrl) {
+      clientToken = await getBasiqClientToken(basiqUserId);
+    } catch (e: any) {
+      const u = unwrapBasiq(e);
       return NextResponse.json(
-        { ok: false, step: "create_authlink", error: "Basiq authlink create failed (missing link/url).", diag },
+        {
+          ok: false,
+          step: u.stage || "token:client",
+          status: u.status,
+          error: u.message,
+          basiq: u.basiq,
+          basiq_user_id: basiqUserId,
+          diag,
+        },
         { status: 500 }
       );
     }
 
-    // Persist item_id with authlink id too
-    const nextPayload: ItemIdPayload = {
-      basiq_user_id: basiqUserId,
-      basiq_authlink_id: authLinkId || payload?.basiq_authlink_id,
-    };
+    const consentUrl = `https://consent.basiq.io/home?token=${encodeURIComponent(clientToken)}`;
 
-    await persistItemId(supabase, connectionId, householdId, nextPayload, "needs_auth");
+    // Keep connection in needs_auth until we get jobs/connections back from consent journey
+    await persistItemId(
+      supabase,
+      connectionId,
+      householdId,
+      { basiq_user_id: basiqUserId },
+      "needs_auth"
+    );
 
     return NextResponse.json({
       ok: true,
       connection_id: connectionId,
       basiq_user_id: basiqUserId,
-      auth_link_url: authLinkUrl,
+      consent_url: consentUrl,
       diag,
     });
   } catch (e: any) {

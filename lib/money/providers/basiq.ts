@@ -58,18 +58,13 @@ export class BasiqError extends Error {
   }
 }
 
-// Simple in-memory token cache (Node runtime). Token is short-lived; refresh before expiry.
-let cachedToken: { token: string; expiresAtMs: number } | null = null;
+// SERVER_ACCESS bearer cache (Node runtime)
+let cachedServerToken: { token: string; expiresAtMs: number } | null = null;
 
-async function getBasiqBearerToken(): Promise<string> {
+async function fetchToken(params: Record<string, string>, stage: string): Promise<any> {
   assertEnv();
 
-  const now = Date.now();
-  if (cachedToken && cachedToken.expiresAtMs > now + 30_000) {
-    return cachedToken.token;
-  }
-
-  const body = new URLSearchParams({ scope: "SERVER_ACCESS" });
+  const body = new URLSearchParams(params);
 
   const headers = new Headers();
   headers.set("Authorization", `Basic ${basiqBasicValue()}`);
@@ -85,26 +80,45 @@ async function getBasiqBearerToken(): Promise<string> {
   });
 
   const text = await res.text().catch(() => "");
-  if (!res.ok) throw new BasiqError("token", res.status, text);
+  if (!res.ok) throw new BasiqError(stage, res.status, text);
 
-  const json: any = (() => {
-    try {
-      return JSON.parse(text);
-    } catch {
-      return null;
-    }
-  })();
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+async function getBasiqServerBearerToken(): Promise<string> {
+  const now = Date.now();
+  if (cachedServerToken && cachedServerToken.expiresAtMs > now + 30_000) {
+    return cachedServerToken.token;
+  }
+
+  // SERVER_ACCESS token (server-side API calls)
+  const json: any = await fetchToken({ scope: "SERVER_ACCESS" }, "token:server");
 
   const token = String(json?.access_token || json?.token || "");
   const expiresInSec = Number(json?.expires_in ?? 3600);
-
   if (!token) throw new Error("Basiq token response missing access_token");
 
-  cachedToken = {
+  cachedServerToken = {
     token,
     expiresAtMs: Date.now() + Math.max(60, expiresInSec) * 1000,
   };
 
+  return token;
+}
+
+// CLIENT_ACCESS token bound to a userId (for Consent UI redirect)
+export async function getBasiqClientToken(userId: string): Promise<string> {
+  const json: any = await fetchToken(
+    { scope: "CLIENT_ACCESS", userId: String(userId) },
+    "token:client"
+  );
+
+  const token = String(json?.access_token || json?.token || "");
+  if (!token) throw new Error("Basiq client token response missing access_token");
   return token;
 }
 
@@ -120,7 +134,7 @@ function mergeHeadersNoAuth(optionsHeaders: RequestInit["headers"]): Headers {
 }
 
 export async function basiqFetch(path: string, options: RequestInit = {}) {
-  const bearer = await getBasiqBearerToken();
+  const bearer = await getBasiqServerBearerToken();
 
   const headers = mergeHeadersNoAuth(options.headers);
 
