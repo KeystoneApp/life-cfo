@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Page } from "@/components/Page";
 import { Card, CardContent, Chip, useToast } from "@/components/ui";
 import { AssistedSearch } from "@/components/AssistedSearch";
@@ -78,18 +79,8 @@ async function fetchJson<T>(url: string): Promise<T> {
   return json as T;
 }
 
-async function postJson<T>(url: string, body: any): Promise<T> {
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body ?? {}),
-  });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error((json as any)?.error ?? "Request failed");
-  return json as T;
-}
-
 export default function MoneyClient() {
+  const router = useRouter();
   const { showToast } = useToast();
 
   const [loading, setLoading] = useState(true);
@@ -102,8 +93,6 @@ export default function MoneyClient() {
   const [accounts, setAccounts] = useState<AccountRow[]>([]);
   const [tx, setTx] = useState<TxRow[]>([]);
   const [q, setQ] = useState("");
-
-  const [connecting, setConnecting] = useState(false);
 
   const searchRef = useRef<HTMLInputElement | null>(null);
 
@@ -229,25 +218,6 @@ export default function MoneyClient() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  const connectAccounts = async () => {
-    if (connecting) return;
-
-    setConnecting(true);
-    try {
-      await postJson<{ ok: boolean; connection?: any }>("/api/money/connections", {
-        provider: "manual",
-        display_name: "Manual connection",
-      });
-
-      showToast({ message: "Connected." }, 1500);
-      await refresh(false);
-    } catch (e: any) {
-      showToast({ message: e?.message ?? "Couldn’t connect." }, 2500);
-    } finally {
-      setConnecting(false);
-    }
-  };
-
   const cardClass = "border-zinc-200 bg-white";
 
   const liveChipClass =
@@ -287,8 +257,11 @@ export default function MoneyClient() {
               Refresh
             </Chip>
 
-            <Chip title="Connect accounts (provider layer next)" onClick={() => void connectAccounts()}>
-              {connecting ? "Connecting…" : "Connect accounts"}
+            <Chip
+              title="Connect accounts"
+              onClick={() => router.push("/connections")}
+            >
+              Connect accounts
             </Chip>
 
             <Link href="/connections">

@@ -27,8 +27,10 @@ export default function ConnectionsPage() {
 
   const [items, setItems] = useState<Connection[]>([]);
   const [loading, setLoading] = useState(true);
-  const [creating, setCreating] = useState(false);
+  const [creatingManual, setCreatingManual] = useState(false);
+  const [creatingBasiq, setCreatingBasiq] = useState(false);
   const [syncingId, setSyncingId] = useState<string | null>(null);
+  const [connectingId, setConnectingId] = useState<string | null>(null);
 
   async function load() {
     setLoading(true);
@@ -50,7 +52,7 @@ export default function ConnectionsPage() {
   }, []);
 
   async function createManual() {
-    setCreating(true);
+    setCreatingManual(true);
     try {
       const res = await fetch("/api/money/connections", {
         method: "POST",
@@ -66,7 +68,61 @@ export default function ConnectionsPage() {
     } catch (e: any) {
       toast({ title: "Couldn’t create", description: e?.message });
     } finally {
-      setCreating(false);
+      setCreatingManual(false);
+    }
+  }
+
+  async function startBasiqAuth(connectionId: string) {
+    setConnectingId(connectionId);
+    try {
+      const res = await fetch("/api/money/basiq/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ connection_id: connectionId }),
+      });
+
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error || "Basiq start failed");
+
+      const url = String(json?.auth_link_url || "");
+      if (!url) throw new Error("Missing auth_link_url");
+
+      // Redirect user into hosted connection flow
+      window.location.href = url;
+    } catch (e: any) {
+      toast({ title: "Couldn’t start connection", description: e?.message });
+      setConnectingId(null);
+    }
+  }
+
+  async function createBasiqAndConnect() {
+    setCreatingBasiq(true);
+    try {
+      // 1) Create the external connection row
+      const res = await fetch("/api/money/connections", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: "basiq",
+          display_name: "Bank connection (AU)",
+          currency: "AUD",
+        }),
+      });
+
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error || "Create failed");
+
+      const connectionId = String(json?.connection?.id || "");
+      if (!connectionId) throw new Error("Missing connection id");
+
+      toast({ title: "Starting bank connection…" });
+
+      // 2) Start basiq auth flow + redirect
+      await startBasiqAuth(connectionId);
+    } catch (e: any) {
+      toast({ title: "Couldn’t add bank", description: e?.message });
+    } finally {
+      setCreatingBasiq(false);
     }
   }
 
@@ -128,6 +184,9 @@ export default function ConnectionsPage() {
     return "";
   }
 
+  const canShowConnect =
+    (c: Connection) => c.provider === "basiq" && c.status === "needs_auth";
+
   return (
     <Page
       title="Connections"
@@ -143,17 +202,28 @@ export default function ConnectionsPage() {
                   Data sources
                 </div>
                 <div className="text-xs text-zinc-500">
-                  Manual now. Bank linking next.
+                  Add manual sources, or connect a bank (Australia).
                 </div>
               </div>
 
-              <Button
-                onClick={() => void createManual()}
-                disabled={creating}
-                className="rounded-2xl"
-              >
-                {creating ? "Adding…" : "Add manual"}
-              </Button>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  onClick={() => void createManual()}
+                  disabled={creatingManual || creatingBasiq}
+                  variant="ghost"
+                  className="rounded-2xl"
+                >
+                  {creatingManual ? "Adding…" : "Add manual"}
+                </Button>
+
+                <Button
+                  onClick={() => void createBasiqAndConnect()}
+                  disabled={creatingBasiq || creatingManual}
+                  className="rounded-2xl"
+                >
+                  {creatingBasiq ? "Starting…" : "Add Basiq (AU)"}
+                </Button>
+              </div>
             </div>
 
             <div className="mt-6 space-y-3">
@@ -178,9 +248,7 @@ export default function ConnectionsPage() {
                         <div className="mt-1 text-xs text-zinc-500">
                           {[
                             syncLine(c),
-                            c.created_at
-                              ? `Added ${softDate(c.created_at)}`
-                              : null,
+                            c.created_at ? `Added ${softDate(c.created_at)}` : null,
                           ]
                             .filter(Boolean)
                             .join(" • ")}
@@ -188,6 +256,17 @@ export default function ConnectionsPage() {
                       </div>
 
                       <div className="flex items-center gap-2">
+                        {canShowConnect(c) && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => void startBasiqAuth(c.id)}
+                            disabled={connectingId === c.id}
+                          >
+                            {connectingId === c.id ? "Opening…" : "Connect"}
+                          </Button>
+                        )}
+
                         {c.status === "active" && (
                           <Button
                             variant="ghost"

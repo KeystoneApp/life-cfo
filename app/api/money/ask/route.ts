@@ -2,6 +2,8 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { supabaseRoute } from "@/lib/supabaseRoute";
+
+export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const COOKIE_NAME = "lifecfo_household";
@@ -21,28 +23,16 @@ function clampInt(v: unknown, min: number, max: number, fallback: number) {
   return Math.max(min, Math.min(max, n));
 }
 
-/**
- * We don't assume what your supabaseRoute.ts exports are called.
- * We try a few common names and finally default export.
- */
-function getCreateRouteClient(): (args: any) => any {
-  const anyMod = RouteSupabase as any;
-
-  return (
-    anyMod.createSupabaseRouteClient ||
-    anyMod.createRouteClient ||
-    anyMod.supabaseRouteClient ||
-    anyMod.createClient ||
-    anyMod.default
-  );
-}
-
 async function readCookie(name: string) {
+  // Next.js cookies() is async
   const jar = await cookies();
   return jar.get(name)?.value?.trim() || null;
 }
 
-async function resolveActiveHouseholdId(supabase: any, userId: string): Promise<string | null> {
+async function resolveActiveHouseholdId(
+  supabase: any,
+  userId: string
+): Promise<string | null> {
   // cookie-first (must be a valid membership)
   const preferred = await readCookie(COOKIE_NAME);
 
@@ -69,7 +59,11 @@ async function resolveActiveHouseholdId(supabase: any, userId: string): Promise<
   return data?.[0]?.household_id ?? null;
 }
 
-async function ensureHouseholdMember(supabase: any, userId: string, householdId: string) {
+async function ensureHouseholdMember(
+  supabase: any,
+  userId: string,
+  householdId: string
+) {
   const { data, error } = await supabase
     .from("household_members")
     .select("household_id, role")
@@ -84,31 +78,15 @@ async function ensureHouseholdMember(supabase: any, userId: string, householdId:
 
 export async function POST(req: Request) {
   try {
-    // ✅ Next.js cookies() is async now
-    const jar = await cookies();
-
-    const createRouteClient = getCreateRouteClient();
-    if (!createRouteClient) {
-      return NextResponse.json(
-        { ok: false, error: "Missing supabase route client factory (supabase/supabaseRoute.ts)." },
-        { status: 500 }
-      );
-    }
-
-    // Try a couple common calling conventions
-    let supabase: any;
-    try {
-      supabase = createRouteClient({ cookies: () => jar });
-    } catch {
-      supabase = createRouteClient({ cookieStore: jar });
-    }
+    // Create supabase client using your canonical helper
+    const supabase = await supabaseRoute();
 
     const {
       data: { user },
       error: userErr,
     } = await supabase.auth.getUser();
 
-    if (userErr || !user) {
+    if (userErr || !user?.id) {
       return NextResponse.json({ ok: false, error: "Not signed in." }, { status: 401 });
     }
 
@@ -118,7 +96,10 @@ export async function POST(req: Request) {
 
     const householdId = await resolveActiveHouseholdId(supabase, user.id);
     if (!householdId) {
-      return NextResponse.json({ ok: false, error: "User not linked to a household." }, { status: 400 });
+      return NextResponse.json(
+        { ok: false, error: "User not linked to a household." },
+        { status: 400 }
+      );
     }
 
     const { role } = await ensureHouseholdMember(supabase, user.id, householdId);
@@ -126,9 +107,18 @@ export async function POST(req: Request) {
     // No query → return light readiness + counts (fast + calm)
     if (!q) {
       const [accountsCount, billsCount, txCount] = await Promise.all([
-        supabase.from("accounts").select("id", { count: "exact", head: true }).eq("household_id", householdId),
-        supabase.from("recurring_bills").select("id", { count: "exact", head: true }).eq("household_id", householdId),
-        supabase.from("transactions").select("id", { count: "exact", head: true }).eq("household_id", householdId),
+        supabase
+          .from("accounts")
+          .select("id", { count: "exact", head: true })
+          .eq("household_id", householdId),
+        supabase
+          .from("recurring_bills")
+          .select("id", { count: "exact", head: true })
+          .eq("household_id", householdId),
+        supabase
+          .from("transactions")
+          .select("id", { count: "exact", head: true })
+          .eq("household_id", householdId),
       ]);
 
       return NextResponse.json({
