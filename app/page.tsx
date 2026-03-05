@@ -1,10 +1,18 @@
-// app/page.tsx
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
 export const dynamic = "force-dynamic";
 
-export default function RootPage() {
-  // Always send users to the real entry point.
-  // The `next` param ensures post-login goes to /home.
+export default async function RootPage() {
+  const cookieStore = await cookies();
+
+  const hasSession =
+    cookieStore.get("sb-access-token") ||
+    cookieStore.get("sb-refresh-token");
+
+  if (hasSession) {
+    redirect("/home");
+  }
+
   redirect("/login?next=%2Fhome");
 }
