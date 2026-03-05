@@ -21,6 +21,30 @@ function softDate(d: string | null) {
   return new Date(parsed).toLocaleDateString();
 }
 
+function coerceStr(v: unknown) {
+  return typeof v === "string" ? v : "";
+}
+
+function pickRedirectUrl(json: any) {
+  // New flow uses consent_url
+  const consent = coerceStr(json?.consent_url);
+  if (consent) return consent;
+
+  // Back-compat (older authlink flow)
+  const auth = coerceStr(json?.auth_link_url);
+  if (auth) return auth;
+
+  return "";
+}
+
+function safeErrMsg(json: any) {
+  // Prefer structured / short error messages
+  const step = coerceStr(json?.step);
+  const err = coerceStr(json?.error);
+  if (step && err) return `${step}: ${err}`;
+  return err || "Request failed";
+}
+
 export default function ConnectionsPage() {
   const router = useRouter();
   const { toast } = useToast();
@@ -82,13 +106,13 @@ export default function ConnectionsPage() {
       });
 
       const json = await res.json();
-      if (!res.ok) throw new Error(json?.error || "Basiq start failed");
+      if (!res.ok) throw new Error(safeErrMsg(json));
 
-      // NEW: prefer consent_url (Basiq hosted consent UI)
-      const url = String(json?.consent_url || json?.auth_link_url || "");
-      if (!url) throw new Error("Missing consent_url");
+      const url = pickRedirectUrl(json);
+      if (!url) throw new Error("Missing consent_url/auth_link_url");
 
-      window.location.href = url;
+      // Redirect user into hosted consent/connect flow
+      window.location.assign(url);
     } catch (e: any) {
       toast({ title: "Couldn’t start connection", description: e?.message });
       setConnectingId(null);
@@ -112,7 +136,7 @@ export default function ConnectionsPage() {
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error || "Create failed");
 
-      const connectionId = String(json?.connection?.id || "");
+      const connectionId = coerceStr(json?.connection?.id);
       if (!connectionId) throw new Error("Missing connection id");
 
       toast({ title: "Starting bank connection…" });
@@ -145,26 +169,29 @@ export default function ConnectionsPage() {
   function statusChip(status: string) {
     const base = "text-xs rounded-full px-3 py-1 border";
 
-    if (status === "manual")
+    if (status === "manual") {
       return (
         <span className={`${base} border-zinc-200 bg-zinc-50 text-zinc-700`}>
           Manual
         </span>
       );
+    }
 
-    if (status === "needs_auth")
+    if (status === "needs_auth") {
       return (
         <span className={`${base} border-amber-200 bg-amber-50 text-amber-700`}>
           Needs attention
         </span>
       );
+    }
 
-    if (status === "error")
+    if (status === "error") {
       return (
         <span className={`${base} border-rose-200 bg-rose-50 text-rose-700`}>
           Issue
         </span>
       );
+    }
 
     return (
       <span className={`${base} border-emerald-200 bg-emerald-50 text-emerald-700`}>
@@ -195,7 +222,9 @@ export default function ConnectionsPage() {
           <CardContent>
             <div className="flex items-start justify-between gap-4 flex-wrap">
               <div className="space-y-1">
-                <div className="text-sm font-medium text-zinc-900">Data sources</div>
+                <div className="text-sm font-medium text-zinc-900">
+                  Data sources
+                </div>
                 <div className="text-xs text-zinc-500">
                   Add manual sources, or connect a bank (Australia).
                 </div>
@@ -239,7 +268,10 @@ export default function ConnectionsPage() {
                         </div>
 
                         <div className="mt-1 text-xs text-zinc-500">
-                          {[syncLine(c), c.created_at ? `Added ${softDate(c.created_at)}` : null]
+                          {[
+                            syncLine(c),
+                            c.created_at ? `Added ${softDate(c.created_at)}` : null,
+                          ]
                             .filter(Boolean)
                             .join(" • ")}
                         </div>
