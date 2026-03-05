@@ -1,4 +1,6 @@
+// app/api/money/connections/route.ts
 import { NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
 import { supabaseRoute } from "@/lib/supabaseRoute";
 import { resolveHouseholdIdRoute } from "@/lib/households/resolveHouseholdIdRoute";
 
@@ -20,6 +22,33 @@ function defaultDisplayName(provider: string): string | null {
   return provider.toUpperCase();
 }
 
+/**
+ * Create a DB client that always includes the user's JWT.
+ * This avoids the class of bugs where auth.getUser() works
+ * but RLS inserts fail because PostgREST didn't get Authorization.
+ */
+function authedDbClient(accessToken: string) {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+  const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+
+  if (!url || !anon) {
+    throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY");
+  }
+
+  return createClient(url, anon, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+    },
+    global: {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    },
+  });
+}
+
 export async function GET() {
   try {
     const supabase = await supabaseRoute();
@@ -29,12 +58,27 @@ export async function GET() {
       error: userErr,
     } = await supabase.auth.getUser();
 
-    if (userErr || !user?.id) return NextResponse.json({ ok: false, error: "Not signed in." }, { status: 401 });
+    if (userErr || !user?.id) {
+      return NextResponse.json({ ok: false, error: "Not signed in." }, { status: 401 });
+    }
 
-    const householdId = await resolveHouseholdIdRoute(supabase, user.id);
-    if (!householdId) return NextResponse.json({ ok: false, error: "User not linked to a household." }, { status: 400 });
+    const {
+      data: { session },
+      error: sessErr,
+    } = await supabase.auth.getSession();
 
-    const { data, error } = await supabase
+    if (sessErr || !session?.access_token) {
+      return NextResponse.json({ ok: false, error: "Session missing." }, { status: 401 });
+    }
+
+    const db = authedDbClient(session.access_token);
+
+    const householdId = await resolveHouseholdIdRoute(db, user.id);
+    if (!householdId) {
+      return NextResponse.json({ ok: false, error: "User not linked to a household." }, { status: 400 });
+    }
+
+    const { data, error } = await db
       .from("external_connections")
       .select("id,household_id,provider,status,provider_connection_id,display_name,last_sync_at,created_at,updated_at")
       .eq("household_id", householdId)
@@ -57,10 +101,26 @@ export async function POST(req: Request) {
       error: userErr,
     } = await supabase.auth.getUser();
 
-    if (userErr || !user?.id) return NextResponse.json({ ok: false, error: "Not signed in." }, { status: 401 });
+    if (userErr || !user?.id) {
+      return NextResponse.json({ ok: false, error: "Not signed in." }, { status: 401 });
+    }
 
-    const householdId = await resolveHouseholdIdRoute(supabase, user.id);
-    if (!householdId) return NextResponse.json({ ok: false, error: "User not linked to a household." }, { status: 400 });
+    const {
+      data: { session },
+      error: sessErr,
+    } = await supabase.auth.getSession();
+
+    if (sessErr || !session?.access_token) {
+      return NextResponse.json({ ok: false, error: "Session missing." }, { status: 401 });
+    }
+
+    // ✅ Use authed DB client for ALL RLS-protected DB ops
+    const db = authedDbClient(session.access_token);
+
+    const householdId = await resolveHouseholdIdRoute(db, user.id);
+    if (!householdId) {
+      return NextResponse.json({ ok: false, error: "User not linked to a household." }, { status: 400 });
+    }
 
     const body = await req.json().catch(() => ({}));
 
@@ -69,7 +129,7 @@ export async function POST(req: Request) {
     const display_name = typeof body?.display_name === "string" ? body.display_name : defaultDisplayName(provider);
     const currency = typeof body?.currency === "string" ? body.currency : "AUD";
 
-    const { data: connection, error: connErr } = await supabase
+    const { data: connection, error: connErr } = await db
       .from("external_connections")
       .insert({
         household_id: householdId,
@@ -85,7 +145,7 @@ export async function POST(req: Request) {
     if (connErr) throw connErr;
 
     // Seed simple accounts if none exist for this household
-    const { count: existingCount, error: countErr } = await supabase
+    const { count: existingCount, error: countErr } = await db
       .from("accounts")
       .select("id", { count: "exact", head: true })
       .eq("household_id", householdId)
@@ -113,7 +173,7 @@ export async function POST(req: Request) {
         archived: false,
       }));
 
-      const { data: created, error: seedErr } = await supabase
+      const { data: created, error: seedErr } = await db
         .from("accounts")
         .insert(rows)
         .select("id,household_id,name,provider,type,status,currency,current_balance_cents,updated_at,created_at");
