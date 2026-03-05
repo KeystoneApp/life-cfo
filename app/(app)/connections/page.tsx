@@ -21,6 +21,21 @@ function softDate(d: string | null) {
   return new Date(parsed).toLocaleDateString();
 }
 
+function pickRedirectUrl(json: any): string {
+  // New (consent UI) shape:
+  const consent = typeof json?.consent_url === "string" ? json.consent_url : "";
+  if (consent) return consent;
+
+  // Older shape:
+  const authLink = typeof json?.auth_link_url === "string" ? json.auth_link_url : "";
+  if (authLink) return authLink;
+
+  // Be tolerant to other possible keys:
+  const url = typeof json?.url === "string" ? json.url : "";
+  const link = typeof json?.link === "string" ? json.link : "";
+  return url || link || "";
+}
+
 export default function ConnectionsPage() {
   const router = useRouter();
   const { toast } = useToast();
@@ -74,6 +89,7 @@ export default function ConnectionsPage() {
 
   async function startBasiqAuth(connectionId: string) {
     setConnectingId(connectionId);
+
     try {
       const res = await fetch("/api/money/basiq/start", {
         method: "POST",
@@ -82,13 +98,21 @@ export default function ConnectionsPage() {
       });
 
       const json = await res.json();
-      if (!res.ok) throw new Error(json?.error || "Basiq start failed");
+      if (!res.ok) {
+        // Bubble up best available message (your API already returns step info sometimes)
+        const msg =
+          typeof json?.error === "string"
+            ? json.error
+            : typeof json?.message === "string"
+              ? json.message
+              : "Basiq start failed";
+        throw new Error(msg);
+      }
 
-      // NEW: API now returns `consent_url` (Basiq Consent UI)
-      const url = String(json?.consent_url || "");
-      if (!url) throw new Error("Missing consent_url");
+      const url = pickRedirectUrl(json);
+      if (!url) throw new Error("Missing consent/auth URL from server.");
 
-      // Redirect user into hosted consent / connection flow
+      // Hosted connection flow (Consent UI or AuthLink)
       window.location.href = url;
     } catch (e: any) {
       toast({ title: "Couldn’t start connection", description: e?.message });
@@ -118,7 +142,7 @@ export default function ConnectionsPage() {
 
       toast({ title: "Starting bank connection…" });
 
-      // 2) Start basiq consent flow + redirect
+      // 2) Start basiq hosted flow + redirect
       await startBasiqAuth(connectionId);
     } catch (e: any) {
       toast({ title: "Couldn’t add bank", description: e?.message });
@@ -150,11 +174,7 @@ export default function ConnectionsPage() {
     const base = "text-xs rounded-full px-3 py-1 border";
 
     if (status === "manual")
-      return (
-        <span className={`${base} border-zinc-200 bg-zinc-50 text-zinc-700`}>
-          Manual
-        </span>
-      );
+      return <span className={`${base} border-zinc-200 bg-zinc-50 text-zinc-700`}>Manual</span>;
 
     if (status === "needs_auth")
       return (
@@ -164,17 +184,9 @@ export default function ConnectionsPage() {
       );
 
     if (status === "error")
-      return (
-        <span className={`${base} border-rose-200 bg-rose-50 text-rose-700`}>
-          Issue
-        </span>
-      );
+      return <span className={`${base} border-rose-200 bg-rose-50 text-rose-700`}>Issue</span>;
 
-    return (
-      <span className={`${base} border-emerald-200 bg-emerald-50 text-emerald-700`}>
-        Active
-      </span>
-    );
+    return <span className={`${base} border-emerald-200 bg-emerald-50 text-emerald-700`}>Active</span>;
   }
 
   function syncLine(c: Connection) {
@@ -185,8 +197,7 @@ export default function ConnectionsPage() {
     return "";
   }
 
-  const canShowConnect = (c: Connection) =>
-    c.provider === "basiq" && c.status === "needs_auth";
+  const canShowConnect = (c: Connection) => c.provider === "basiq" && c.status === "needs_auth";
 
   return (
     <Page
@@ -199,9 +210,7 @@ export default function ConnectionsPage() {
           <CardContent>
             <div className="flex items-start justify-between gap-4 flex-wrap">
               <div className="space-y-1">
-                <div className="text-sm font-medium text-zinc-900">
-                  Data sources
-                </div>
+                <div className="text-sm font-medium text-zinc-900">Data sources</div>
                 <div className="text-xs text-zinc-500">
                   Add manual sources, or connect a bank (Australia).
                 </div>
