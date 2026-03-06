@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Page } from "@/components/Page";
 import { Card, CardContent, Chip, Button, useToast } from "@/components/ui";
@@ -10,8 +10,11 @@ type Connection = {
   provider: string;
   status: string;
   display_name: string | null;
+  institution_name?: string | null;
+  provider_institution_name?: string | null;
   last_sync_at: string | null;
   created_at: string | null;
+  updated_at?: string | null;
 };
 
 type PlaidLinkOnSuccessMetadata = {
@@ -81,6 +84,61 @@ function safeErrMsg(json: any) {
   return err || "Request failed";
 }
 
+function providerLabel(provider: string) {
+  const p = coerceStr(provider).toLowerCase();
+  if (p === "plaid") return "Plaid";
+  if (p === "basiq") return "Basiq";
+  if (p === "manual") return "Manual";
+  return p ? p.toUpperCase() : "Source";
+}
+
+function providerChipClass(provider: string) {
+  const p = coerceStr(provider).toLowerCase();
+  if (p === "plaid") return "border border-sky-200 bg-sky-50 text-sky-700";
+  if (p === "basiq") return "border border-teal-200 bg-teal-50 text-teal-700";
+  if (p === "manual") return "border border-zinc-200 bg-zinc-50 text-zinc-700";
+  return "border border-zinc-200 bg-zinc-50 text-zinc-700";
+}
+
+function sortConnections(items: Connection[]) {
+  const rank = (c: Connection) => {
+    if (c.status === "active") return 0;
+    if (c.status === "needs_auth") return 1;
+    if (c.status === "manual") return 2;
+    if (c.status === "error") return 3;
+    return 4;
+  };
+
+  return [...items].sort((a, b) => {
+    const byRank = rank(a) - rank(b);
+    if (byRank !== 0) return byRank;
+
+    const aTime = Date.parse(a.updated_at || a.created_at || "");
+    const bTime = Date.parse(b.updated_at || b.created_at || "");
+    const safeA = Number.isFinite(aTime) ? aTime : 0;
+    const safeB = Number.isFinite(bTime) ? bTime : 0;
+
+    return safeB - safeA;
+  });
+}
+
+function displayTitle(c: Connection) {
+  const institution =
+    coerceStr(c.provider_institution_name) || coerceStr(c.institution_name);
+
+  if (institution) return institution;
+  if (coerceStr(c.display_name)) return coerceStr(c.display_name);
+  return providerLabel(c.provider);
+}
+
+function syncLine(c: Connection) {
+  if (c.last_sync_at) return `Synced ${softDate(c.last_sync_at)}`;
+  if (c.status === "manual") return "Manual entry";
+  if (c.status === "needs_auth") return "Awaiting connection";
+  if (c.status === "error") return "Needs review";
+  return "";
+}
+
 let plaidScriptPromise: Promise<void> | null = null;
 
 function loadPlaidScript(): Promise<void> {
@@ -134,6 +192,7 @@ export default function ConnectionsPage() {
   const [creatingPlaid, setCreatingPlaid] = useState(false);
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [connectingId, setConnectingId] = useState<string | null>(null);
+  const [showAllPending, setShowAllPending] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -141,7 +200,7 @@ export default function ConnectionsPage() {
       const res = await fetch("/api/money/connections", { cache: "no-store" });
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error || "Load failed");
-      setItems(json.connections ?? []);
+      setItems(sortConnections(json.connections ?? []));
     } catch (e: any) {
       toast({ title: "Couldn’t load", description: e?.message });
       setItems([]);
@@ -382,13 +441,18 @@ export default function ConnectionsPage() {
     );
   }
 
-  function syncLine(c: Connection) {
-    if (c.last_sync_at) return `Synced ${softDate(c.last_sync_at)}`;
-    if (c.status === "manual") return "Manual entry";
-    if (c.status === "needs_auth") return "Awaiting connection";
-    if (c.status === "error") return "Needs review";
-    return "";
-  }
+  const activeItems = useMemo(
+    () => items.filter((c) => c.status === "active" || c.status === "manual"),
+    [items]
+  );
+
+  const pendingItems = useMemo(
+    () => items.filter((c) => c.status === "needs_auth" || c.status === "error"),
+    [items]
+  );
+
+  const visiblePending = showAllPending ? pendingItems : pendingItems.slice(0, 3);
+  const hiddenPendingCount = Math.max(0, pendingItems.length - visiblePending.length);
 
   const canShowConnect = (c: Connection) =>
     (c.provider === "basiq" || c.provider === "plaid") && c.status === "needs_auth";
@@ -404,9 +468,7 @@ export default function ConnectionsPage() {
           <CardContent>
             <div className="flex items-start justify-between gap-4 flex-wrap">
               <div className="space-y-1">
-                <div className="text-sm font-medium text-zinc-900">
-                  Data sources
-                </div>
+                <div className="text-sm font-medium text-zinc-900">Data sources</div>
                 <div className="text-xs text-zinc-500">
                   Add manual sources, or connect a bank.
                 </div>
@@ -443,69 +505,149 @@ export default function ConnectionsPage() {
             <div className="mt-6 space-y-3">
               {loading ? (
                 <div className="text-sm text-zinc-600">Loading…</div>
-              ) : items.length === 0 ? (
-                <div className="text-sm text-zinc-600">No connections yet.</div>
               ) : (
-                items.map((c) => (
-                  <div
-                    key={c.id}
-                    className="rounded-2xl border border-zinc-200 bg-white px-4 py-3"
-                  >
-                    <div className="flex items-start justify-between gap-3 flex-wrap">
-                      <div className="min-w-[240px] flex-1">
-                        <div className="text-sm font-medium text-zinc-900">
-                          {c.display_name || c.provider}
-                        </div>
-
-                        <div className="mt-1 text-xs text-zinc-500">
-                          {[
-                            syncLine(c),
-                            c.created_at ? `Added ${softDate(c.created_at)}` : null,
-                          ]
-                            .filter(Boolean)
-                            .join(" • ")}
-                        </div>
+                <>
+                  {activeItems.length > 0 ? (
+                    <div className="space-y-3">
+                      <div className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+                        Connected
                       </div>
 
-                      <div className="flex items-center gap-2">
-                        {canShowConnect(c) && c.provider === "basiq" && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => void startBasiqAuth(c.id)}
-                            disabled={connectingId === c.id}
-                          >
-                            {connectingId === c.id ? "Opening…" : "Connect"}
-                          </Button>
-                        )}
+                      {activeItems.map((c) => (
+                        <div
+                          key={c.id}
+                          className="rounded-2xl border border-emerald-200 bg-emerald-50/40 px-4 py-3"
+                        >
+                          <div className="flex items-start justify-between gap-3 flex-wrap">
+                            <div className="min-w-[240px] flex-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <div className="text-sm font-medium text-zinc-900">
+                                  {displayTitle(c)}
+                                </div>
+                                <span
+                                  className={`rounded-full px-2.5 py-1 text-[11px] ${providerChipClass(
+                                    c.provider
+                                  )}`}
+                                >
+                                  {providerLabel(c.provider)}
+                                </span>
+                              </div>
 
-                        {canShowConnect(c) && c.provider === "plaid" && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => void startPlaidAuth(c.id)}
-                            disabled={connectingId === c.id}
-                          >
-                            {connectingId === c.id ? "Opening…" : "Connect"}
-                          </Button>
-                        )}
+                              <div className="mt-1 text-xs text-zinc-500">
+                                {[
+                                  syncLine(c),
+                                  c.created_at ? `Added ${softDate(c.created_at)}` : null,
+                                ]
+                                  .filter(Boolean)
+                                  .join(" • ")}
+                              </div>
+                            </div>
 
-                        {c.status === "active" && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => syncConnection(c.id)}
-                            disabled={syncingId === c.id}
-                          >
-                            {syncingId === c.id ? "Syncing…" : "Sync"}
-                          </Button>
-                        )}
+                            <div className="flex items-center gap-2">
+                              {c.status === "active" && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => syncConnection(c.id)}
+                                  disabled={syncingId === c.id}
+                                >
+                                  {syncingId === c.id ? "Syncing…" : "Sync"}
+                                </Button>
+                              )}
 
-                        {statusChip(c.status)}
-                      </div>
+                              {statusChip(c.status)}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
                     </div>
-                  </div>
-                ))
+                  ) : null}
+
+                  {visiblePending.length > 0 ? (
+                    <div className="space-y-3 pt-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+                          Needs attention
+                        </div>
+
+                        {pendingItems.length > 3 ? (
+                          <button
+                            type="button"
+                            onClick={() => setShowAllPending((v) => !v)}
+                            className="text-xs text-zinc-500 hover:text-zinc-700"
+                          >
+                            {showAllPending
+                              ? "Show fewer"
+                              : `Show ${hiddenPendingCount} more`}
+                          </button>
+                        ) : null}
+                      </div>
+
+                      {visiblePending.map((c) => (
+                        <div
+                          key={c.id}
+                          className="rounded-2xl border border-zinc-200 bg-white px-4 py-3"
+                        >
+                          <div className="flex items-start justify-between gap-3 flex-wrap">
+                            <div className="min-w-[240px] flex-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <div className="text-sm font-medium text-zinc-900">
+                                  {displayTitle(c)}
+                                </div>
+                                <span
+                                  className={`rounded-full px-2.5 py-1 text-[11px] ${providerChipClass(
+                                    c.provider
+                                  )}`}
+                                >
+                                  {providerLabel(c.provider)}
+                                </span>
+                              </div>
+
+                              <div className="mt-1 text-xs text-zinc-500">
+                                {[
+                                  syncLine(c),
+                                  c.created_at ? `Added ${softDate(c.created_at)}` : null,
+                                ]
+                                  .filter(Boolean)
+                                  .join(" • ")}
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                              {canShowConnect(c) && c.provider === "basiq" && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => void startBasiqAuth(c.id)}
+                                  disabled={connectingId === c.id}
+                                >
+                                  {connectingId === c.id ? "Opening…" : "Connect"}
+                                </Button>
+                              )}
+
+                              {canShowConnect(c) && c.provider === "plaid" && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => void startPlaidAuth(c.id)}
+                                  disabled={connectingId === c.id}
+                                >
+                                  {connectingId === c.id ? "Opening…" : "Connect"}
+                                </Button>
+                              )}
+
+                              {statusChip(c.status)}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  {!loading && activeItems.length === 0 && pendingItems.length === 0 ? (
+                    <div className="text-sm text-zinc-600">No connections yet.</div>
+                  ) : null}
+                </>
               )}
             </div>
           </CardContent>
