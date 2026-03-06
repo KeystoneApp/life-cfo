@@ -1,4 +1,3 @@
-// app/api/money/plaid/exchange/route.ts
 import { NextResponse } from "next/server";
 import { supabaseRoute } from "@/lib/supabaseRoute";
 import { resolveHouseholdIdRoute } from "@/lib/households/resolveHouseholdIdRoute";
@@ -65,7 +64,7 @@ export async function POST(req: Request) {
 
     if (!connection) {
       return NextResponse.json(
-        { ok: false, error: "Connection not found.", diag },
+        { ok: false, error: "Connection not found.", diag, connection_id: connectionId, household_id: householdId },
         { status: 404 }
       );
     }
@@ -100,9 +99,9 @@ export async function POST(req: Request) {
     const update: Record<string, unknown> = {
       status: "active",
       encrypted_access_token: accessToken,
-      item_id: itemId, // keep for existing active-row DB constraint
+      item_id: itemId,
       provider_item_id: itemId,
-      provider_connection_id: itemId, // practical placeholder until/unless you add a different provider connection id
+      provider_connection_id: itemId,
       provider_institution_id: institutionId || null,
       provider_institution_name: institutionName || null,
       institution_id: institutionId || null,
@@ -112,13 +111,33 @@ export async function POST(req: Request) {
       updated_at: new Date().toISOString(),
     };
 
-    const { error: updateErr } = await supabase
+    const { data: updatedRow, error: updateErr } = await supabase
       .from("external_connections")
       .update(update)
       .eq("id", connectionId)
-      .eq("household_id", householdId);
+      .eq("household_id", householdId)
+      .select(
+        "id, household_id, provider, status, encrypted_access_token, item_id, provider_item_id, provider_connection_id, provider_institution_id, provider_institution_name"
+      )
+      .maybeSingle();
 
     if (updateErr) throw updateErr;
+
+    if (!updatedRow) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "Plaid exchange did not update any connection row.",
+          diag,
+          debug: {
+            connection_id: connectionId,
+            household_id: householdId,
+            matched_connection: connection?.id ?? null,
+          },
+        },
+        { status: 500 }
+      );
+    }
 
     return NextResponse.json({
       ok: true,
@@ -126,7 +145,13 @@ export async function POST(req: Request) {
       item_id: itemId,
       institution_id: institutionId || null,
       institution_name: institutionName || null,
-      status: "active",
+      status: updatedRow.status,
+      debug: {
+        saved_access_token: Boolean(updatedRow.encrypted_access_token),
+        saved_item_id: updatedRow.item_id,
+        saved_provider_item_id: updatedRow.provider_item_id,
+        saved_provider_connection_id: updatedRow.provider_connection_id,
+      },
       diag,
     });
   } catch (e: any) {
