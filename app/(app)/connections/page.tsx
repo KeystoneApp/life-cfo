@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Page } from "@/components/Page";
 import { Card, CardContent, Chip, Button, useToast } from "@/components/ui";
@@ -221,6 +221,115 @@ function loadPlaidScript(): Promise<void> {
   });
 
   return plaidScriptPromise;
+}
+
+function ConnectionActionsMenu({
+  connection,
+  syncing,
+  onSync,
+  onComingSoon,
+}: {
+  connection: Connection;
+  syncing: boolean;
+  onSync: () => void;
+  onComingSoon: (label: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    function onDocClick(e: MouseEvent) {
+      if (!wrapRef.current) return;
+      if (!wrapRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+
+    function onEscape(e: KeyboardEvent) {
+      if (e.key === "Escape") setOpen(false);
+    }
+
+    document.addEventListener("mousedown", onDocClick);
+    document.addEventListener("keydown", onEscape);
+
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      document.removeEventListener("keydown", onEscape);
+    };
+  }, []);
+
+  return (
+    <div ref={wrapRef} className="relative">
+      <button
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={`Actions for ${displayTitle(connection)}`}
+        onClick={() => setOpen((v) => !v)}
+        className="flex h-9 w-9 items-center justify-center rounded-full border border-zinc-200 bg-white text-zinc-500 hover:bg-zinc-50 hover:text-zinc-700"
+      >
+        •••
+      </button>
+
+      {open ? (
+        <div className="absolute right-0 z-20 mt-2 w-52 overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-lg">
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              onSync();
+            }}
+            disabled={syncing}
+            className="flex w-full items-center justify-between px-4 py-3 text-left text-sm text-zinc-800 hover:bg-zinc-50 disabled:opacity-50"
+          >
+            <span>{syncing ? "Syncing…" : "Sync now"}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              onComingSoon("Reconnect");
+            }}
+            className="flex w-full items-center justify-between px-4 py-3 text-left text-sm text-zinc-700 hover:bg-zinc-50"
+          >
+            <span>Reconnect</span>
+            <span className="text-[11px] uppercase tracking-wide text-zinc-400">
+              Soon
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              onComingSoon("Pause");
+            }}
+            className="flex w-full items-center justify-between px-4 py-3 text-left text-sm text-zinc-700 hover:bg-zinc-50"
+          >
+            <span>Pause</span>
+            <span className="text-[11px] uppercase tracking-wide text-zinc-400">
+              Soon
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              onComingSoon("Disconnect");
+            }}
+            className="flex w-full items-center justify-between px-4 py-3 text-left text-sm text-zinc-700 hover:bg-zinc-50"
+          >
+            <span>Disconnect</span>
+            <span className="text-[11px] uppercase tracking-wide text-zinc-400">
+              Soon
+            </span>
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 export default function ConnectionsPage() {
@@ -527,6 +636,13 @@ export default function ConnectionsPage() {
   const canShowConnect = (c: Connection) =>
     (c.provider === "basiq" || c.provider === "plaid") && c.status === "needs_auth";
 
+  function handleComingSoon(label: string) {
+    toast({
+      title: `${label} coming next`,
+      description: "We’ll wire this safely in the next pass.",
+    });
+  }
+
   return (
     <Page
       title="Connections"
@@ -622,16 +738,25 @@ export default function ConnectionsPage() {
                               </div>
 
                               <div className="flex items-center gap-2">
-                                {c.status === "active" && (
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    onClick={() => syncConnection(c.id)}
-                                    disabled={syncingId === c.id}
-                                  >
-                                    {syncingId === c.id ? "Syncing…" : "Sync"}
-                                  </Button>
-                                )}
+                                {c.status === "active" ? (
+                                  <>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => syncConnection(c.id)}
+                                      disabled={syncingId === c.id}
+                                    >
+                                      {syncingId === c.id ? "Syncing…" : "Sync"}
+                                    </Button>
+
+                                    <ConnectionActionsMenu
+                                      connection={c}
+                                      syncing={syncingId === c.id}
+                                      onSync={() => void syncConnection(c.id)}
+                                      onComingSoon={handleComingSoon}
+                                    />
+                                  </>
+                                ) : null}
 
                                 {statusChip(c.status)}
                               </div>
