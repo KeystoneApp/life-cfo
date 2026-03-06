@@ -41,20 +41,32 @@ export async function GET() {
 
     const householdId = await resolveHouseholdIdRoute(supabase, user.id);
     if (!householdId) {
-      return NextResponse.json({ ok: false, error: "User not linked to a household." }, { status: 400 });
+      return NextResponse.json(
+        { ok: false, error: "User not linked to a household." },
+        { status: 400 }
+      );
     }
 
     const { data, error } = await supabase
       .from("external_connections")
-      .select("id,household_id,provider,status,provider_connection_id,display_name,last_sync_at,created_at,updated_at")
+      .select(
+        "id,household_id,user_id,provider,status,provider_connection_id,display_name,last_sync_at,created_at,updated_at,provider_institution_name,institution_name"
+      )
       .eq("household_id", householdId)
       .order("created_at", { ascending: false });
 
     if (error) throw error;
 
-    return NextResponse.json({ ok: true, household_id: householdId, connections: data ?? [] });
+    return NextResponse.json({
+      ok: true,
+      household_id: householdId,
+      connections: data ?? [],
+    });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message ?? "Connections fetch failed" }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, error: e?.message ?? "Connections fetch failed" },
+      { status: 500 }
+    );
   }
 }
 
@@ -73,10 +85,12 @@ export async function POST(req: Request) {
 
     const householdId = await resolveHouseholdIdRoute(supabase, user.id);
     if (!householdId) {
-      return NextResponse.json({ ok: false, error: "User not linked to a household." }, { status: 400 });
+      return NextResponse.json(
+        { ok: false, error: "User not linked to a household." },
+        { status: 400 }
+      );
     }
 
-    // ✅ Preflight: what role do we have in this household?
     const { data: hm, error: hmErr } = await supabase
       .from("household_members")
       .select("role")
@@ -86,11 +100,12 @@ export async function POST(req: Request) {
 
     if (hmErr) throw hmErr;
 
-    // ✅ Preflight: what does the DB function return (the same one your RLS policy uses)?
-    // This removes all guessing about auth.uid() / role in postgres.
-    const { data: ownerCheck, error: ownerCheckErr } = await supabase.rpc("is_household_owner_or_editor", {
-      p_household_id: householdId,
-    });
+    const { data: ownerCheck, error: ownerCheckErr } = await supabase.rpc(
+      "is_household_owner_or_editor",
+      {
+        p_household_id: householdId,
+      }
+    );
 
     if (ownerCheckErr) {
       return NextResponse.json(
@@ -129,20 +144,24 @@ export async function POST(req: Request) {
 
     const provider = normalizeProvider(body?.provider);
     const status = connectionStatusForProvider(provider);
-    const display_name = typeof body?.display_name === "string" ? body.display_name : defaultDisplayName(provider);
+    const display_name =
+      typeof body?.display_name === "string"
+        ? body.display_name
+        : defaultDisplayName(provider);
     const currency = typeof body?.currency === "string" ? body.currency : "AUD";
 
     const { data: connection, error: connErr } = await supabase
       .from("external_connections")
       .insert({
         household_id: householdId,
+        user_id: user.id,
         provider,
         status,
         display_name,
         provider_connection_id: null,
         encrypted_access_token: null,
       })
-      .select("id,household_id,provider,status,display_name,created_at")
+      .select("id,household_id,user_id,provider,status,display_name,created_at")
       .maybeSingle();
 
     if (connErr) {
@@ -164,7 +183,6 @@ export async function POST(req: Request) {
       );
     }
 
-    // Seed simple accounts if none exist for this household
     const { count: existingCount, error: countErr } = await supabase
       .from("accounts")
       .select("id", { count: "exact", head: true })
@@ -183,6 +201,7 @@ export async function POST(req: Request) {
       ];
 
       const rows = seed.map((s) => ({
+        user_id: user.id,
         household_id: householdId,
         provider,
         name: s.name,
@@ -196,14 +215,24 @@ export async function POST(req: Request) {
       const { data: created, error: seedErr } = await supabase
         .from("accounts")
         .insert(rows)
-        .select("id,household_id,name,provider,type,status,currency,current_balance_cents,updated_at,created_at");
+        .select(
+          "id,user_id,household_id,name,provider,type,status,currency,current_balance_cents,updated_at,created_at"
+        );
 
       if (seedErr) throw seedErr;
       seeded_accounts = created ?? [];
     }
 
-    return NextResponse.json({ ok: true, household_id: householdId, connection, seeded_accounts });
+    return NextResponse.json({
+      ok: true,
+      household_id: householdId,
+      connection,
+      seeded_accounts,
+    });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message ?? "Connection create failed" }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, error: e?.message ?? "Connection create failed" },
+      { status: 500 }
+    );
   }
 }
