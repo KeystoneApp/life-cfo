@@ -180,8 +180,7 @@ export default function LoginClient({ nextPath }: { nextPath: string }) {
       : "We’ll email you a reset link.";
 
   return (
-    <main className="min-h-screen bg-cfo flex items-center justify-center px-4 py-12">
-      <div className="w-full max-w-md space-y-6">
+    <main className="min-h-screen bg-gradient-to-b from-brand-teal to-[#184c4a] flex items-center justify-center px-4 py-12">      <div className="w-full max-w-md space-y-6">
         <div className="text-center space-y-4">
           <div className="flex justify-center">
             <Image
