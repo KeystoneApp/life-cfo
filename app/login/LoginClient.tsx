@@ -205,7 +205,7 @@ export default function LoginClient({ nextPath }: { nextPath: string }) {
             <p className="text-sm leading-relaxed text-white/85">
               {mode === "reset"
                 ? subtitle
-                : "Life CFO is a calm money and decision system for families. Ask clear questions, hold important decisions safely, and move forward with less mental load."}
+                : "Personal financial intelligence for modern families. Clarity. Structure. Better decisions. Launching soon."}
             </p>
           </div>
         </div>
@@ -364,7 +364,7 @@ export default function LoginClient({ nextPath }: { nextPath: string }) {
         </div>
 
         <p className="text-center text-xs text-white/70">
-          One place. One question. One answer.
+          A intelligent money and decision system for families.
         </p>
       </div>
     </main>
