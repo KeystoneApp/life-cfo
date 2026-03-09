@@ -171,7 +171,7 @@ export default function LoginClient({ nextPath }: { nextPath: string }) {
 
   const subtitle =
     mode === "signin"
-      ? "Personal financial intelligence for modern families. Clarity. Structure. Better decisions. Launching soon."
+      ? "Personal financial intelligence for modern families."
       : mode === "signup"
       ? "Create your account to get started."
       : "We’ll email you a reset link.";
@@ -185,10 +185,10 @@ export default function LoginClient({ nextPath }: { nextPath: string }) {
       <div className="relative z-10 w-full max-w-md space-y-6">
         <div className="text-center space-y-4">
           <div className="relative flex justify-center">
-            <div className="absolute h-40 w-40 rounded-full bg-white/10 blur-3xl sm:h-48 sm:w-48" />
+            <div className="absolute h-28 w-28 rounded-full bg-white/10 blur-3xl sm:h-36 sm:w-36" />
 
             <Image
-              src="/brand/life-cfo-logo-stacked-transparent.svg"
+              src="/brand/lifecfo-logo-stacked_transparent.svg"
               alt="Life CFO"
               width={180}
               height={180}
@@ -197,7 +197,7 @@ export default function LoginClient({ nextPath }: { nextPath: string }) {
             />
           </div>
 
-          <div className="space-y-2">
+          <div className="space-y-3">
             <h1 className="text-2xl font-semibold tracking-tight text-white">
               {mode === "signin"
                 ? "Welcome to Life CFO"
@@ -206,9 +206,21 @@ export default function LoginClient({ nextPath }: { nextPath: string }) {
                 : "Reset your password"}
             </h1>
 
-            <p className="text-sm leading-relaxed text-white/85">
-              {mode === "reset" ? subtitle : subtitle}
-            </p>
+            {mode === "reset" ? (
+              <p className="text-sm leading-relaxed text-white/85">{subtitle}</p>
+            ) : (
+              <div className="space-y-1">
+                <p className="text-sm leading-relaxed text-white/85">
+                  Personal financial intelligence for modern families.
+                </p>
+                <p className="text-sm leading-relaxed text-white/85">
+                  Clarity. Structure. Better decisions.
+                </p>
+                <p className="pt-2 text-base font-semibold text-white">
+                  Launching soon.
+                </p>
+              </div>
+            )}
           </div>
         </div>
 
@@ -364,10 +376,6 @@ export default function LoginClient({ nextPath }: { nextPath: string }) {
             )}
           </form>
         </div>
-
-        <p className="text-center text-xs text-white/70">
-          An intelligent money and decision system for families.
-        </p>
       </div>
     </main>
   );
