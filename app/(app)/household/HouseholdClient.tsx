@@ -22,11 +22,23 @@ type InviteRow = {
   created_at: string;
 };
 
+type IncomingInviteRow = {
+  id: string;
+  household_id: string;
+  household_name: string;
+  email: string;
+  role: string;
+  status: string;
+  created_at: string;
+};
+
 type DeleteConfirm =
   | { open: true; user_id: string; label: string }
   | { open: false };
 
 export const dynamic = "force-dynamic";
+
+const DISMISSED_INVITES_STORAGE_KEY = "lifecfo-dismissed-household-invites";
 
 function safeStr(v: unknown) {
   return typeof v === "string" ? v : "";
@@ -50,6 +62,13 @@ function maskId(id: string) {
   if (!id) return "";
   if (id.length <= 12) return id;
   return `${id.slice(0, 6)}…${id.slice(-4)}`;
+}
+
+function formatInviteAge(createdAt: string) {
+  if (!createdAt) return "";
+  const d = new Date(createdAt);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleDateString();
 }
 
 export default function HouseholdClient() {
@@ -79,12 +98,17 @@ export default function HouseholdClient() {
   // Switch active household
   const [switching, setSwitching] = useState(false);
 
-  // Invites
+  // Outgoing invites for active household
   const [invites, setInvites] = useState<InviteRow[]>([]);
   const [invitesLoading, setInvitesLoading] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState<"viewer" | "editor">("viewer");
   const [inviteSending, setInviteSending] = useState(false);
+
+  // Incoming invites for signed-in user
+  const [incomingInvites, setIncomingInvites] = useState<IncomingInviteRow[]>([]);
+  const [incomingInvitesLoading, setIncomingInvitesLoading] = useState(false);
+  const [dismissedIncomingInviteIds, setDismissedIncomingInviteIds] = useState<string[]>([]);
 
   const active = useMemo(() => {
     if (!activeHouseholdId) return null;
@@ -94,6 +118,51 @@ export default function HouseholdClient() {
   const ownersCount = useMemo(() => {
     return members.filter((m) => (m.role ?? "").toLowerCase() === "owner").length;
   }, [members]);
+
+  const myRole = active?.role ?? null;
+  const allowRename = canRename(myRole);
+  const allowMemberEdits = canEditMembers(myRole);
+  const allowInvites = canInvite(myRole);
+
+  const outgoingPendingInvites = useMemo(() => {
+    return invites.filter((i) => (i.status ?? "").toLowerCase() === "pending");
+  }, [invites]);
+
+  const incomingPendingInvites = useMemo(() => {
+    return incomingInvites.filter((i) => (i.status ?? "").toLowerCase() === "pending");
+  }, [incomingInvites]);
+
+  const visibleIncomingBannerInvites = useMemo(() => {
+    return incomingPendingInvites.filter((i) => !dismissedIncomingInviteIds.includes(i.id));
+  }, [incomingPendingInvites, dismissedIncomingInviteIds]);
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(DISMISSED_INVITES_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        setDismissedIncomingInviteIds(parsed.filter((v) => typeof v === "string"));
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const persistDismissedInviteIds = (nextIds: string[]) => {
+    setDismissedIncomingInviteIds(nextIds);
+    try {
+      window.localStorage.setItem(DISMISSED_INVITES_STORAGE_KEY, JSON.stringify(nextIds));
+    } catch {
+      // ignore
+    }
+  };
+
+  const dismissIncomingInviteBanner = (inviteId: string) => {
+    if (!inviteId) return;
+    if (dismissedIncomingInviteIds.includes(inviteId)) return;
+    persistDismissedInviteIds([...dismissedIncomingInviteIds, inviteId]);
+  };
 
   const load = async () => {
     setLoading(true);
@@ -107,6 +176,7 @@ export default function HouseholdClient() {
         setActiveHouseholdId(null);
         setMembers([]);
         setInvites([]);
+        setIncomingInvites([]);
         setNeedsHousehold(false);
         setStatusLine("Not signed in.");
         return;
@@ -157,8 +227,40 @@ export default function HouseholdClient() {
     }
   };
 
+  const loadIncomingInvites = async () => {
+    setIncomingInvitesLoading(true);
+    try {
+      const res = await fetch("/api/households/invites", { method: "GET" });
+      const json = await res.json();
+      if (json?.ok) {
+        const next = Array.isArray(json.invites) ? json.invites : [];
+        setIncomingInvites(next);
+
+        const pendingIds = next
+          .filter((i: IncomingInviteRow) => (i.status ?? "").toLowerCase() === "pending")
+          .map((i: IncomingInviteRow) => i.id);
+
+        const cleanedDismissed = dismissedIncomingInviteIds.filter((id) => pendingIds.includes(id));
+        if (cleanedDismissed.length !== dismissedIncomingInviteIds.length) {
+          persistDismissedInviteIds(cleanedDismissed);
+        }
+      } else {
+        setIncomingInvites([]);
+      }
+    } catch {
+      setIncomingInvites([]);
+    } finally {
+      setIncomingInvitesLoading(false);
+    }
+  };
+
   useEffect(() => {
     void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    void loadIncomingInvites();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -187,6 +289,7 @@ export default function HouseholdClient() {
       showToast({ message: "Created." }, 1200);
       setCreateName("");
       await load();
+      await loadIncomingInvites();
     } catch (e: any) {
       showToast({ message: e?.message ?? "Couldn’t create household." }, 2500);
     } finally {
@@ -214,13 +317,12 @@ export default function HouseholdClient() {
       setShowAdvanced(false);
       setStatusLine("Updated.");
 
-      // refresh detail panels for the new active household
-      await Promise.all([loadMembers(household_id), loadInvites(household_id)]);
+      await Promise.all([loadMembers(household_id), loadInvites(household_id), loadIncomingInvites()]);
     } catch (e: any) {
       showToast({ message: e?.message ?? "Couldn’t switch household." }, 2500);
       setStatusLine("Couldn’t switch.");
-      // fallback to server truth
       await load();
+      await loadIncomingInvites();
     } finally {
       setSwitching(false);
     }
@@ -362,9 +464,40 @@ export default function HouseholdClient() {
 
       setStatusLine("Invite cancelled.");
       await loadInvites(activeHouseholdId);
+      await loadIncomingInvites();
     } catch (e: any) {
       showToast({ message: e?.message ?? "Couldn’t cancel invite." }, 2500);
       setStatusLine("Couldn’t cancel invite.");
+    }
+  };
+
+  const actOnIncomingInvite = async (id: string, action: "accept" | "decline") => {
+    try {
+      const res = await fetch("/api/households/invites", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, action }),
+      });
+
+      const json = await res.json();
+      if (!json?.ok) throw new Error(json?.error ?? "Update failed");
+
+      if (action === "accept" && json?.household_id) {
+        await fetch("/api/households/active", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ household_id: json.household_id }),
+        }).catch(() => null);
+      }
+
+      const nextDismissed = dismissedIncomingInviteIds.filter((x) => x !== id);
+      persistDismissedInviteIds(nextDismissed);
+
+      setStatusLine(action === "accept" ? "Accepted." : "Declined.");
+      await load();
+      await loadIncomingInvites();
+    } catch (e: any) {
+      showToast({ message: e?.message ?? "Couldn’t update invite." }, 2500);
     }
   };
 
@@ -376,13 +509,6 @@ export default function HouseholdClient() {
       showToast({ message: "Your browser blocked clipboard access." }, 2500);
     }
   };
-
-  const myRole = active?.role ?? null;
-  const allowRename = canRename(myRole);
-  const allowMemberEdits = canEditMembers(myRole);
-  const allowInvites = canInvite(myRole);
-
-  const pendingInvites = invites.filter((i) => (i.status ?? "").toLowerCase() === "pending");
 
   // ---------- NEW USER: needs household ----------
   if (!loading && (needsHousehold || households.length === 0)) {
@@ -424,6 +550,71 @@ export default function HouseholdClient() {
   return (
     <Page title="Household" subtitle="Membership and permissions.">
       <div className="mx-auto w-full max-w-[760px] space-y-6">
+        {visibleIncomingBannerInvites.length > 0 ? (
+          <div className="sticky top-3 z-30">
+            <div className="rounded-2xl border border-zinc-200 bg-white/95 shadow-sm backdrop-blur">
+              <div className="space-y-3 p-3 sm:p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold text-zinc-900">
+                      {visibleIncomingBannerInvites.length === 1 ? "Household invite waiting" : "Household invites waiting"}
+                    </div>
+                    <div className="text-xs text-zinc-500">
+                      {visibleIncomingBannerInvites.length === 1
+                        ? "You have a pending household invite."
+                        : `You have ${visibleIncomingBannerInvites.length} pending household invites.`}
+                    </div>
+                  </div>
+
+                  {visibleIncomingBannerInvites.length > 1 ? (
+                    <button
+                      className="text-xs text-zinc-500 underline underline-offset-2"
+                      onClick={() => {
+                        const allIds = visibleIncomingBannerInvites.map((i) => i.id);
+                        persistDismissedInviteIds([...new Set([...dismissedIncomingInviteIds, ...allIds])]);
+                      }}
+                    >
+                      Close
+                    </button>
+                  ) : null}
+                </div>
+
+                <div className="grid gap-2">
+                  {visibleIncomingBannerInvites.map((inv) => (
+                    <div
+                      key={inv.id}
+                      className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-zinc-200 px-3 py-2"
+                    >
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-medium text-zinc-900">{inv.household_name}</div>
+                        <div className="text-xs text-zinc-500">
+                          Role: {inv.role} · Sent {formatInviteAge(inv.created_at)}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <button
+                          className="text-xs text-zinc-500 underline underline-offset-2"
+                          onClick={() => dismissIncomingInviteBanner(inv.id)}
+                        >
+                          Close
+                        </button>
+                        <Chip onClick={() => void actOnIncomingInvite(inv.id, "decline")}>Decline</Chip>
+                        <Chip
+                          className="border-zinc-900 bg-zinc-900 text-white hover:bg-zinc-800"
+                          onClick={() => void actOnIncomingInvite(inv.id, "accept")}
+                        >
+                          Accept
+                        </Chip>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
         <div className="text-xs text-zinc-500">{loading ? "Loading…" : statusLine}</div>
 
         <Card className="border-zinc-200 bg-white">
@@ -450,7 +641,6 @@ export default function HouseholdClient() {
               )}
             </div>
 
-            {/* Calm active household switcher */}
             {households.length > 1 ? (
               <div className="space-y-1">
                 <div className="text-xs text-zinc-500">Active household</div>
@@ -577,73 +767,126 @@ export default function HouseholdClient() {
         </Card>
 
         <Card className="border-zinc-200 bg-white">
-          <CardContent className="space-y-3">
+          <CardContent className="space-y-4">
             <div className="flex items-center justify-between">
               <div>
                 <div className="text-sm font-semibold text-zinc-900">Invites</div>
-                <div className="text-xs text-zinc-500">Invite someone by email.</div>
+                <div className="text-xs text-zinc-500">Manage incoming and outgoing household invites here.</div>
               </div>
-              <div className="text-xs text-zinc-500">{invitesLoading ? "Loading…" : ""}</div>
+              <div className="text-xs text-zinc-500">
+                {invitesLoading || incomingInvitesLoading ? "Loading…" : ""}
+              </div>
             </div>
 
-            {!allowInvites ? (
-              <div className="text-sm text-zinc-600">Only owners/editors can invite.</div>
-            ) : (
-              <div className="rounded-xl border border-zinc-200 p-3 space-y-2">
-                <div className="grid gap-2 sm:grid-cols-[1fr,160px,auto] sm:items-center">
-                  <input
-                    className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-800"
-                    value={inviteEmail}
-                    onChange={(e) => setInviteEmail(e.target.value)}
-                    placeholder="Email address"
-                  />
-                  <select
-                    className="rounded-xl border border-zinc-200 bg-white px-2 py-2 text-sm text-zinc-800"
-                    value={inviteRole}
-                    onChange={(e) => setInviteRole((e.target.value as any) ?? "viewer")}
-                  >
-                    <option value="viewer">viewer</option>
-                    <option value="editor">editor</option>
-                  </select>
-                  <Chip onClick={() => void sendInvite()} disabled={inviteSending || !activeHouseholdId}>
-                    Send invite
-                  </Chip>
+            <div className="space-y-2">
+              <div className="text-xs font-medium uppercase tracking-wide text-zinc-500">Waiting for you</div>
+
+              {incomingPendingInvites.length === 0 ? (
+                <div className="rounded-xl border border-zinc-200 px-3 py-3 text-sm text-zinc-600">
+                  No invites waiting for you.
                 </div>
+              ) : (
+                <div className="grid gap-2">
+                  {incomingPendingInvites.map((inv) => (
+                    <div
+                      key={inv.id}
+                      className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-zinc-200 px-3 py-2"
+                    >
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-medium text-zinc-900">{inv.household_name}</div>
+                        <div className="text-xs text-zinc-500">Role: {inv.role}</div>
+                        <div className="text-xs text-zinc-500">Sent to: {inv.email}</div>
+                      </div>
 
-                <div className="text-xs text-zinc-500">
-                  They’ll accept from the <span className="underline underline-offset-2">Invites</span> page after signing in.
-                </div>
-              </div>
-            )}
-
-            <div className="text-xs text-zinc-500 pt-1">{pendingInvites.length ? "Pending" : ""}</div>
-
-            {pendingInvites.length === 0 ? (
-              <div className="text-sm text-zinc-600">No pending invites.</div>
-            ) : (
-              <div className="grid gap-2">
-                {pendingInvites.map((inv) => (
-                  <div
-                    key={inv.id}
-                    className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-zinc-200 px-3 py-2"
-                  >
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-medium text-zinc-900">{inv.email}</div>
-                      <div className="text-xs text-zinc-500">{inv.role}</div>
+                      <div className="flex items-center gap-2">
+                        <Chip onClick={() => void actOnIncomingInvite(inv.id, "decline")}>Decline</Chip>
+                        <Chip
+                          className="border-zinc-900 bg-zinc-900 text-white hover:bg-zinc-800"
+                          onClick={() => void actOnIncomingInvite(inv.id, "accept")}
+                        >
+                          Accept
+                        </Chip>
+                      </div>
                     </div>
+                  ))}
+                </div>
+              )}
+            </div>
 
-                    {allowInvites ? <Chip onClick={() => void cancelInvite(inv.id)}>Cancel</Chip> : <div className="text-xs text-zinc-500">—</div>}
+            <div className="space-y-2">
+              <div className="text-xs font-medium uppercase tracking-wide text-zinc-500">Invite someone</div>
+
+              {!allowInvites ? (
+                <div className="rounded-xl border border-zinc-200 px-3 py-3 text-sm text-zinc-600">
+                  Only owners/editors can invite.
+                </div>
+              ) : (
+                <div className="rounded-xl border border-zinc-200 p-3 space-y-2">
+                  <div className="grid gap-2 sm:grid-cols-[1fr,160px,auto] sm:items-center">
+                    <input
+                      className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-800"
+                      value={inviteEmail}
+                      onChange={(e) => setInviteEmail(e.target.value)}
+                      placeholder="Email address"
+                    />
+                    <select
+                      className="rounded-xl border border-zinc-200 bg-white px-2 py-2 text-sm text-zinc-800"
+                      value={inviteRole}
+                      onChange={(e) => setInviteRole((e.target.value as "viewer" | "editor") ?? "viewer")}
+                    >
+                      <option value="viewer">viewer</option>
+                      <option value="editor">editor</option>
+                    </select>
+                    <Chip onClick={() => void sendInvite()} disabled={inviteSending || !activeHouseholdId}>
+                      {inviteSending ? "Sending…" : "Send invite"}
+                    </Chip>
                   </div>
-                ))}
-              </div>
-            )}
+
+                  <div className="text-xs text-zinc-500">
+                    They’ll see the invite inside their Household page after signing in.
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <div className="text-xs font-medium uppercase tracking-wide text-zinc-500">Sent invites</div>
+
+              {outgoingPendingInvites.length === 0 ? (
+                <div className="rounded-xl border border-zinc-200 px-3 py-3 text-sm text-zinc-600">
+                  No pending invites sent from this household.
+                </div>
+              ) : (
+                <div className="grid gap-2">
+                  {outgoingPendingInvites.map((inv) => (
+                    <div
+                      key={inv.id}
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-zinc-200 px-3 py-2"
+                    >
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-medium text-zinc-900">{inv.email}</div>
+                        <div className="text-xs text-zinc-500">
+                          {inv.role} · Sent {formatInviteAge(inv.created_at)}
+                        </div>
+                      </div>
+
+                      {allowInvites ? (
+                        <Chip onClick={() => void cancelInvite(inv.id)}>Cancel</Chip>
+                      ) : (
+                        <div className="text-xs text-zinc-500">—</div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </CardContent>
         </Card>
 
         {deleteConfirm.open ? (
-          <div className="fixed inset-0 z-40 flex items-end sm:items-center justify-center bg-black/20 p-4">
+          <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/20 p-4 sm:items-center">
             <div className="w-full max-w-[520px] rounded-2xl border border-zinc-200 bg-white shadow-lg">
-              <div className="p-4 sm:p-5 space-y-2">
+              <div className="space-y-2 p-4 sm:p-5">
                 <div className="text-sm font-semibold text-zinc-900">{deleteConfirm.label}</div>
                 <div className="text-sm text-zinc-600">This can’t be undone.</div>
 

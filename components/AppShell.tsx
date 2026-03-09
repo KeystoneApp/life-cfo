@@ -95,7 +95,6 @@ export function AppShell({ children }: AppShellProps) {
           const p = pathname || "";
           const allow = new Set([
             "/household",
-            "/invites",
             "/settings",
             "/fine-print",
             "/how-life-cfo-works",
@@ -271,14 +270,6 @@ export function AppShell({ children }: AppShellProps) {
                       Household
                     </Link>
                   )}
-
-                  <Link
-                    href="/invites"
-                    className={menuItemClass}
-                    onClick={() => setMenuOpen(false)}
-                  >
-                    Invites
-                  </Link>
 
                   <Link
                     href="/settings"
