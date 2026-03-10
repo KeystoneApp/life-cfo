@@ -34,13 +34,17 @@ type AskState = {
   currentScope: string | null;
 };
 
+type SubmitOptions = {
+  keepOpen?: boolean;
+};
+
 type AskContextValue = AskState & {
   setDraft: (value: string) => void;
   openAsk: () => void;
   closeAsk: () => void;
   toggleAsk: () => void;
   clearAsk: () => void;
-  submitAsk: (question?: string) => Promise<void>;
+  submitAsk: (question?: string, options?: SubmitOptions) => Promise<void>;
   retryLast: () => Promise<void>;
 };
 
@@ -83,6 +87,10 @@ async function getSignedInUserId(): Promise<string | null> {
   }
 }
 
+type RunQuestionOptions = {
+  appendUserMessage?: boolean;
+};
+
 export function AskProvider({ children }: { children: ReactNode }) {
   const pathname = usePathname();
 
@@ -93,6 +101,9 @@ export function AskProvider({ children }: { children: ReactNode }) {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const lastQuestionRef = useRef<string>("");
+
+  const currentPath = pathname || "";
+  const currentScope = scopeFromPath(currentPath);
 
   const openAsk = useCallback(() => setOpen(true), []);
   const closeAsk = useCallback(() => setOpen(false), []);
@@ -107,9 +118,11 @@ export function AskProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const runQuestion = useCallback(
-    async (rawQuestion?: string) => {
+    async (rawQuestion?: string, options?: RunQuestionOptions) => {
       const question = (rawQuestion ?? draft).trim();
       if (!question) return;
+
+      const appendUserMessage = options?.appendUserMessage !== false;
 
       const questionMessage: AskMessage = {
         id: makeId(),
@@ -123,7 +136,10 @@ export function AskProvider({ children }: { children: ReactNode }) {
       setErrorMessage(null);
       lastQuestionRef.current = question;
 
-      setMessages((prev) => [...prev, questionMessage]);
+      if (appendUserMessage) {
+        setMessages((prev) => [...prev, questionMessage]);
+      }
+
       setDraft("");
 
       try {
@@ -137,7 +153,12 @@ export function AskProvider({ children }: { children: ReactNode }) {
         const res = await fetch("/api/home/ask", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ userId, question }),
+          body: JSON.stringify({
+            userId,
+            question,
+            path: currentPath,
+            scope: currentScope,
+          }),
         });
 
         const json = await res.json().catch(() => ({}));
@@ -179,12 +200,12 @@ export function AskProvider({ children }: { children: ReactNode }) {
         setErrorMessage("I couldn’t answer that right now.");
       }
     },
-    [draft]
+    [draft, currentPath, currentScope]
   );
 
   const submitAsk = useCallback(
-    async (question?: string) => {
-      await runQuestion(question);
+    async (question?: string, _options?: SubmitOptions) => {
+      await runQuestion(question, { appendUserMessage: true });
     },
     [runQuestion]
   );
@@ -192,7 +213,7 @@ export function AskProvider({ children }: { children: ReactNode }) {
   const retryLast = useCallback(async () => {
     const q = lastQuestionRef.current.trim();
     if (!q) return;
-    await runQuestion(q);
+    await runQuestion(q, { appendUserMessage: false });
   }, [runQuestion]);
 
   const value = useMemo<AskContextValue>(
@@ -202,8 +223,8 @@ export function AskProvider({ children }: { children: ReactNode }) {
       draft,
       messages,
       errorMessage,
-      currentPath: pathname || "",
-      currentScope: scopeFromPath(pathname || ""),
+      currentPath,
+      currentScope,
       setDraft,
       openAsk,
       closeAsk,
@@ -218,7 +239,8 @@ export function AskProvider({ children }: { children: ReactNode }) {
       draft,
       messages,
       errorMessage,
-      pathname,
+      currentPath,
+      currentScope,
       openAsk,
       closeAsk,
       toggleAsk,

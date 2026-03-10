@@ -22,6 +22,20 @@ function toneLabel(tone?: string | null, verdict?: string | null) {
   return "Answer";
 }
 
+function scopeLabel(scope: string | null) {
+  if (!scope) return "App context";
+  if (scope === "money") return "Money context";
+  if (scope === "accounts") return "Accounts context";
+  if (scope === "transactions") return "Transactions context";
+  if (scope === "connections") return "Connections context";
+  if (scope === "decisions") return "Decisions context";
+  if (scope === "family") return "Family context";
+  if (scope === "household") return "Household context";
+  if (scope === "settings") return "Settings context";
+  if (scope === "home") return "Home context";
+  return "App context";
+}
+
 export function AskPanel() {
   const router = useRouter();
   const {
@@ -35,6 +49,7 @@ export function AskPanel() {
     submitAsk,
     retryLast,
     clearAsk,
+    currentScope,
   } = useAsk();
 
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -84,12 +99,12 @@ export function AskPanel() {
     <>
       <div className="fixed inset-0 z-[60] bg-black/20" onClick={closeAsk} />
 
-      <div className="fixed inset-x-0 bottom-0 z-[80] max-h-[88vh] rounded-t-3xl border border-zinc-200 bg-white shadow-2xl md:inset-y-0 md:right-0 md:left-auto md:h-full md:max-h-none md:w-[420px] md:rounded-none md:rounded-l-3xl">
+      <div className="fixed inset-x-0 bottom-0 z-[80] max-h-[88vh] rounded-t-3xl border border-zinc-200 bg-white shadow-2xl md:inset-y-0 md:right-0 md:left-auto md:h-full md:max-h-none md:w-[440px] md:rounded-none md:rounded-l-3xl">
         <div className="flex h-full flex-col">
           <div className="flex items-center justify-between gap-3 border-b border-zinc-100 px-4 py-4">
             <div className="min-w-0">
               <div className="text-sm font-semibold text-zinc-900">{title}</div>
-              <div className="text-xs text-zinc-500">Available anywhere in the app.</div>
+              <div className="text-xs text-zinc-500">{scopeLabel(currentScope)}.</div>
             </div>
 
             <div className="flex items-center gap-2">
@@ -191,6 +206,12 @@ export function AskPanel() {
                   const cmdOrCtrl = isMac ? e.metaKey : e.ctrlKey;
 
                   if (cmdOrCtrl && e.key === "Enter") {
+                    e.preventDefault();
+                    void submitAsk();
+                    return;
+                  }
+
+                  if (e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();
                     void submitAsk();
                   }
