@@ -479,7 +479,7 @@ export default function MoneyClient() {
                     <div className="text-sm font-semibold text-zinc-900">PLANNED</div>
                     <div className="mt-0.5 text-xs text-zinc-500">Committed or expected future pressure.</div>
                   </div>
-                  <Link href="/net-worth">
+                  <Link href="/money/planned">
                     <Chip>Open</Chip>
                   </Link>
                 </div>
@@ -554,6 +554,9 @@ export default function MoneyClient() {
                 </Link>
                 <Link href="/net-worth">
                   <Chip>Net Worth</Chip>
+                </Link>
+                <Link href="/money/planned">
+                <Chip>Planned</Chip>
                 </Link>
               </div>
 

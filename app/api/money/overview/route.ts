@@ -7,7 +7,11 @@ export const dynamic = "force-dynamic";
 
 type MoneyByCurrency = Record<string, number>;
 
-function addMoney(map: MoneyByCurrency, currency: string | null | undefined, cents: number) {
+function addMoney(
+  map: MoneyByCurrency,
+  currency: string | null | undefined,
+  cents: number
+) {
   const cur = (currency || "AUD").toUpperCase();
   map[cur] = (map[cur] ?? 0) + cents;
 }
@@ -18,14 +22,23 @@ function mapToRows(map: MoneyByCurrency) {
     .sort((a, b) => a.currency.localeCompare(b.currency));
 }
 
+function safeNum(v: unknown) {
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
 function startOfMonthISO() {
   const now = new Date();
-  return new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
+  return new Date(now.getFullYear(), now.getMonth(), 1)
+    .toISOString()
+    .slice(0, 10);
 }
 
 function endOfMonthISO() {
   const now = new Date();
-  return new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().slice(0, 10);
+  return new Date(now.getFullYear(), now.getMonth() + 1, 0)
+    .toISOString()
+    .slice(0, 10);
 }
 
 function nowIso() {
@@ -38,11 +51,6 @@ function plusDaysIso(days: number) {
   return d.toISOString();
 }
 
-function safeNum(v: unknown) {
-  const n = typeof v === "number" ? v : Number(v);
-  return Number.isFinite(n) ? n : 0;
-}
-
 export async function GET() {
   try {
     const supabase = await supabaseRoute();
@@ -53,7 +61,10 @@ export async function GET() {
     } = await supabase.auth.getUser();
 
     if (userErr || !user?.id) {
-      return NextResponse.json({ ok: false, error: "Not signed in." }, { status: 401 });
+      return NextResponse.json(
+        { ok: false, error: "Not signed in." },
+        { status: 401 }
+      );
     }
 
     const householdId = await resolveHouseholdIdRoute(supabase, user.id);
@@ -76,7 +87,7 @@ export async function GET() {
       monthTxRes,
       recurringBillsRes,
       recurringIncomeRes,
-      moneyGoalsRes,
+      goalsRes,
       liabilitiesRes,
       budgetItemsRes,
       connectionsRes,
@@ -101,7 +112,7 @@ export async function GET() {
         .eq("household_id", householdId)
         .order("date", { ascending: false })
         .order("created_at", { ascending: false })
-        .limit(12),
+        .limit(8),
 
       supabase
         .from("transactions")
@@ -132,7 +143,9 @@ export async function GET() {
 
       supabase
         .from("money_goals")
-        .select("id,title,currency,target_cents,current_cents,status,target_date,deadline_at,is_primary,updated_at")
+        .select(
+          "id,title,currency,target_cents,current_cents,status,target_date,deadline_at,is_primary,updated_at"
+        )
         .eq("household_id", householdId)
         .order("is_primary", { ascending: false })
         .order("updated_at", { ascending: false })
@@ -168,7 +181,7 @@ export async function GET() {
     if (monthTxRes.error) throw monthTxRes.error;
     if (recurringBillsRes.error) throw recurringBillsRes.error;
     if (recurringIncomeRes.error) throw recurringIncomeRes.error;
-    if (moneyGoalsRes.error) throw moneyGoalsRes.error;
+    if (goalsRes.error) throw goalsRes.error;
     if (liabilitiesRes.error) throw liabilitiesRes.error;
     if (budgetItemsRes.error) throw budgetItemsRes.error;
     if (connectionsRes.error) throw connectionsRes.error;
@@ -179,14 +192,14 @@ export async function GET() {
     const monthTransactions = monthTxRes.data ?? [];
     const recurringBills = recurringBillsRes.data ?? [];
     const recurringIncome = recurringIncomeRes.data ?? [];
-    const goals = moneyGoalsRes.data ?? [];
+    const goals = goalsRes.data ?? [];
     const liabilities = liabilitiesRes.data ?? [];
     const connections = connectionsRes.data ?? [];
 
-    const totalBalanceByCurrency: MoneyByCurrency = {};
-    const savedByCurrency: MoneyByCurrency = {};
+    const balanceByCurrency: MoneyByCurrency = {};
     const inMonthByCurrency: MoneyByCurrency = {};
     const outMonthByCurrency: MoneyByCurrency = {};
+    const savedByCurrency: MoneyByCurrency = {};
     const upcomingBillsByCurrency: MoneyByCurrency = {};
     const upcomingIncomeByCurrency: MoneyByCurrency = {};
     const liabilitiesByCurrency: MoneyByCurrency = {};
@@ -194,8 +207,11 @@ export async function GET() {
 
     for (const a of accounts) {
       const cents = safeNum(a.current_balance_cents);
-      addMoney(totalBalanceByCurrency, a.currency, cents);
-      if (cents > 0) addMoney(savedByCurrency, a.currency, cents);
+      addMoney(balanceByCurrency, a.currency, cents);
+
+      if (cents > 0) {
+        addMoney(savedByCurrency, a.currency, cents);
+      }
     }
 
     for (const t of monthTransactions) {
@@ -212,8 +228,9 @@ export async function GET() {
         const abs = Math.abs(cents);
         addMoney(outMonthByCurrency, t.currency, abs);
 
-        const cat = String(t.category || "Uncategorised").trim() || "Uncategorised";
-        categorySpend.set(cat, (categorySpend.get(cat) ?? 0) + abs);
+        const category =
+          String(t.category || "Uncategorised").trim() || "Uncategorised";
+        categorySpend.set(category, (categorySpend.get(category) ?? 0) + abs);
       }
     }
 
@@ -245,6 +262,7 @@ export async function GET() {
       .slice(0, 5);
 
     const activeConnections = connections.filter((c) => c.status === "active");
+
     const latestSyncAt =
       [...connections]
         .map((c) => c.last_sync_at || c.updated_at || null)
@@ -257,7 +275,7 @@ export async function GET() {
       .sort((a, b) => safeNum(b.current_balance_cents) - safeNum(a.current_balance_cents))
       .slice(0, 5);
 
-    const goalPreview = goals
+    const goalsPreview = goals
       .filter((g) => String(g.status || "active") !== "archived")
       .slice(0, 5)
       .map((g) => ({
@@ -273,20 +291,17 @@ export async function GET() {
     return NextResponse.json({
       ok: true,
       household_id: householdId,
-
       live: {
         status: activeConnections.length > 0 ? "live" : "offline",
         total_connections: connections.length,
         active_connections: activeConnections.length,
         last_sync_at: latestSyncAt,
       },
-
       totals: {
-        balance_by_currency: mapToRows(totalBalanceByCurrency),
+        balance_by_currency: mapToRows(balanceByCurrency),
         accounts_count: accounts.length,
         transactions_count: recentTransactions.length,
       },
-
       in_flow: {
         month_total_by_currency: mapToRows(inMonthByCurrency),
         recurring_income_count: recurringIncome.length,
@@ -294,7 +309,6 @@ export async function GET() {
         upcoming_income_total_by_currency: mapToRows(upcomingIncomeByCurrency),
         upcoming_income: upcomingIncome.slice(0, 5),
       },
-
       out_flow: {
         month_total_by_currency: mapToRows(outMonthByCurrency),
         top_spending_categories: topSpendingCategories,
@@ -303,15 +317,13 @@ export async function GET() {
         upcoming_bills_total_by_currency: mapToRows(upcomingBillsByCurrency),
         upcoming_bills: upcomingBills.slice(0, 5),
       },
-
       saved_flow: {
         saved_total_by_currency: mapToRows(savedByCurrency),
         positive_balance_accounts: positiveBalanceAccounts,
         goals_count: goals.filter((g) => String(g.status || "active") !== "archived").length,
-        goals_preview: goalPreview,
+        goals_preview: goalsPreview,
         investment_accounts_count: investmentAccountsRes.count ?? 0,
       },
-
       planned_flow: {
         upcoming_bills_count: upcomingBills.length,
         upcoming_bills: upcomingBills.slice(0, 5),
@@ -319,7 +331,6 @@ export async function GET() {
         liabilities_total_by_currency: mapToRows(liabilitiesByCurrency),
         budget_items_count: budgetItemsRes.count ?? 0,
       },
-
       supporting: {
         accounts: accounts.slice(0, 5),
         recent_transactions: recentTransactions.slice(0, 8),
