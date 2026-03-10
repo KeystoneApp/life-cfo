@@ -124,10 +124,7 @@ function safeStr(v: unknown) {
 function moneyFromCents(cents: number, currency: string) {
   const amt = cents / 100;
   try {
-    return new Intl.NumberFormat(undefined, {
-      style: "currency",
-      currency,
-    }).format(amt);
+    return new Intl.NumberFormat(undefined, { style: "currency", currency }).format(amt);
   } catch {
     return `${currency} ${amt.toFixed(2)}`;
   }
@@ -144,7 +141,7 @@ function softDate(isoOrDate: string | null | undefined) {
   if (!isoOrDate) return "";
   const ms = Date.parse(isoOrDate);
   if (!Number.isFinite(ms)) {
-    const ms2 = Date.parse(`${isoOrDate}T00:00:00Z`);
+    const ms2 = Date.parse(isoOrDate + "T00:00:00Z");
     if (!Number.isFinite(ms2)) return "";
     return new Date(ms2).toLocaleDateString();
   }
@@ -311,7 +308,7 @@ export default function MoneyClient() {
                       Money coming into the household.
                     </div>
                   </div>
-                  <Link href="/transactions">
+                  <Link href="/money/in">
                     <Chip>Open</Chip>
                   </Link>
                 </div>
@@ -334,9 +331,7 @@ export default function MoneyClient() {
                   <div>
                     <div className="text-xs text-zinc-500">Upcoming next 30 days</div>
                     <div className="mt-1 text-sm font-medium text-zinc-900">
-                      {overview
-                        ? renderMoneyRows(overview.in_flow.upcoming_income_total_by_currency)
-                        : "—"}
+                      {overview ? renderMoneyRows(overview.in_flow.upcoming_income_total_by_currency) : "—"}
                     </div>
                   </div>
                 </div>
@@ -345,32 +340,20 @@ export default function MoneyClient() {
                   <div className="text-xs font-medium text-zinc-700">Next income</div>
                   {upcomingIncome.length > 0 ? (
                     upcomingIncome.slice(0, 3).map((item) => (
-                      <div
-                        key={item.id}
-                        className="flex items-center justify-between gap-3 text-sm"
-                      >
+                      <div key={item.id} className="flex items-center justify-between gap-3 text-sm">
                         <div className="min-w-0">
-                          <div className="truncate text-zinc-900">
-                            {safeStr(item.name) || "Income"}
-                          </div>
+                          <div className="truncate text-zinc-900">{safeStr(item.name) || "Income"}</div>
                           <div className="truncate text-xs text-zinc-500">
-                            {item.next_pay_at
-                              ? `Expected ${softDate(item.next_pay_at)}`
-                              : "Scheduled"}
+                            {item.next_pay_at ? `Expected ${softDate(item.next_pay_at)}` : "Scheduled"}
                           </div>
                         </div>
                         <div className="shrink-0 font-medium text-zinc-900">
-                          {moneyFromCents(
-                            Number(item.amount_cents || 0),
-                            safeStr(item.currency) || "AUD"
-                          )}
+                          {moneyFromCents(Number(item.amount_cents || 0), safeStr(item.currency) || "AUD")}
                         </div>
                       </div>
                     ))
                   ) : (
-                    <div className="text-sm text-zinc-500">
-                      No recurring income added yet.
-                    </div>
+                    <div className="text-sm text-zinc-500">No recurring income added yet.</div>
                   )}
                 </div>
               </CardContent>
@@ -381,9 +364,7 @@ export default function MoneyClient() {
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <div className="text-sm font-semibold text-zinc-900">OUT</div>
-                    <div className="mt-0.5 text-xs text-zinc-500">
-                      Money leaving the household.
-                    </div>
+                    <div className="mt-0.5 text-xs text-zinc-500">Money leaving the household.</div>
                   </div>
                   <Link href="/money/out">
                     <Chip>Open</Chip>
@@ -408,9 +389,7 @@ export default function MoneyClient() {
                   <div>
                     <div className="text-xs text-zinc-500">Upcoming next 30 days</div>
                     <div className="mt-1 text-sm font-medium text-zinc-900">
-                      {overview
-                        ? renderMoneyRows(overview.out_flow.upcoming_bills_total_by_currency)
-                        : "—"}
+                      {overview ? renderMoneyRows(overview.out_flow.upcoming_bills_total_by_currency) : "—"}
                     </div>
                   </div>
                 </div>
@@ -419,10 +398,7 @@ export default function MoneyClient() {
                   <div className="text-xs font-medium text-zinc-700">Top categories</div>
                   {topCategories.length > 0 ? (
                     topCategories.slice(0, 3).map((item) => (
-                      <div
-                        key={item.category}
-                        className="flex items-center justify-between gap-3 text-sm"
-                      >
+                      <div key={item.category} className="flex items-center justify-between gap-3 text-sm">
                         <div className="truncate text-zinc-900">{item.category}</div>
                         <div className="shrink-0 font-medium text-zinc-900">
                           {moneyFromCents(item.cents, "AUD")}
@@ -430,9 +406,7 @@ export default function MoneyClient() {
                       </div>
                     ))
                   ) : (
-                    <div className="text-sm text-zinc-500">
-                      No category patterns yet.
-                    </div>
+                    <div className="text-sm text-zinc-500">No category patterns yet.</div>
                   )}
                 </div>
               </CardContent>
@@ -443,9 +417,7 @@ export default function MoneyClient() {
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <div className="text-sm font-semibold text-zinc-900">SAVED</div>
-                    <div className="mt-0.5 text-xs text-zinc-500">
-                      Money already set aside.
-                    </div>
+                    <div className="mt-0.5 text-xs text-zinc-500">Money already set aside.</div>
                   </div>
                   <Link href="/money/saved">
                     <Chip>Open</Chip>
@@ -490,21 +462,13 @@ export default function MoneyClient() {
                         {safeStr(primaryGoal.title) || "Goal"}
                       </div>
                       <div className="mt-1 text-xs text-zinc-500">
-                        {moneyFromCents(
-                          primaryGoal.current_cents,
-                          safeStr(primaryGoal.currency) || "AUD"
-                        )}
+                        {moneyFromCents(primaryGoal.current_cents, safeStr(primaryGoal.currency) || "AUD")}
                         {" of "}
-                        {moneyFromCents(
-                          primaryGoal.target_cents,
-                          safeStr(primaryGoal.currency) || "AUD"
-                        )}
+                        {moneyFromCents(primaryGoal.target_cents, safeStr(primaryGoal.currency) || "AUD")}
                       </div>
                     </div>
                   ) : (
-                    <div className="text-sm text-zinc-500">
-                      No savings goals set yet.
-                    </div>
+                    <div className="text-sm text-zinc-500">No savings goals set yet.</div>
                   )}
                 </div>
               </CardContent>
@@ -550,9 +514,7 @@ export default function MoneyClient() {
                 <div>
                   <div className="text-xs text-zinc-500">Liabilities total</div>
                   <div className="mt-1 text-sm font-medium text-zinc-900">
-                    {overview
-                      ? renderMoneyRows(overview.planned_flow.liabilities_total_by_currency)
-                      : "—"}
+                    {overview ? renderMoneyRows(overview.planned_flow.liabilities_total_by_currency) : "—"}
                   </div>
                 </div>
 
@@ -560,32 +522,20 @@ export default function MoneyClient() {
                   <div className="text-xs font-medium text-zinc-700">Coming up</div>
                   {upcomingBills.length > 0 ? (
                     upcomingBills.slice(0, 3).map((bill) => (
-                      <div
-                        key={bill.id}
-                        className="flex items-center justify-between gap-3 text-sm"
-                      >
+                      <div key={bill.id} className="flex items-center justify-between gap-3 text-sm">
                         <div className="min-w-0">
-                          <div className="truncate text-zinc-900">
-                            {safeStr(bill.name) || "Bill"}
-                          </div>
+                          <div className="truncate text-zinc-900">{safeStr(bill.name) || "Bill"}</div>
                           <div className="truncate text-xs text-zinc-500">
-                            {bill.next_due_at
-                              ? `Due ${softDate(bill.next_due_at)}`
-                              : "Scheduled"}
+                            {bill.next_due_at ? `Due ${softDate(bill.next_due_at)}` : "Scheduled"}
                           </div>
                         </div>
                         <div className="shrink-0 font-medium text-zinc-900">
-                          {moneyFromCents(
-                            Number(bill.amount_cents || 0),
-                            safeStr(bill.currency) || "AUD"
-                          )}
+                          {moneyFromCents(Number(bill.amount_cents || 0), safeStr(bill.currency) || "AUD")}
                         </div>
                       </div>
                     ))
                   ) : (
-                    <div className="text-sm text-zinc-500">
-                      No upcoming bills added yet.
-                    </div>
+                    <div className="text-sm text-zinc-500">No upcoming bills added yet.</div>
                   )}
                 </div>
               </CardContent>
@@ -609,6 +559,9 @@ export default function MoneyClient() {
                 <Link href="/net-worth">
                   <Chip>Net Worth</Chip>
                 </Link>
+                <Link href="/money/in">
+                  <Chip>In</Chip>
+                </Link>
                 <Link href="/money/out">
                   <Chip>Out</Chip>
                 </Link>
@@ -617,6 +570,12 @@ export default function MoneyClient() {
                 </Link>
                 <Link href="/money/planned">
                   <Chip>Planned</Chip>
+                </Link>
+                <Link href="/money/categories">
+                  <Chip>Categories</Chip>
+                </Link>
+                <Link href="/money/rules">
+                  <Chip>Rules</Chip>
                 </Link>
               </div>
 
@@ -633,11 +592,7 @@ export default function MoneyClient() {
                   <div className="min-w-0">
                     <div className="text-sm font-semibold text-zinc-900">Accounts</div>
                     <div className="mt-0.5 text-xs text-zinc-500">
-                      {loading
-                        ? "Loading…"
-                        : supportingAccounts.length
-                          ? "Latest active accounts"
-                          : "No accounts yet."}
+                      {loading ? "Loading…" : supportingAccounts.length ? "Latest active accounts" : "No accounts yet."}
                     </div>
                   </div>
                   <Link href="/accounts">
@@ -648,14 +603,10 @@ export default function MoneyClient() {
                 <div className="mt-3 divide-y divide-zinc-100">
                   {supportingAccounts.map((a) => {
                     const cur = safeStr(a.currency) || "AUD";
-                    const cents =
-                      typeof a.current_balance_cents === "number" ? a.current_balance_cents : 0;
+                    const cents = typeof a.current_balance_cents === "number" ? a.current_balance_cents : 0;
 
                     return (
-                      <div
-                        key={a.id}
-                        className="flex items-center justify-between gap-3 py-3"
-                      >
+                      <div key={a.id} className="flex items-center justify-between gap-3 py-3">
                         <div className="min-w-0">
                           <div className="truncate text-sm font-medium text-zinc-900">
                             {safeStr(a.name) || "Untitled account"}
@@ -686,11 +637,7 @@ export default function MoneyClient() {
                   <div className="min-w-0">
                     <div className="text-sm font-semibold text-zinc-900">Recent activity</div>
                     <div className="mt-0.5 text-xs text-zinc-500">
-                      {loading
-                        ? "Loading…"
-                        : recentTransactions.length
-                          ? "Latest transactions"
-                          : "No transactions yet."}
+                      {loading ? "Loading…" : recentTransactions.length ? "Latest transactions" : "No transactions yet."}
                     </div>
                   </div>
                   <Link href="/transactions">
@@ -708,9 +655,7 @@ export default function MoneyClient() {
                           ? Math.round(t.amount * 100)
                           : 0;
 
-                    const title =
-                      safeStr(t.merchant) || safeStr(t.description) || "Transaction";
-
+                    const title = safeStr(t.merchant) || safeStr(t.description) || "Transaction";
                     const meta = [
                       t.date ? softDate(t.date) : null,
                       safeStr(t.category) || null,
@@ -720,14 +665,9 @@ export default function MoneyClient() {
                       .join(" • ");
 
                     return (
-                      <div
-                        key={t.id}
-                        className="flex items-center justify-between gap-3 py-3"
-                      >
+                      <div key={t.id} className="flex items-center justify-between gap-3 py-3">
                         <div className="min-w-0">
-                          <div className="truncate text-sm font-medium text-zinc-900">
-                            {title}
-                          </div>
+                          <div className="truncate text-sm font-medium text-zinc-900">{title}</div>
                           <div className="truncate text-xs text-zinc-500">{meta}</div>
                         </div>
                         <div className="shrink-0 text-sm font-semibold text-zinc-900">
