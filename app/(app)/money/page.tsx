@@ -558,6 +558,9 @@ export default function MoneyClient() {
                 <Link href="/money/planned">
                 <Chip>Planned</Chip>
                 </Link>
+                <Link href="/money/saved">
+                <Chip>Open</Chip>
+                </Link>
               </div>
 
               <div className="text-xs text-zinc-500">
