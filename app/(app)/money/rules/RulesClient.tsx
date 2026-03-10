@@ -53,6 +53,7 @@ export default function RulesClient() {
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [applying, setApplying] = useState(false);
   const [data, setData] = useState<RulesResponse | null>(null);
 
   const [merchantPattern, setMerchantPattern] = useState("");
@@ -104,6 +105,32 @@ export default function RulesClient() {
       showToast({ message: e?.message ?? "Couldn’t add rule." }, 2500);
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function applyRules() {
+    if (applying) return;
+
+    setApplying(true);
+    try {
+      const result = await fetchJson<{ ok: boolean; scanned: number; updated: number; message?: string }>(
+        "/api/money/rules/apply",
+        { method: "POST" }
+      );
+
+      showToast(
+        {
+          message:
+            result.updated > 0
+              ? `Applied rules to ${result.updated} transaction${result.updated === 1 ? "" : "s"}.`
+              : result.message || "No uncategorised transactions matched.",
+        },
+        3000
+      );
+    } catch (e: any) {
+      showToast({ message: e?.message ?? "Couldn’t apply rules." }, 2500);
+    } finally {
+      setApplying(false);
     }
   }
 
@@ -198,10 +225,7 @@ export default function RulesClient() {
                   onChange={(e) => setCategory(e.target.value)}
                   className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
                 >
-                  {categories.length === 0 ? (
-                    <option value="">No categories yet</option>
-                  ) : null}
-
+                  {categories.length === 0 ? <option value="">No categories yet</option> : null}
                   {categories.map((name) => (
                     <option key={name} value={name}>
                       {name}
@@ -222,13 +246,22 @@ export default function RulesClient() {
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <Button
                 onClick={() => void createRule()}
                 disabled={saving || !category || (!merchantPattern.trim() && !descriptionPattern.trim())}
                 className="rounded-2xl"
               >
                 {saving ? "Adding…" : "Add rule"}
+              </Button>
+
+              <Button
+                variant="ghost"
+                onClick={() => void applyRules()}
+                disabled={applying || rules.length === 0}
+                className="rounded-2xl"
+              >
+                {applying ? "Applying…" : "Apply to uncategorised transactions"}
               </Button>
 
               <Chip
@@ -266,10 +299,7 @@ export default function RulesClient() {
                   .join(" • ");
 
                 return (
-                  <div
-                    key={rule.id}
-                    className="flex items-center justify-between gap-3 py-3"
-                  >
+                  <div key={rule.id} className="flex items-center justify-between gap-3 py-3">
                     <div className="min-w-0">
                       <div className="truncate text-sm font-medium text-zinc-900">
                         {safeStr(rule.category) || "Category"}
@@ -312,7 +342,7 @@ export default function RulesClient() {
                 Rules let Life CFO classify transactions consistently without redoing work every time.
               </div>
               <div>
-                The next step after this is auto-apply, so new and existing transactions can inherit categories.
+                This first pass applies rules only to uncategorised transactions, so it stays safe.
               </div>
             </div>
           </CardContent>
