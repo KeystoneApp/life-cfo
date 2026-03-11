@@ -129,6 +129,7 @@ export async function POST(req: Request) {
 
       return NextResponse.json({
         ok: true,
+        mode: "snapshot",
         household_id: householdId,
         snapshot,
         explanation,
@@ -182,6 +183,7 @@ export async function POST(req: Request) {
 
     return NextResponse.json({
       ok: true,
+      mode: "search",
       household_id: householdId,
       role,
       q,
