@@ -88,24 +88,41 @@ function evaluateStructuralPressure(truth: HouseholdMoneyTruth): PressureSignal 
   const monthlyIncome = sumMonthly(truth.recurringIncome);
   const monthlyBills = sumMonthly(truth.recurringBills);
 
-  const share = monthlyIncome > 0 ? monthlyBills / monthlyIncome : 1;
-  const score = clamp01(share);
+  const hasIncome = monthlyIncome > 0;
+  const hasBills = monthlyBills > 0;
+
+  let share = hasIncome ? monthlyBills / monthlyIncome : 0;
+  let score: number;
+
+  if (!hasIncome && !hasBills) {
+    score = 0;
+    share = 0;
+  } else if (!hasIncome && hasBills) {
+    score = 0.6; // medium pressure because bills exist without mapped recurring income
+    share = 1;
+  } else {
+    score = clamp01(share);
+  }
 
   const drivers: string[] = [];
-  if (monthlyIncome <= 0) {
-    drivers.push("No active recurring income; commitments treated as fully loaded.");
+  if (!hasIncome && !hasBills) {
+    drivers.push("Recurring income and recurring bills are not set up yet.");
+  } else if (!hasIncome && hasBills) {
+    drivers.push("Recurring bills exist but recurring income is not defined.");
   } else {
     drivers.push(`Recurring bills use ${Math.round(share * 100)}% of recurring income.`);
   }
 
   const summary =
-    monthlyIncome <= 0
-      ? "Structural pressure is high because recurring income is missing."
-      : share >= 0.75
-        ? "A large share of recurring income is already committed."
-        : share >= 0.5
-          ? "Commitments consume a meaningful share of recurring income."
-          : "Commitments leave room for discretionary choices.";
+    !hasIncome && !hasBills
+      ? "Recurring income and commitments are not mapped yet."
+      : !hasIncome && hasBills
+        ? "Recurring bills are tracked but recurring income is missing."
+        : share >= 0.75
+          ? "A large share of recurring income is already committed."
+          : share >= 0.5
+            ? "Commitments consume a meaningful share of recurring income."
+            : "Commitments leave room for discretionary choices.";
 
   return {
     name: "structural_pressure",
@@ -181,6 +198,26 @@ function evaluateTimingMismatch(truth: HouseholdMoneyTruth): PressureSignal {
   const obligationsBeforeNext = sumDueBefore(truth.recurringBills, asOfMs, nextIncome?.ms);
   const availableCash = sumAvailableCash(truth.accounts);
 
+  const hasIncome = truth.recurringIncome.some((i) => i.active !== false);
+  const hasBills = truth.recurringBills.some((b) => b.active !== false);
+
+  if (!hasIncome && !hasBills) {
+    return {
+      name: "timing_mismatch",
+      level: "none",
+      score: 0,
+      summary: "Recurring income and bills are not set up yet, so timing can’t be assessed.",
+      drivers: ["No recurring income configured.", "No recurring bills configured."],
+      evidence: {
+        available_cash_cents: availableCash,
+        obligations_before_income_cents: 0,
+        next_income_cents: null,
+        next_income_date: null,
+        shortfall_cents: 0,
+      },
+    };
+  }
+
   const shortfall = Math.max(0, obligationsBeforeNext - availableCash);
   const base = obligationsBeforeNext || availableCash || 1;
   const score = clamp01(shortfall / base);
@@ -230,8 +267,16 @@ function evaluateStabilityRisk(truth: HouseholdMoneyTruth): PressureSignal {
   const billCount = truth.recurringBills.filter((b) => b.active !== false).length;
   const latestSyncAge = maxConnectionAgeDays(truth.connections ?? [], truth.asOf);
 
-  const incomeComponent = incomeCount === 0 ? 1 : incomeCount === 1 ? 0.5 : 0.2;
-  const balanceComponent = billCount > 0 && incomeCount === 0 ? 1 : 0; // obligations without income
+  const incomeComponent =
+    incomeCount === 0 && billCount === 0
+      ? 0 // missing setup → unknown, not unstable
+      : incomeCount === 0
+        ? 0.6
+        : incomeCount === 1
+          ? 0.35
+          : 0.2;
+
+  const balanceComponent = billCount > 0 && incomeCount === 0 ? 0.7 : 0; // obligations without income
   const freshnessComponent = clamp01(latestSyncAge / 14);
 
   const components = [incomeComponent, balanceComponent, freshnessComponent].filter(

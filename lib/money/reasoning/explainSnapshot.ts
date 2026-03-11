@@ -16,7 +16,11 @@ export type SnapshotExplanation = {
 export function explainSnapshot(snapshot: FinancialSnapshot): SnapshotExplanation {
   const { pressure, income, commitments, liquidity, discretionary, connections } = snapshot;
 
-  const headline = buildHeadline(pressure.structural_pressure.level);
+  const headline = buildHeadline({
+    structuralLevel: pressure.structural_pressure.level,
+    incomeCents: income.recurringMonthlyCents,
+    commitmentsCents: commitments.recurringMonthlyCents,
+  });
   const summary = buildSummary({
     incomeCents: income.recurringMonthlyCents,
     commitmentsCents: commitments.recurringMonthlyCents,
@@ -45,7 +49,23 @@ export function explainSnapshot(snapshot: FinancialSnapshot): SnapshotExplanatio
   };
 }
 
-function buildHeadline(structuralLevel: PressureSignals["structural_pressure"]["level"]): string {
+function buildHeadline(params: {
+  structuralLevel: PressureSignals["structural_pressure"]["level"];
+  incomeCents: number;
+  commitmentsCents: number;
+}): string {
+  const { structuralLevel, incomeCents, commitmentsCents } = params;
+  const hasIncome = incomeCents > 0;
+  const hasBills = commitmentsCents > 0;
+
+  if (!hasIncome && !hasBills) {
+    return "Recurring income and commitments are not set up yet.";
+  }
+
+  if (!hasIncome && hasBills) {
+    return "Recurring bills are tracked but recurring income is missing.";
+  }
+
   switch (structuralLevel) {
     case "high":
       return "Your commitments consume most of your recurring income.";
@@ -68,10 +88,14 @@ function buildSummary(params: {
   const committedPct = pct(commitmentsCents, incomeCents);
 
   const parts: string[] = [];
-  if (incomeCents > 0) {
+  if (incomeCents > 0 && commitmentsCents > 0) {
     parts.push(`Committed spend is about ${committedPct}% of monthly income.`);
+  } else if (incomeCents <= 0 && commitmentsCents > 0) {
+    parts.push("Recurring bills are tracked but recurring income is missing.");
+  } else if (incomeCents > 0 && commitmentsCents === 0) {
+    parts.push("Recurring income is set; commitments are not mapped yet.");
   } else {
-    parts.push("Recurring income is not yet defined.");
+    parts.push("Recurring income and commitments are not set up yet.");
   }
   parts.push(`Available cash is ${formatCurrency(cashCents)}.`);
   parts.push(
@@ -95,7 +119,15 @@ function buildInsights(params: {
 
   const insights: string[] = [];
 
-  insights.push(`About ${committedPct}% of income is already committed.`);
+  if (incomeCents > 0 && commitmentsCents > 0) {
+    insights.push(`About ${committedPct}% of income is already committed.`);
+  } else if (incomeCents <= 0 && commitmentsCents > 0) {
+    insights.push("Recurring bills are recorded but recurring income is missing.");
+  } else if (incomeCents > 0 && commitmentsCents === 0) {
+    insights.push("Recurring income exists; commitments are not mapped yet.");
+  } else {
+    insights.push("Recurring income and commitments have not been set up.");
+  }
 
   if (cashMonths) {
     insights.push(`Cash covers roughly ${cashMonths} month(s) of commitments.`);

@@ -3,6 +3,7 @@ import { supabaseRoute } from "@/lib/supabaseRoute";
 import { resolveHouseholdIdRoute } from "@/lib/households/resolveHouseholdIdRoute";
 import { getHouseholdMoneyTruth } from "@/lib/money/reasoning/getHouseholdMoneyTruth";
 import { buildFinancialSnapshot } from "@/lib/money/reasoning/buildFinancialSnapshot";
+import { explainSnapshot } from "@/lib/money/reasoning/explainSnapshot";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -34,8 +35,9 @@ export async function GET() {
 
     const truth = await getHouseholdMoneyTruth(supabase, { householdId });
     const snapshot = buildFinancialSnapshot(truth);
+    const explanation = explainSnapshot(snapshot);
 
-    return NextResponse.json(snapshot);
+    return NextResponse.json({ snapshot, explanation });
   } catch (e: any) {
     return NextResponse.json(
       { ok: false, error: e?.message ?? "Money overview fetch failed" },
