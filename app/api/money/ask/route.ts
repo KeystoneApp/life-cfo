@@ -2,6 +2,9 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { supabaseRoute } from "@/lib/supabaseRoute";
+import { getHouseholdMoneyTruth } from "@/lib/money/reasoning/getHouseholdMoneyTruth";
+import { buildFinancialSnapshot } from "@/lib/money/reasoning/buildFinancialSnapshot";
+import { explainSnapshot } from "@/lib/money/reasoning/explainSnapshot";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -104,33 +107,17 @@ export async function POST(req: Request) {
 
     const { role } = await ensureHouseholdMember(supabase, user.id, householdId);
 
-    // No query → return light readiness + counts (fast + calm)
+    // No query → return snapshot + explanation (orientation-first)
     if (!q) {
-      const [accountsCount, billsCount, txCount] = await Promise.all([
-        supabase
-          .from("accounts")
-          .select("id", { count: "exact", head: true })
-          .eq("household_id", householdId),
-        supabase
-          .from("recurring_bills")
-          .select("id", { count: "exact", head: true })
-          .eq("household_id", householdId),
-        supabase
-          .from("transactions")
-          .select("id", { count: "exact", head: true })
-          .eq("household_id", householdId),
-      ]);
+      const truth = await getHouseholdMoneyTruth(supabase, { householdId });
+      const snapshot = buildFinancialSnapshot(truth);
+      const explanation = explainSnapshot(snapshot);
 
       return NextResponse.json({
         ok: true,
         household_id: householdId,
-        role,
-        hint: "Ask a money question or search for an account, bill, or transaction.",
-        counts: {
-          accounts: accountsCount.count ?? 0,
-          bills: billsCount.count ?? 0,
-          transactions: txCount.count ?? 0,
-        },
+        snapshot,
+        explanation,
       });
     }
 
