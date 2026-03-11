@@ -16,6 +16,15 @@ type AskBody = {
   limit?: number;
 };
 
+const ORIENTATION_KEYWORDS = [
+  "are we okay",
+  "how are things looking",
+  "what changed",
+  "what feels tight",
+  "what is the main pressure",
+  "financial status",
+];
+
 function safeStr(v: unknown) {
   return typeof v === "string" ? v : "";
 }
@@ -107,8 +116,13 @@ export async function POST(req: Request) {
 
     const { role } = await ensureHouseholdMember(supabase, user.id, householdId);
 
-    // No query → return snapshot + explanation (orientation-first)
-    if (!q) {
+    const lowerQ = q.toLowerCase();
+    const looksOrientation =
+      !q ||
+      ORIENTATION_KEYWORDS.some((kw) => lowerQ.includes(kw));
+
+    // Orientation path: empty query or simple keyword match
+    if (looksOrientation) {
       const truth = await getHouseholdMoneyTruth(supabase, { householdId });
       const snapshot = buildFinancialSnapshot(truth);
       const explanation = explainSnapshot(snapshot);
