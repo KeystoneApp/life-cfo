@@ -49,6 +49,19 @@ function formatMoney(cents: number | undefined | null, currency = "AUD") {
   }
 }
 
+function softDate(isoOrDate: string | null | undefined) {
+  if (!isoOrDate) return "";
+  const ms = Date.parse(isoOrDate);
+
+  if (!Number.isFinite(ms)) {
+    const ms2 = Date.parse(`${isoOrDate}T00:00:00Z`);
+    if (!Number.isFinite(ms2)) return "";
+    return new Date(ms2).toLocaleDateString();
+  }
+
+  return new Date(ms).toLocaleDateString();
+}
+
 async function fetchJson<T>(url: string): Promise<T> {
   const res = await fetch(url, { cache: "no-store" });
   const json = await res.json().catch(() => ({}));
