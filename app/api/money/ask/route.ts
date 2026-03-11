@@ -16,13 +16,16 @@ type AskBody = {
   limit?: number;
 };
 
-const ORIENTATION_KEYWORDS = [
-  "are we okay",
-  "how are things looking",
-  "what changed",
-  "what feels tight",
+const ORIENTATION_KEYWORDS = ["are we okay", "how are things looking", "financial status"];
+
+const DIAGNOSIS_KEYWORDS = [
+  "why does money feel tight",
+  "why does money feel",
+  "what changed recently",
   "what is the main pressure",
-  "financial status",
+  "main pressure",
+  "feel tight",
+  "pressure right now",
 ];
 
 function safeStr(v: unknown) {
@@ -120,6 +123,7 @@ export async function POST(req: Request) {
     const looksOrientation =
       !q ||
       ORIENTATION_KEYWORDS.some((kw) => lowerQ.includes(kw));
+    const looksDiagnosis = q && DIAGNOSIS_KEYWORDS.some((kw) => lowerQ.includes(kw));
 
     // Orientation path: empty query or simple keyword match
     if (looksOrientation) {
@@ -133,6 +137,45 @@ export async function POST(req: Request) {
         household_id: householdId,
         snapshot,
         explanation,
+      });
+    }
+
+    if (looksDiagnosis) {
+      const truth = await getHouseholdMoneyTruth(supabase, { householdId });
+      const snapshot = buildFinancialSnapshot(truth);
+      const explanation = explainSnapshot(snapshot);
+
+      const signals = snapshot.pressure;
+
+      const rankedSignals: Array<{ name: string; summary: string; score: number }> = [
+        { name: "structural", summary: signals.structural_pressure.summary, score: signals.structural_pressure.score },
+        { name: "discretionary", summary: signals.discretionary_drift.summary, score: signals.discretionary_drift.score },
+        { name: "timing", summary: signals.timing_mismatch.summary, score: signals.timing_mismatch.score },
+        { name: "stability", summary: signals.stability_risk.summary, score: signals.stability_risk.score },
+      ].sort((a, b) => b.score - a.score);
+
+      const drivers = rankedSignals
+        .filter((s) => s.score >= 0.15)
+        .slice(0, 4)
+        .map((s) => s.summary);
+
+      const diagnosis = {
+        headline: explanation.headline || "Current money pressure overview",
+        summary: explanation.summary || "Here is what the current money signals show.",
+        drivers,
+        signals: {
+          structural: signals.structural_pressure.summary,
+          discretionary: signals.discretionary_drift.summary,
+          timing: signals.timing_mismatch.summary,
+          stability: signals.stability_risk.summary,
+        },
+      };
+
+      return NextResponse.json({
+        ok: true,
+        mode: "diagnosis",
+        household_id: householdId,
+        diagnosis,
       });
     }
 

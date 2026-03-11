@@ -213,6 +213,37 @@ export function AskProvider({ children }: { children: ReactNode }) {
           content = lines;
           tone = tone || "overview";
           verdict = verdict || null;
+        } else if (isMoneyScope && json?.mode === "diagnosis") {
+          const diag = json?.diagnosis || {};
+          const headline =
+            typeof diag?.headline === "string" ? diag.headline : "Money pressure overview";
+          const summary =
+            typeof diag?.summary === "string" ? diag.summary : "Current signals are summarised below.";
+
+          const drivers = Array.isArray(diag?.drivers)
+            ? (diag.drivers as string[]).filter((d) => typeof d === "string" && d.trim())
+            : [];
+
+          const sig = diag?.signals || {};
+          const signalLines = [
+            typeof sig.structural === "string" ? `Structural: ${sig.structural}` : null,
+            typeof sig.discretionary === "string" ? `Discretionary: ${sig.discretionary}` : null,
+            typeof sig.timing === "string" ? `Timing: ${sig.timing}` : null,
+            typeof sig.stability === "string" ? `Stability: ${sig.stability}` : null,
+          ].filter(Boolean);
+
+          const lines = [
+            headline,
+            summary,
+            drivers.length ? `Drivers:\n- ${drivers.join("\n- ")}` : null,
+            signalLines.length ? `Signals:\n- ${signalLines.join("\n- ")}` : null,
+          ]
+            .filter(Boolean)
+            .join("\n\n");
+
+          content = lines;
+          tone = tone || "overview";
+          verdict = verdict || null;
         } else if (isMoneyScope && json?.mode === "search") {
           const accounts = Array.isArray(json?.results?.accounts) ? json.results.accounts.length : 0;
           const bills = Array.isArray(json?.results?.bills) ? json.results.bills.length : 0;
