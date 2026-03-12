@@ -140,7 +140,7 @@ export default function SavedClient() {
 
         <Card className="border-zinc-200 bg-white">
           <CardContent className="space-y-3">
-            <div className="text-sm font-semibold text-zinc-900">Quick notes</div>
+            <div className="text-sm font-semibold text-zinc-900">Highlights</div>
             <ul className="space-y-1 text-xs text-zinc-700">
               {(explanation?.insights ?? []).slice(0, 3).map((line, idx) => (
                 <li key={idx}>{line}</li>
@@ -148,10 +148,17 @@ export default function SavedClient() {
               {!loading && (!explanation?.insights || explanation.insights.length === 0) ? (
                 <li>No saved notes yet.</li>
               ) : null}
+              {loading ? <li>Loading highlights...</li> : null}
             </ul>
             <div className="text-xs text-zinc-500">
               Snapshot date: {snapshot?.asOf ? softDate(snapshot.asOf) : loading ? "Loading..." : "No date"}
             </div>
+          </CardContent>
+        </Card>
+
+        <Card className="border-zinc-200 bg-white">
+          <CardContent className="space-y-3">
+            <div className="text-sm font-semibold text-zinc-900">Open related pages</div>
             <div className="flex flex-wrap gap-2">
               <Link href="/money">
                 <Chip>Money</Chip>
@@ -165,6 +172,9 @@ export default function SavedClient() {
               <Link href="/money/goals">
                 <Chip>Goals</Chip>
               </Link>
+            </div>
+            <div className="text-xs text-zinc-500">
+              Go deeper into account balances, savings goals, and data freshness.
             </div>
           </CardContent>
         </Card>

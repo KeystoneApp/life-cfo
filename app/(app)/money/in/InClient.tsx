@@ -138,7 +138,7 @@ export default function InClient() {
 
         <Card className="border-zinc-200 bg-white">
           <CardContent className="space-y-3">
-            <div className="text-sm font-semibold text-zinc-900">Quick notes</div>
+            <div className="text-sm font-semibold text-zinc-900">Highlights</div>
             <ul className="space-y-1 text-xs text-zinc-700">
               {(explanation?.insights ?? []).slice(0, 3).map((line, idx) => (
                 <li key={idx}>{line}</li>
@@ -146,7 +146,17 @@ export default function InClient() {
               {!loading && (!explanation?.insights || explanation.insights.length === 0) ? (
                 <li>No income notes yet.</li>
               ) : null}
+              {loading ? <li>Loading highlights...</li> : null}
             </ul>
+            <div className="text-xs text-zinc-500">
+              {explanation?.summary || "This section shows short, current income context."}
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="border-zinc-200 bg-white">
+          <CardContent className="space-y-3">
+            <div className="text-sm font-semibold text-zinc-900">Open related pages</div>
             <div className="flex flex-wrap gap-2">
               <Link href="/money">
                 <Chip>Money</Chip>
@@ -160,6 +170,9 @@ export default function InClient() {
               <Link href="/connections">
                 <Chip>Connections</Chip>
               </Link>
+            </div>
+            <div className="text-xs text-zinc-500">
+              Go deeper into inflows, account coverage, and connection health.
             </div>
           </CardContent>
         </Card>

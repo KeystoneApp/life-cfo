@@ -136,15 +136,25 @@ export default function PlannedClient() {
 
         <Card className="border-zinc-200 bg-white">
           <CardContent className="space-y-3">
-            <div className="text-sm font-semibold text-zinc-900">Where to go deeper</div>
+            <div className="text-sm font-semibold text-zinc-900">Highlights</div>
             <ul className="space-y-1 text-xs text-zinc-700">
-              <li>Use Bills for upcoming due items and payment setup.</li>
-              <li>Use Goals to track longer-term plans.</li>
-              <li>Use Transactions when you need recent evidence behind pressure.</li>
+              {(explanation?.insights ?? []).slice(0, 3).map((line, idx) => (
+                <li key={idx}>{line}</li>
+              ))}
+              {!loading && (!explanation?.insights || explanation.insights.length === 0) ? (
+                <li>No planning highlights yet.</li>
+              ) : null}
+              {loading ? <li>Loading highlights...</li> : null}
             </ul>
             <div className="text-xs text-zinc-500">
               Snapshot date: {snapshot?.asOf ? softDate(snapshot.asOf) : loading ? "Loading..." : "No date"}
             </div>
+          </CardContent>
+        </Card>
+
+        <Card className="border-zinc-200 bg-white">
+          <CardContent className="space-y-3">
+            <div className="text-sm font-semibold text-zinc-900">Open related pages</div>
             <div className="flex flex-wrap gap-2">
               <Link href="/money">
                 <Chip>Money</Chip>
@@ -161,6 +171,9 @@ export default function PlannedClient() {
               <Link href="/connections">
                 <Chip>Connections</Chip>
               </Link>
+            </div>
+            <div className="text-xs text-zinc-500">
+              Go deeper into bills, goals, and recent transaction evidence.
             </div>
           </CardContent>
         </Card>

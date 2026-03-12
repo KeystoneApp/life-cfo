@@ -168,13 +168,14 @@ export default function OutClient() {
 
         <Card className="border-zinc-200 bg-white">
           <CardContent className="space-y-3">
-            <div className="text-sm font-semibold text-zinc-900">Upcoming bills</div>
+            <div className="text-sm font-semibold text-zinc-900">Highlights</div>
+            <div className="text-xs text-zinc-500">Upcoming bills</div>
             <div className="space-y-2">
-              {(out?.upcoming_bills ?? []).slice(0, 5).map((bill) => (
+              {(out?.upcoming_bills ?? []).slice(0, 3).map((bill) => (
                 <div key={bill.id} className="flex items-center justify-between gap-3 text-xs text-zinc-700">
                   <div className="min-w-0 truncate">
                     {safeStr(bill.name) || "Bill"}
-                    {bill.next_due_at ? ` • Due ${softDate(bill.next_due_at)}` : ""}
+                    {bill.next_due_at ? ` - Due ${softDate(bill.next_due_at)}` : ""}
                   </div>
                   <div className="shrink-0 font-medium text-zinc-900">
                     {moneyFromCents(Number(bill.amount_cents || 0), safeStr(bill.currency) || "AUD")}
@@ -185,22 +186,10 @@ export default function OutClient() {
                 <div className="text-xs text-zinc-500">No upcoming bills found.</div>
               ) : null}
             </div>
-            <div className="flex flex-wrap gap-2">
-              <Link href="/bills">
-                <Chip>Bills</Chip>
-              </Link>
-              <Link href="/money/planned">
-                <Chip>Planned</Chip>
-              </Link>
-            </div>
-          </CardContent>
-        </Card>
 
-        <Card className="border-zinc-200 bg-white">
-          <CardContent className="space-y-3">
-            <div className="text-sm font-semibold text-zinc-900">Recent outflows</div>
+            <div className="text-xs text-zinc-500">Recent outflows</div>
             <div className="space-y-2">
-              {(out?.recent_out_transactions ?? []).slice(0, 5).map((tx) => {
+              {(out?.recent_out_transactions ?? []).slice(0, 3).map((tx) => {
                 const cents =
                   typeof tx.amount_cents === "number"
                     ? Math.abs(tx.amount_cents)
@@ -210,7 +199,7 @@ export default function OutClient() {
                 const title = safeStr(tx.merchant) || safeStr(tx.description) || "Transaction";
                 const meta = [tx.date ? softDate(tx.date) : null, safeStr(tx.category) || null]
                   .filter(Boolean)
-                  .join(" • ");
+                  .join(" | ");
 
                 return (
                   <div key={tx.id} className="flex items-center justify-between gap-3 text-xs text-zinc-700">
@@ -227,25 +216,31 @@ export default function OutClient() {
               {!loading && (out?.recent_out_transactions ?? []).length === 0 ? (
                 <div className="text-xs text-zinc-500">No recent outflows found.</div>
               ) : null}
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Link href="/transactions">
-                <Chip>Transactions</Chip>
-              </Link>
-              <Link href="/money">
-                <Chip>Money</Chip>
-              </Link>
+              {loading ? <div className="text-xs text-zinc-500">Loading highlights...</div> : null}
             </div>
           </CardContent>
         </Card>
 
         <Card className="border-zinc-200 bg-white">
-          <CardContent className="space-y-1 text-xs text-zinc-500">
-            <div>
-              Top category: {(out?.top_categories ?? [])[0]?.category || "Not enough data yet."}
+          <CardContent className="space-y-3">
+            <div className="text-sm font-semibold text-zinc-900">Open related pages</div>
+            <div className="space-y-1 text-xs text-zinc-500">
+              <div>Top category: {(out?.top_categories ?? [])[0]?.category || "Not enough data yet."}</div>
+              <div>Top merchant: {(out?.top_merchants ?? [])[0]?.merchant || "Not enough data yet."}</div>
             </div>
-            <div>
-              Top merchant: {(out?.top_merchants ?? [])[0]?.merchant || "Not enough data yet."}
+            <div className="flex flex-wrap gap-2">
+              <Link href="/money">
+                <Chip>Money</Chip>
+              </Link>
+              <Link href="/bills">
+                <Chip>Bills</Chip>
+              </Link>
+              <Link href="/transactions">
+                <Chip>Transactions</Chip>
+              </Link>
+              <Link href="/money/planned">
+                <Chip>Planned</Chip>
+              </Link>
             </div>
           </CardContent>
         </Card>
