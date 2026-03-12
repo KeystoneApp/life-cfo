@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Page } from "@/components/Page";
-import { Card, CardContent, Chip, Button, useToast } from "@/components/ui";
+import { Button, Card, CardContent, Chip, useToast } from "@/components/ui";
 import { useAsk } from "@/components/ask/AskProvider";
 
 type FinancialSnapshot = {
@@ -65,8 +65,17 @@ function softDate(isoOrDate: string | null | undefined) {
 async function fetchJson<T>(url: string): Promise<T> {
   const res = await fetch(url, { cache: "no-store" });
   const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error((json as any)?.error ?? "Request failed");
+  const errorText =
+    typeof (json as { error?: unknown })?.error === "string"
+      ? (json as { error?: string }).error
+      : "Request failed";
+  if (!res.ok) throw new Error(errorText);
   return json as T;
+}
+
+function getErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error && error.message) return error.message;
+  return fallback;
 }
 
 export default function MoneyClientNext() {
@@ -81,34 +90,34 @@ export default function MoneyClientNext() {
   const snapshot = data?.snapshot;
   const explanation = data?.explanation;
 
-  async function refresh(silent = false) {
+  const refresh = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     setError(null);
     try {
       const res = await fetchJson<OverviewResponse>("/api/money/overview");
       setData(res);
-    } catch (e: any) {
-      setError(e?.message ?? "Unable to load money overview.");
-      if (!silent) showToast({ message: e?.message ?? "Unable to load money overview." }, 2500);
+    } catch (e: unknown) {
+      const message = getErrorMessage(e, "Unable to load money overview.");
+      setError(message);
+      if (!silent) showToast({ message }, 2500);
     } finally {
       if (!silent) setLoading(false);
     }
-  }
+  }, [showToast]);
 
   useEffect(() => {
     void refresh(false);
-  }, []);
+  }, [refresh]);
 
   useEffect(() => {
     const onFocus = () => void refresh(true);
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
-  }, []);
+  }, [refresh]);
 
   const askExamples = [
     "Are we okay this month?",
     "What changed recently?",
-    "Where is our money leaking?",
     "What bills are coming up?",
   ];
 
@@ -118,58 +127,131 @@ export default function MoneyClientNext() {
   };
 
   return (
-    <Page title="Money" subtitle="Calm orientation for the household flows.">
+    <Page title="Money" subtitle="A calm view of money coming in, going out, saved, and planned.">
       <div className="mx-auto w-full max-w-[980px] px-4 sm:px-6">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <Chip title="As of">{snapshot?.asOf ? `As of ${snapshot.asOf}` : loading ? "Loading…" : "No date"}</Chip>
+          <Chip title="As of">
+            {snapshot?.asOf ? `As of ${softDate(snapshot.asOf)}` : loading ? "Loading..." : "No date"}
+          </Chip>
           <div className="flex flex-wrap items-center gap-2">
             <Chip onClick={() => void refresh(false)}>Refresh</Chip>
             <Chip onClick={() => router.push("/connections")}>Connect accounts</Chip>
-            <Link href="/connections">
-              <Chip>Connections</Chip>
-            </Link>
           </div>
         </div>
 
-        {error ? (
-          <div className="mt-4 text-sm text-red-600">{error}</div>
-        ) : null}
+        {error ? <div className="mt-4 text-sm text-red-600">{error}</div> : null}
 
         <div className="mt-5 grid gap-4">
-          {/* Orientation */}
           <Card className="border-zinc-200 bg-white">
-            <CardContent className="space-y-3">
+            <CardContent className="space-y-2">
               <div className="text-sm font-semibold text-zinc-900">
-                {explanation?.headline || (loading ? "Loading…" : "Money snapshot")}
+                {explanation?.headline || (loading ? "Loading..." : "Money at a glance")}
               </div>
-              <div className="text-xs text-zinc-600 leading-relaxed">
-                {explanation?.summary || (loading ? "Loading…" : "No summary yet.")}
+              <div className="text-xs leading-relaxed text-zinc-600">
+                {explanation?.summary ||
+                  (loading
+                    ? "Loading..."
+                    : "This page gives a short view of your household money right now.")}
               </div>
-              <div className="space-y-1">
-                <div className="text-xs font-medium text-zinc-700">Insights</div>
-                <ul className="list-disc space-y-1 pl-4 text-xs text-zinc-600">
-                  {(explanation?.insights ?? []).slice(0, 5).map((line, idx) => (
-                    <li key={idx}>{line}</li>
-                  ))}
-                  {!loading && (!explanation?.insights || explanation.insights.length === 0) ? (
-                    <li>No insights yet.</li>
-                  ) : null}
-                </ul>
-              </div>
+              <ul className="list-disc space-y-1 pl-4 text-xs text-zinc-600">
+                {(explanation?.insights ?? []).slice(0, 2).map((line, idx) => (
+                  <li key={idx}>{line}</li>
+                ))}
+                {!loading && (!explanation?.insights || explanation.insights.length === 0) ? (
+                  <li>No highlights yet.</li>
+                ) : null}
+              </ul>
             </CardContent>
           </Card>
 
-          {/* Ask */}
+          <div className="grid gap-4 md:grid-cols-2">
+            <FlowCard
+              title="In"
+              rows={[
+                `Recurring income: ${snapshot ? formatMoney(snapshot.income.recurringMonthlyCents) : loading ? "Loading..." : "-"}`,
+                snapshot
+                  ? `${snapshot.income.sourceCount} recurring source(s) tracked.`
+                  : "Income sources will show here.",
+                explanation?.pressure.timing || "Income timing notes will appear here.",
+              ]}
+              note="See income details and recent inflows."
+              links={[
+                { href: "/money/in", label: "Open In" },
+                { href: "/transactions", label: "Transactions" },
+              ]}
+            />
+
+            <FlowCard
+              title="Out"
+              rows={[
+                `Recurring commitments: ${snapshot ? formatMoney(snapshot.commitments.recurringMonthlyCents) : loading ? "Loading..." : "-"}`,
+                snapshot
+                  ? `${snapshot.commitments.billCount} bill(s) mapped.`
+                  : "Bill coverage will show here.",
+                `Flexible spending (30 days): ${snapshot ? formatMoney(snapshot.discretionary.last30DayOutflowCents) : loading ? "Loading..." : "-"}`,
+              ]}
+              note={explanation?.pressure.structural || "Spending pressure notes will appear here."}
+              links={[
+                { href: "/money/out", label: "Open Out" },
+                { href: "/bills", label: "Bills" },
+              ]}
+            />
+
+            <FlowCard
+              title="Saved"
+              rows={[
+                `Available cash: ${snapshot ? formatMoney(snapshot.liquidity.availableCashCents) : loading ? "Loading..." : "-"}`,
+                snapshot
+                  ? `${snapshot.liquidity.accountCount} account(s) included.`
+                  : "Saved position will show here.",
+                snapshot
+                  ? `${snapshot.connections.stale} of ${snapshot.connections.total} connection(s) are stale.`
+                  : "Connection freshness will show here.",
+              ]}
+              note={explanation?.pressure.stability || "Stability notes will appear here."}
+              links={[
+                { href: "/money/saved", label: "Open Saved" },
+                { href: "/accounts", label: "Accounts" },
+              ]}
+            />
+
+            <FlowCard
+              title="Planned"
+              rows={[
+                snapshot
+                  ? `Snapshot date: ${softDate(snapshot.asOf)}`
+                  : loading
+                    ? "Loading..."
+                    : "No snapshot date yet.",
+                explanation?.pressure.timing || "Upcoming timing notes will appear here.",
+                explanation?.pressure.discretionary || "Plan updates will appear here.",
+              ]}
+              note="Use planned pages for goals, commitments, and next steps."
+              links={[
+                { href: "/money/planned", label: "Open Planned" },
+                { href: "/money/goals", label: "Goals" },
+              ]}
+            />
+          </div>
+
           <Card className="border-zinc-200 bg-white">
             <CardContent className="space-y-3">
               <div className="space-y-1">
-                <div className="text-sm font-semibold text-zinc-900">Ask about money</div>
-                <div className="text-xs text-zinc-500">Use Ask for deeper questions or scenarios.</div>
+                <div className="text-sm font-semibold text-zinc-900">Ask about your money</div>
+                <div className="text-xs text-zinc-500">
+                  Ask a question when you want deeper context or a quick check.
+                </div>
               </div>
               <div className="flex flex-wrap gap-2">
                 <Button onClick={openAsk} className="rounded-2xl">
                   Open Ask
                 </Button>
+                <Link href="/connections">
+                  <Chip>Connections</Chip>
+                </Link>
+                <Link href="/money/planned">
+                  <Chip>Planned</Chip>
+                </Link>
               </div>
               <div className="flex flex-wrap gap-2">
                 {askExamples.map((q) => (
@@ -180,123 +262,40 @@ export default function MoneyClientNext() {
               </div>
             </CardContent>
           </Card>
-
-          {/* Financial state grid */}
-          <div className="grid gap-4 lg:grid-cols-3">
-            <StateCard
-              title="Available cash"
-              subtitle="Ready to use"
-              value={snapshot ? formatMoney(snapshot.liquidity.availableCashCents) : loading ? "Loading…" : "—"}
-              detail={snapshot ? `${snapshot.liquidity.accountCount} account(s)` : ""}
-            />
-            <StateCard
-              title="Recurring income"
-              subtitle="Monthly"
-              value={snapshot ? formatMoney(snapshot.income.recurringMonthlyCents) : loading ? "Loading…" : "—"}
-              detail={snapshot ? `${snapshot.income.sourceCount} source(s)` : ""}
-            />
-            <StateCard
-              title="Recurring commitments"
-              subtitle="Monthly"
-              value={snapshot ? formatMoney(snapshot.commitments.recurringMonthlyCents) : loading ? "Loading…" : "—"}
-              detail={snapshot ? `${snapshot.commitments.billCount} bill(s)` : ""}
-            />
-            <StateCard
-              title="Discretionary outflow"
-              subtitle="Last 30 days"
-              value={snapshot ? formatMoney(snapshot.discretionary.last30DayOutflowCents) : loading ? "Loading…" : "—"}
-            />
-            <StateCard
-              title="Connections"
-              subtitle="Data freshness"
-              value={
-                snapshot
-                  ? `${snapshot.connections.total} total • ${snapshot.connections.stale} stale`
-                  : loading
-                    ? "Loading…"
-                    : "—"
-              }
-              detail={snapshot ? `Max age ${snapshot.connections.maxAgeDays} day(s)` : ""}
-            />
-            <StateCard
-              title="Snapshot"
-              subtitle="As of date"
-              value={snapshot?.asOf ? softDate(snapshot.asOf) : loading ? "Loading…" : "—"}
-            />
-          </div>
-
-          {/* Pressure */}
-          <Card className="border-zinc-200 bg-white">
-            <CardContent className="space-y-2">
-              <div className="text-sm font-semibold text-zinc-900">Pressure signals</div>
-              <div className="space-y-1 text-xs text-zinc-700">
-                <div>{explanation?.pressure.structural ?? "Structural signal pending."}</div>
-                <div>{explanation?.pressure.discretionary ?? "Discretionary signal pending."}</div>
-                <div>{explanation?.pressure.timing ?? "Timing signal pending."}</div>
-                <div>{explanation?.pressure.stability ?? "Stability signal pending."}</div>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Supporting links */}
-          <Card className="border-zinc-200 bg-white">
-            <CardContent className="space-y-3">
-              <div className="text-sm font-semibold text-zinc-900">Supporting pages</div>
-              <div className="flex flex-wrap gap-2">
-                <Link href="/accounts">
-                  <Chip>Accounts</Chip>
-                </Link>
-                <Link href="/transactions">
-                  <Chip>Transactions</Chip>
-                </Link>
-                <Link href="/connections">
-                  <Chip>Connections</Chip>
-                </Link>
-                <Link href="/net-worth">
-                  <Chip>Net Worth</Chip>
-                </Link>
-                <Link href="/money/in">
-                  <Chip>In</Chip>
-                </Link>
-                <Link href="/money/out">
-                  <Chip>Out</Chip>
-                </Link>
-                <Link href="/money/categories">
-                  <Chip>Categories</Chip>
-                </Link>
-                <Link href="/money/rules">
-                  <Chip>Rules</Chip>
-                </Link>
-              </div>
-              <div className="text-xs text-zinc-500">
-                Depth lives in these pages; Money is for calm orientation.
-              </div>
-            </CardContent>
-          </Card>
         </div>
       </div>
     </Page>
   );
 }
 
-function StateCard({
+function FlowCard({
   title,
-  subtitle,
-  value,
-  detail,
+  rows,
+  note,
+  links,
 }: {
   title: string;
-  subtitle?: string;
-  value: string;
-  detail?: string;
+  rows: string[];
+  note?: string;
+  links: Array<{ href: string; label: string }>;
 }) {
   return (
     <Card className="border-zinc-200 bg-white">
-      <CardContent className="space-y-2">
+      <CardContent className="space-y-3">
         <div className="text-sm font-semibold text-zinc-900">{title}</div>
-        {subtitle ? <div className="text-xs text-zinc-500">{subtitle}</div> : null}
-        <div className="text-lg font-semibold text-zinc-900">{value}</div>
-        {detail ? <div className="text-xs text-zinc-500">{detail}</div> : null}
+        <ul className="space-y-1 text-xs text-zinc-700">
+          {rows.slice(0, 3).map((row, idx) => (
+            <li key={idx}>{row}</li>
+          ))}
+        </ul>
+        {note ? <div className="text-xs text-zinc-500">{note}</div> : null}
+        <div className="flex flex-wrap gap-2">
+          {links.map((link) => (
+            <Link key={`${title}_${link.href}_${link.label}`} href={link.href}>
+              <Chip>{link.label}</Chip>
+            </Link>
+          ))}
+        </div>
       </CardContent>
     </Card>
   );
