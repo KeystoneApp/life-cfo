@@ -3,7 +3,17 @@ import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import { ClientProviders } from "@/components/ClientProviders";
 
+function resolveMetadataBase() {
+  const candidate = (process.env.NEXT_PUBLIC_SITE_URL || "https://life-cfo.com").trim();
+  try {
+    return new URL(candidate);
+  } catch {
+    return new URL("https://life-cfo.com");
+  }
+}
+
 export const metadata: Metadata = {
+  metadataBase: resolveMetadataBase(),
   title: "Life CFO",
   description: "Decision Intelligence.",
   icons: {
