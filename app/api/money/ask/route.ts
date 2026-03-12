@@ -38,7 +38,6 @@ const PLANNING_KEYWORDS = [
   "plan for this month",
   "what is coming up",
   "what's coming up",
-  "coming up",
   "what do we need to keep in mind financially",
   "what do we need to keep in mind",
   "keep in mind financially",
@@ -111,6 +110,22 @@ function hasConcretePurchaseContext(lowerQ: string): boolean {
     "buy",
     "upgrade",
     "move",
+  ];
+  return contextHints.some((hint) => lowerQ.includes(hint));
+}
+
+function hasComingUpPlanningContext(lowerQ: string): boolean {
+  if (!lowerQ.includes("coming up")) return false;
+  const contextHints = [
+    "what",
+    "month",
+    "financial",
+    "money",
+    "bill",
+    "bills",
+    "commitment",
+    "plan",
+    "keep in mind",
   ];
   return contextHints.some((hint) => lowerQ.includes(hint));
 }
@@ -201,7 +216,10 @@ export async function POST(req: Request) {
       !q ||
       ORIENTATION_KEYWORDS.some((kw) => lowerQ.includes(kw));
     const looksDiagnosis = q && DIAGNOSIS_KEYWORDS.some((kw) => lowerQ.includes(kw));
-    const looksPlanning = q && PLANNING_KEYWORDS.some((kw) => lowerQ.includes(kw));
+    const looksPlanning =
+      q &&
+      (PLANNING_KEYWORDS.some((kw) => lowerQ.includes(kw)) ||
+        hasComingUpPlanningContext(lowerQ));
     const looksAffordability = q && AFFORDABILITY_KEYWORDS.some((kw) => lowerQ.includes(kw));
 
     // Orientation path: empty query or simple keyword match
@@ -255,6 +273,52 @@ export async function POST(req: Request) {
         mode: "diagnosis",
         household_id: householdId,
         diagnosis,
+      });
+    }
+
+    if (looksAffordability) {
+      const truth = await getHouseholdMoneyTruth(supabase, { householdId });
+      const snapshot = buildFinancialSnapshot(truth);
+      const explanation = explainSnapshot(snapshot);
+
+      const signals: string[] = [
+        `Available cash is ${formatMoney(snapshot.liquidity.availableCashCents)}.`,
+        `Recurring commitments are about ${formatMoney(
+          snapshot.commitments.recurringMonthlyCents
+        )} per month across ${snapshot.commitments.billCount} tracked bill(s).`,
+        `Current pressure: ${explanation.pressure.structural}`,
+      ];
+      if (explanation.pressure.timing) {
+        signals.push(`Timing context: ${explanation.pressure.timing}`);
+      }
+
+      const missingCostDetail = !hasExplicitCostDetail(lowerQ);
+      const missingPurchaseContext = !hasConcretePurchaseContext(lowerQ);
+      const caveatNeeded = missingCostDetail || missingPurchaseContext;
+
+      const summary = [
+        "This is a baseline affordability view from your current household position.",
+        explanation.summary,
+      ]
+        .filter(Boolean)
+        .join(" ");
+
+      const caveat = caveatNeeded
+        ? "The question is still broad, so this is not a precise affordability call. Cost amount and payment timing would sharpen the answer."
+        : snapshot.connections.stale > 0
+          ? `${snapshot.connections.stale} of ${snapshot.connections.total} connections are stale, so affordability confidence may be lower.`
+          : undefined;
+
+      return NextResponse.json({
+        ok: true,
+        mode: "affordability",
+        household_id: householdId,
+        affordability: {
+          headline: "Here is your current affordability baseline.",
+          summary,
+          signals: signals.slice(0, 4),
+          caveat,
+        },
       });
     }
 
@@ -315,6 +379,7 @@ export async function POST(req: Request) {
       const headline = dueSoon.length
         ? "Here is what is coming up in your household money."
         : "Here is the near-term money view.";
+
       const summary = [
         snapshot.commitments.billCount > 0
           ? `${snapshot.commitments.billCount} recurring commitment(s) are currently tracked.`
@@ -333,52 +398,6 @@ export async function POST(req: Request) {
           summary,
           upcoming: upcoming.slice(0, 4),
           notes: notes.slice(0, 3),
-        },
-      });
-    }
-
-    if (looksAffordability) {
-      const truth = await getHouseholdMoneyTruth(supabase, { householdId });
-      const snapshot = buildFinancialSnapshot(truth);
-      const explanation = explainSnapshot(snapshot);
-
-      const signals: string[] = [
-        `Available cash is ${formatMoney(snapshot.liquidity.availableCashCents)}.`,
-        `Recurring commitments are about ${formatMoney(
-          snapshot.commitments.recurringMonthlyCents
-        )} per month across ${snapshot.commitments.billCount} tracked bill(s).`,
-        `Current pressure: ${explanation.pressure.structural}`,
-      ];
-      if (explanation.pressure.timing) {
-        signals.push(`Timing context: ${explanation.pressure.timing}`);
-      }
-
-      const missingCostDetail = !hasExplicitCostDetail(lowerQ);
-      const missingPurchaseContext = !hasConcretePurchaseContext(lowerQ);
-      const caveatNeeded = missingCostDetail || missingPurchaseContext;
-
-      const summary = [
-        "This is a baseline affordability view from your current household position.",
-        explanation.summary,
-      ]
-        .filter(Boolean)
-        .join(" ");
-
-      const caveat = caveatNeeded
-        ? "The question is still broad, so this is not a precise affordability call. Cost amount and payment timing would sharpen the answer."
-        : snapshot.connections.stale > 0
-          ? `${snapshot.connections.stale} of ${snapshot.connections.total} connections are stale, so affordability confidence may be lower.`
-          : undefined;
-
-      return NextResponse.json({
-        ok: true,
-        mode: "affordability",
-        household_id: householdId,
-        affordability: {
-          headline: "Here is your current affordability baseline.",
-          summary,
-          signals: signals.slice(0, 4),
-          caveat,
         },
       });
     }

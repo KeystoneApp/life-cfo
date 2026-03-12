@@ -154,6 +154,32 @@ export default function PlannedClient() {
 
         <Card className="border-zinc-200 bg-white">
           <CardContent className="space-y-3">
+            <div className="text-sm font-semibold text-zinc-900">Goals snapshot</div>
+            <ul className="space-y-1 text-xs text-zinc-700">
+              <li>
+                Commitments in view: {snapshot ? `${snapshot.commitments.billCount} bill(s)` : loading ? "Loading..." : "-"}
+              </li>
+              <li>
+                Monthly commitments: {snapshot ? formatMoney(snapshot.commitments.recurringMonthlyCents) : loading ? "Loading..." : "-"}
+              </li>
+              <li>{explanation?.pressure.timing || "Timing notes will appear here."}</li>
+            </ul>
+            <div className="flex flex-wrap gap-2">
+              <Link href="/money/goals">
+                <Chip>Goals</Chip>
+              </Link>
+              <Link href="/bills">
+                <Chip>Bills</Chip>
+              </Link>
+            </div>
+            <div className="text-xs text-zinc-500">
+              Use goals to set money aside before upcoming due dates.
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="border-zinc-200 bg-white">
+          <CardContent className="space-y-3">
             <div className="text-sm font-semibold text-zinc-900">Open related pages</div>
             <div className="flex flex-wrap gap-2">
               <Link href="/money">

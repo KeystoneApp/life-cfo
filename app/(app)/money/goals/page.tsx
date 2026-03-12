@@ -717,7 +717,7 @@ export default function GoalsPage() {
       title="Goals"
       subtitle={subtitle}
       right={
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <Chip
             onClick={() => {
               router.push("/money");
@@ -727,6 +727,12 @@ export default function GoalsPage() {
             className="border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50"
           >
             Money
+          </Chip>
+          <Chip onClick={() => router.push("/money/planned")} title="Open Planned">
+            Planned
+          </Chip>
+          <Chip onClick={() => router.push("/bills")} title="Open Bills">
+            Bills
           </Chip>
 
           <Button onClick={beginCreate} disabled={creating || !!editingId} className="rounded-2xl">
@@ -816,6 +822,33 @@ export default function GoalsPage() {
                     </div>
                   </div>
                 )}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="border-zinc-200 bg-white shadow-none">
+          <CardContent className="p-0">
+            <div className="px-6 py-5">
+              <SectionHeader title="Planning context" right={<Chip className="text-xs">Keep it short</Chip>} />
+              <div className="mt-3 space-y-2 text-xs text-zinc-700">
+                <div>
+                  Goals work best when they sit beside upcoming commitments and due dates.
+                </div>
+                <div>
+                  Use Planned for future pressure, then use Goals to set aside money intentionally.
+                </div>
+              </div>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <Chip onClick={() => router.push("/money/planned")} className="text-xs" title="Open Planned">
+                  Planned
+                </Chip>
+                <Chip onClick={() => router.push("/transactions")} className="text-xs" title="Open Transactions">
+                  Transactions
+                </Chip>
+                <Chip onClick={() => router.push("/connections")} className="text-xs" title="Open Connections">
+                  Connections
+                </Chip>
               </div>
             </div>
           </CardContent>
