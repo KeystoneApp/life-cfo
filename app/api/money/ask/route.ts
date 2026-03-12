@@ -16,7 +16,11 @@ type AskBody = {
   limit?: number;
 };
 
-const ORIENTATION_KEYWORDS = ["are we okay", "how are things looking", "financial status"];
+const ORIENTATION_KEYWORDS = [
+  "are we okay",
+  "how are things looking",
+  "financial status",
+];
 
 const DIAGNOSIS_KEYWORDS = [
   "why does money feel tight",
