@@ -31,6 +31,13 @@ function plusDaysIso(days: number) {
   return d.toISOString();
 }
 
+function minusDaysDateISO(baseIso: string, days: number) {
+  const baseMs = Date.parse(baseIso);
+  const base = Number.isFinite(baseMs) ? new Date(baseMs) : new Date();
+  base.setDate(base.getDate() - days);
+  return base.toISOString().slice(0, 10);
+}
+
 /**
  * Internal-only financial truth fetch for a household.
  * - Read-only
@@ -50,11 +57,14 @@ export async function getHouseholdMoneyTruth(
   const next30Iso = params.next30Iso || plusDaysIso(30);
   const monthStartIso = params.monthStartIso || startOfMonthISO();
   const monthEndIso = params.monthEndIso || endOfMonthISO();
+  const asOfDateIso = nowIso.slice(0, 10);
+  const rollingStartIso = minusDaysDateISO(nowIso, 60);
 
   const [
     accountsRes,
     recentTxRes,
     monthTxRes,
+    rollingTxRes,
     recurringBillsRes,
     recurringIncomeRes,
     goalsRes,
@@ -94,6 +104,17 @@ export async function getHouseholdMoneyTruth(
       .lte("date", monthEndIso)
       .order("date", { ascending: false })
       .limit(1000),
+
+    supabase
+      .from("transactions")
+      .select(
+        "id,date,description,merchant,category,pending,amount,amount_cents,currency,account_id,created_at,updated_at"
+      )
+      .eq("household_id", householdId)
+      .gte("date", rollingStartIso)
+      .lte("date", asOfDateIso)
+      .order("date", { ascending: false })
+      .limit(2000),
 
     supabase
       .from("recurring_bills")
@@ -149,6 +170,7 @@ export async function getHouseholdMoneyTruth(
   if (accountsRes.error) throw accountsRes.error;
   if (recentTxRes.error) throw recentTxRes.error;
   if (monthTxRes.error) throw monthTxRes.error;
+  if (rollingTxRes.error) throw rollingTxRes.error;
   if (recurringBillsRes.error) throw recurringBillsRes.error;
   if (recurringIncomeRes.error) throw recurringIncomeRes.error;
   if (goalsRes.error) throw goalsRes.error;
@@ -169,6 +191,7 @@ export async function getHouseholdMoneyTruth(
     accounts: (accountsRes.data ?? []) as AccountsTruthRow[],
     recent_transactions: (recentTxRes.data ?? []) as TransactionsTruthRow[],
     month_transactions: (monthTxRes.data ?? []) as TransactionsTruthRow[],
+    rolling_transactions: (rollingTxRes.data ?? []) as TransactionsTruthRow[],
     recurring_bills: (recurringBillsRes.data ?? []) as RecurringBillsTruthRow[],
     recurring_income: (recurringIncomeRes.data ?? []) as RecurringIncomeTruthRow[],
     goals: (goalsRes.data ?? []) as MoneyGoalsTruthRow[],

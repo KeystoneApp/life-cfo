@@ -443,7 +443,11 @@ function normalizePressureTruth(truth: HouseholdMoneyTruth): LegacyPressureTruth
     currency: a.currency ?? null,
   }));
 
-  const transactions: TransactionTruth[] = (truth.month_transactions ?? []).map((t) => ({
+  const signalTransactions = (truth.rolling_transactions ?? []).length
+    ? truth.rolling_transactions
+    : truth.month_transactions ?? [];
+
+  const transactions: TransactionTruth[] = signalTransactions.map((t) => ({
     id: String(t.id ?? ""),
     date: t.date ?? "",
     amount_cents: safeCents(t.amount_cents),

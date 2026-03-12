@@ -214,7 +214,11 @@ function normalizeSnapshotTruth(truth: HouseholdMoneyTruth): LegacySnapshotTruth
     currency: a.currency ?? null,
   }));
 
-  const transactions: TransactionTruth[] = (truth.month_transactions ?? []).map((t) => ({
+  const snapshotTransactions = (truth.rolling_transactions ?? []).length
+    ? truth.rolling_transactions
+    : truth.month_transactions ?? [];
+
+  const transactions: TransactionTruth[] = snapshotTransactions.map((t) => ({
     id: String(t.id ?? ""),
     date: t.date ?? "",
     amount_cents: safeCents(t.amount_cents),

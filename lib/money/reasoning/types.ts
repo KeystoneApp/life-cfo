@@ -159,6 +159,7 @@ export type HouseholdMoneyTruth = {
   accounts: AccountsTruthRow[];
   recent_transactions: TransactionsTruthRow[];
   month_transactions: TransactionsTruthRow[];
+  rolling_transactions: TransactionsTruthRow[];
   recurring_bills: RecurringBillsTruthRow[];
   recurring_income: RecurringIncomeTruthRow[];
   goals: MoneyGoalsTruthRow[];
