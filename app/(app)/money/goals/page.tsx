@@ -596,7 +596,7 @@ export default function GoalsPage() {
     await applyDeltaCents(selectedGoal, -Math.round(amountDollars * 100), null);
   }
 
-  const subtitle = "Goals are where money gets meaning.";
+  const subtitle = "Goals and Planned work together for future money decisions.";
 
   if (authStatus === "loading") {
     return (
@@ -830,24 +830,30 @@ export default function GoalsPage() {
         <Card className="border-zinc-200 bg-white shadow-none">
           <CardContent className="p-0">
             <div className="px-6 py-5">
-              <SectionHeader title="Planning context" right={<Chip className="text-xs">Keep it short</Chip>} />
+              <SectionHeader title="Planned and goals" right={<Chip className="text-xs">Keep it short</Chip>} />
               <div className="mt-3 space-y-2 text-xs text-zinc-700">
                 <div>
                   Goals work best when they sit beside upcoming commitments and due dates.
                 </div>
                 <div>
-                  Use Planned for future pressure, then use Goals to set aside money intentionally.
+                  Use Planned to check timing pressure, then use Goals to track what you want to set aside.
                 </div>
               </div>
               <div className="mt-3 flex flex-wrap items-center gap-2">
                 <Chip onClick={() => router.push("/money/planned")} className="text-xs" title="Open Planned">
                   Planned
                 </Chip>
+                <Chip onClick={() => router.push("/bills")} className="text-xs" title="Open Bills">
+                  Bills
+                </Chip>
                 <Chip onClick={() => router.push("/transactions")} className="text-xs" title="Open Transactions">
                   Transactions
                 </Chip>
                 <Chip onClick={() => router.push("/connections")} className="text-xs" title="Open Connections">
                   Connections
+                </Chip>
+                <Chip onClick={() => router.push("/money")} className="text-xs" title="Open Money">
+                  Money
                 </Chip>
               </div>
             </div>

@@ -114,13 +114,13 @@ export default function PlannedClient() {
   );
 
   return (
-    <Page title="Planned" subtitle="Upcoming commitments and near-term pressure." right={right}>
+    <Page title="Planned" subtitle="Upcoming commitments, goals, and near-term timing." right={right}>
       <div className="mx-auto w-full max-w-[860px] space-y-4 px-4 sm:px-6">
         {error ? <div className="text-sm text-red-600">{error}</div> : null}
 
         <Card className="border-zinc-200 bg-white">
           <CardContent className="space-y-2">
-            <div className="text-sm font-semibold text-zinc-900">Planned at a glance</div>
+            <div className="text-sm font-semibold text-zinc-900">Upcoming commitments</div>
             <ul className="space-y-1 text-xs text-zinc-700">
               <li>
                 Recurring commitments: {snapshot ? formatMoney(snapshot.commitments.recurringMonthlyCents) : loading ? "Loading..." : "-"}
@@ -136,15 +136,11 @@ export default function PlannedClient() {
 
         <Card className="border-zinc-200 bg-white">
           <CardContent className="space-y-3">
-            <div className="text-sm font-semibold text-zinc-900">Highlights</div>
+            <div className="text-sm font-semibold text-zinc-900">Timing notes</div>
             <ul className="space-y-1 text-xs text-zinc-700">
-              {(explanation?.insights ?? []).slice(0, 3).map((line, idx) => (
-                <li key={idx}>{line}</li>
-              ))}
-              {!loading && (!explanation?.insights || explanation.insights.length === 0) ? (
-                <li>No planning highlights yet.</li>
-              ) : null}
-              {loading ? <li>Loading highlights...</li> : null}
+              <li>{explanation?.pressure.timing || (loading ? "Loading..." : "Timing notes will appear here.")}</li>
+              <li>{explanation?.pressure.structural || (loading ? "Loading..." : "Commitment notes will appear here.")}</li>
+              <li>{explanation?.pressure.discretionary || (loading ? "Loading..." : "Spending rhythm notes will appear here.")}</li>
             </ul>
             <div className="text-xs text-zinc-500">
               Snapshot date: {snapshot?.asOf ? softDate(snapshot.asOf) : loading ? "Loading..." : "No date"}
@@ -171,9 +167,12 @@ export default function PlannedClient() {
               <Link href="/bills">
                 <Chip>Bills</Chip>
               </Link>
+              <Link href="/money">
+                <Chip>Money</Chip>
+              </Link>
             </div>
             <div className="text-xs text-zinc-500">
-              Use goals to set money aside before upcoming due dates.
+              Keep goals and upcoming due dates in view together.
             </div>
           </CardContent>
         </Card>
