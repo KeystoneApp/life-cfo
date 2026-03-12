@@ -44,6 +44,17 @@ const PLANNING_KEYWORDS = [
   "keep in mind financially",
 ];
 
+const AFFORDABILITY_KEYWORDS = [
+  "can we afford this",
+  "can we afford it",
+  "can we afford a house",
+  "can we afford",
+  "could we manage this payment",
+  "could we manage this",
+  "would this stretch us too much",
+  "would this stretch us",
+];
+
 function safeStr(v: unknown) {
   return typeof v === "string" ? v : "";
 }
@@ -75,6 +86,33 @@ function toMs(value: string | null | undefined): number | null {
   if (!value) return null;
   const ms = Date.parse(value);
   return Number.isFinite(ms) ? ms : null;
+}
+
+function hasExplicitCostDetail(lowerQ: string): boolean {
+  return /(\$|aud|usd|dollars?|cents?|\d)/i.test(lowerQ);
+}
+
+function hasConcretePurchaseContext(lowerQ: string): boolean {
+  const contextHints = [
+    "house",
+    "home",
+    "rent",
+    "mortgage",
+    "payment",
+    "loan",
+    "car",
+    "holiday",
+    "vacation",
+    "school",
+    "fees",
+    "bill",
+    "subscription",
+    "purchase",
+    "buy",
+    "upgrade",
+    "move",
+  ];
+  return contextHints.some((hint) => lowerQ.includes(hint));
 }
 
 async function readCookie(name: string) {
@@ -164,6 +202,7 @@ export async function POST(req: Request) {
       ORIENTATION_KEYWORDS.some((kw) => lowerQ.includes(kw));
     const looksDiagnosis = q && DIAGNOSIS_KEYWORDS.some((kw) => lowerQ.includes(kw));
     const looksPlanning = q && PLANNING_KEYWORDS.some((kw) => lowerQ.includes(kw));
+    const looksAffordability = q && AFFORDABILITY_KEYWORDS.some((kw) => lowerQ.includes(kw));
 
     // Orientation path: empty query or simple keyword match
     if (looksOrientation) {
@@ -294,6 +333,52 @@ export async function POST(req: Request) {
           summary,
           upcoming: upcoming.slice(0, 4),
           notes: notes.slice(0, 3),
+        },
+      });
+    }
+
+    if (looksAffordability) {
+      const truth = await getHouseholdMoneyTruth(supabase, { householdId });
+      const snapshot = buildFinancialSnapshot(truth);
+      const explanation = explainSnapshot(snapshot);
+
+      const signals: string[] = [
+        `Available cash is ${formatMoney(snapshot.liquidity.availableCashCents)}.`,
+        `Recurring commitments are about ${formatMoney(
+          snapshot.commitments.recurringMonthlyCents
+        )} per month across ${snapshot.commitments.billCount} tracked bill(s).`,
+        `Current pressure: ${explanation.pressure.structural}`,
+      ];
+      if (explanation.pressure.timing) {
+        signals.push(`Timing context: ${explanation.pressure.timing}`);
+      }
+
+      const missingCostDetail = !hasExplicitCostDetail(lowerQ);
+      const missingPurchaseContext = !hasConcretePurchaseContext(lowerQ);
+      const caveatNeeded = missingCostDetail || missingPurchaseContext;
+
+      const summary = [
+        "This is a baseline affordability view from your current household position.",
+        explanation.summary,
+      ]
+        .filter(Boolean)
+        .join(" ");
+
+      const caveat = caveatNeeded
+        ? "The question is still broad, so this is not a precise affordability call. Cost amount and payment timing would sharpen the answer."
+        : snapshot.connections.stale > 0
+          ? `${snapshot.connections.stale} of ${snapshot.connections.total} connections are stale, so affordability confidence may be lower.`
+          : undefined;
+
+      return NextResponse.json({
+        ok: true,
+        mode: "affordability",
+        household_id: householdId,
+        affordability: {
+          headline: "Here is your current affordability baseline.",
+          summary,
+          signals: signals.slice(0, 4),
+          caveat,
         },
       });
     }

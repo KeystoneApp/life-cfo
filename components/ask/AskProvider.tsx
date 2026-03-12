@@ -271,6 +271,35 @@ export function AskProvider({ children }: { children: ReactNode }) {
 
           content = lines;
           tone = tone || "overview";
+        } else if (isMoneyScope && json?.mode === "affordability") {
+          const affordability = json?.affordability || {};
+          const headline =
+            typeof affordability?.headline === "string"
+              ? affordability.headline
+              : "Affordability baseline";
+          const summary =
+            typeof affordability?.summary === "string"
+              ? affordability.summary
+              : "Here is the current affordability context.";
+          const signals = Array.isArray(affordability?.signals)
+            ? (affordability.signals as string[]).filter((s) => typeof s === "string" && s.trim())
+            : [];
+          const caveat =
+            typeof affordability?.caveat === "string" && affordability.caveat.trim()
+              ? affordability.caveat
+              : null;
+
+          const lines = [
+            headline,
+            summary,
+            signals.length ? `Signals:\n- ${signals.join("\n- ")}` : null,
+            caveat ? `Caveat:\n- ${caveat}` : null,
+          ]
+            .filter(Boolean)
+            .join("\n\n");
+
+          content = lines;
+          tone = tone || "overview";
         } else if (isMoneyScope && json?.mode === "search") {
           const accounts = Array.isArray(json?.results?.accounts) ? json.results.accounts.length : 0;
           const bills = Array.isArray(json?.results?.bills) ? json.results.bills.length : 0;
