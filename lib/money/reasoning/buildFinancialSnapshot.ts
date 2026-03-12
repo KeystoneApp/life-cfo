@@ -34,18 +34,28 @@ export type FinancialSnapshot = {
   pressure: PressureSignals;
 };
 
-export function buildFinancialSnapshot(truth: HouseholdMoneyTruth): FinancialSnapshot {
-  const asOfMs = safeDate(truth.asOf);
+type LegacySnapshotTruth = {
+  asOf: string;
+  accounts: AccountTruth[];
+  transactions: TransactionTruth[];
+  recurringBills: RecurringBillTruth[];
+  recurringIncome: RecurringIncomeTruth[];
+  connections: ConnectionTruth[];
+};
 
-  const liquidity = computeLiquidity(truth.accounts);
-  const income = computeRecurringIncome(truth.recurringIncome);
-  const commitments = computeRecurringBills(truth.recurringBills);
-  const discretionary = computeDiscretionary(truth.transactions, asOfMs);
-  const connections = computeConnections(truth.connections ?? [], truth.asOf);
+export function buildFinancialSnapshot(truth: HouseholdMoneyTruth): FinancialSnapshot {
+  const normalized = normalizeSnapshotTruth(truth);
+  const asOfMs = safeDate(normalized.asOf);
+
+  const liquidity = computeLiquidity(normalized.accounts);
+  const income = computeRecurringIncome(normalized.recurringIncome);
+  const commitments = computeRecurringBills(normalized.recurringBills);
+  const discretionary = computeDiscretionary(normalized.transactions, asOfMs);
+  const connections = computeConnections(normalized.connections, normalized.asOf);
   const pressure = evaluatePressureSignals(truth);
 
   return {
-    asOf: truth.asOf,
+    asOf: normalized.asOf,
     liquidity,
     income,
     commitments,
@@ -191,4 +201,75 @@ function maxConnectionAgeDays(connections: ConnectionTruth[], asOf: string): num
 
   if (!ages.length) return Infinity;
   return Math.max(...ages);
+}
+
+function normalizeSnapshotTruth(truth: HouseholdMoneyTruth): LegacySnapshotTruth {
+  const asOf = truth.as_of_iso || new Date().toISOString();
+
+  const accounts: AccountTruth[] = (truth.accounts ?? []).map((a) => ({
+    id: String(a.id ?? ""),
+    current_balance_cents: safeCents(a.current_balance_cents),
+    available_balance_cents:
+      typeof a.available_balance_cents === "number" ? a.available_balance_cents : null,
+    currency: a.currency ?? null,
+  }));
+
+  const transactions: TransactionTruth[] = (truth.month_transactions ?? []).map((t) => ({
+    id: String(t.id ?? ""),
+    date: t.date ?? "",
+    amount_cents: safeCents(t.amount_cents),
+    currency: t.currency ?? null,
+    category: t.category ?? null,
+  }));
+
+  const recurringBills: RecurringBillTruth[] = (truth.recurring_bills ?? []).map((b) => ({
+    id: String(b.id ?? ""),
+    name: b.name ?? "",
+    amount_cents: safeCents(b.amount_cents),
+    currency: b.currency ?? null,
+    cadence: normalizeCadence(b.cadence),
+    next_due_at: b.next_due_at ?? null,
+    active: b.active !== false,
+  }));
+
+  const recurringIncome: RecurringIncomeTruth[] = (truth.recurring_income ?? []).map((i) => ({
+    id: String(i.id ?? ""),
+    name: i.name ?? "",
+    amount_cents: safeCents(i.amount_cents),
+    currency: i.currency ?? null,
+    cadence: normalizeCadence(i.cadence),
+    next_pay_at: i.next_pay_at ?? null,
+    active: i.active !== false,
+  }));
+
+  const connections: ConnectionTruth[] = (truth.external_connections ?? []).map((c) => ({
+    id: String(c.id ?? ""),
+    status: c.status ?? "unknown",
+    last_sync_at: c.last_sync_at ?? null,
+    updated_at: c.updated_at ?? null,
+    provider: c.provider ?? null,
+  }));
+
+  return {
+    asOf,
+    accounts,
+    transactions,
+    recurringBills,
+    recurringIncome,
+    connections,
+  };
+}
+
+function normalizeCadence(value: string | null | undefined): MoneyCadence {
+  switch (value) {
+    case "weekly":
+    case "fortnightly":
+    case "monthly":
+    case "quarterly":
+    case "annual":
+    case "yearly":
+      return value;
+    default:
+      return "monthly";
+  }
 }

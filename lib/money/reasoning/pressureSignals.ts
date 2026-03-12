@@ -30,12 +30,22 @@ export type PressureSignals = {
   stability_risk: PressureSignal;
 };
 
+type LegacyPressureTruth = {
+  asOf: string;
+  accounts: AccountTruth[];
+  transactions: TransactionTruth[];
+  recurringBills: RecurringBillTruth[];
+  recurringIncome: RecurringIncomeTruth[];
+  connections: ConnectionTruth[];
+};
+
 export function evaluatePressureSignals(truth: HouseholdMoneyTruth): PressureSignals {
+  const normalized = normalizePressureTruth(truth);
   return {
-    structural_pressure: evaluateStructuralPressure(truth),
-    discretionary_drift: evaluateDiscretionaryDrift(truth),
-    timing_mismatch: evaluateTimingMismatch(truth),
-    stability_risk: evaluateStabilityRisk(truth),
+    structural_pressure: evaluateStructuralPressure(normalized),
+    discretionary_drift: evaluateDiscretionaryDrift(normalized),
+    timing_mismatch: evaluateTimingMismatch(normalized),
+    stability_risk: evaluateStabilityRisk(normalized),
   };
 }
 
@@ -84,7 +94,7 @@ function msFromDays(days: number): number {
   return days * 24 * 60 * 60 * 1000;
 }
 
-function evaluateStructuralPressure(truth: HouseholdMoneyTruth): PressureSignal {
+function evaluateStructuralPressure(truth: LegacyPressureTruth): PressureSignal {
   const monthlyIncome = sumMonthly(truth.recurringIncome);
   const monthlyBills = sumMonthly(truth.recurringBills);
 
@@ -140,7 +150,7 @@ function evaluateStructuralPressure(truth: HouseholdMoneyTruth): PressureSignal 
   };
 }
 
-function evaluateDiscretionaryDrift(truth: HouseholdMoneyTruth): PressureSignal {
+function evaluateDiscretionaryDrift(truth: LegacyPressureTruth): PressureSignal {
   const asOfMs = safeDate(truth.asOf);
   const recentWindowMs = msFromDays(30);
   const priorWindowMs = msFromDays(60);
@@ -192,7 +202,7 @@ function evaluateDiscretionaryDrift(truth: HouseholdMoneyTruth): PressureSignal 
   };
 }
 
-function evaluateTimingMismatch(truth: HouseholdMoneyTruth): PressureSignal {
+function evaluateTimingMismatch(truth: LegacyPressureTruth): PressureSignal {
   const asOfMs = safeDate(truth.asOf);
   const nextIncome = earliestActiveDate(truth.recurringIncome, "next_pay_at", asOfMs);
   const obligationsBeforeNext = sumDueBefore(truth.recurringBills, asOfMs, nextIncome?.ms);
@@ -262,7 +272,7 @@ function evaluateTimingMismatch(truth: HouseholdMoneyTruth): PressureSignal {
   };
 }
 
-function evaluateStabilityRisk(truth: HouseholdMoneyTruth): PressureSignal {
+function evaluateStabilityRisk(truth: LegacyPressureTruth): PressureSignal {
   const incomeCount = truth.recurringIncome.filter((i) => i.active !== false).length;
   const billCount = truth.recurringBills.filter((b) => b.active !== false).length;
   const latestSyncAge = maxConnectionAgeDays(truth.connections ?? [], truth.asOf);
@@ -420,4 +430,75 @@ function maxConnectionAgeDays(connections: ConnectionTruth[], asOf: string): num
 function formatCurrency(cents: number): string {
   const dollars = safeCents(cents) / 100;
   return `$${dollars.toFixed(0)}`;
+}
+
+function normalizePressureTruth(truth: HouseholdMoneyTruth): LegacyPressureTruth {
+  const asOf = truth.as_of_iso || new Date().toISOString();
+
+  const accounts: AccountTruth[] = (truth.accounts ?? []).map((a) => ({
+    id: String(a.id ?? ""),
+    current_balance_cents: safeCents(a.current_balance_cents),
+    available_balance_cents:
+      typeof a.available_balance_cents === "number" ? a.available_balance_cents : null,
+    currency: a.currency ?? null,
+  }));
+
+  const transactions: TransactionTruth[] = (truth.month_transactions ?? []).map((t) => ({
+    id: String(t.id ?? ""),
+    date: t.date ?? "",
+    amount_cents: safeCents(t.amount_cents),
+    currency: t.currency ?? null,
+    category: t.category ?? null,
+  }));
+
+  const recurringBills: RecurringBillTruth[] = (truth.recurring_bills ?? []).map((b) => ({
+    id: String(b.id ?? ""),
+    name: b.name ?? "",
+    amount_cents: safeCents(b.amount_cents),
+    currency: b.currency ?? null,
+    cadence: normalizeCadence(b.cadence),
+    next_due_at: b.next_due_at ?? null,
+    active: b.active !== false,
+  }));
+
+  const recurringIncome: RecurringIncomeTruth[] = (truth.recurring_income ?? []).map((i) => ({
+    id: String(i.id ?? ""),
+    name: i.name ?? "",
+    amount_cents: safeCents(i.amount_cents),
+    currency: i.currency ?? null,
+    cadence: normalizeCadence(i.cadence),
+    next_pay_at: i.next_pay_at ?? null,
+    active: i.active !== false,
+  }));
+
+  const connections: ConnectionTruth[] = (truth.external_connections ?? []).map((c) => ({
+    id: String(c.id ?? ""),
+    status: c.status ?? "unknown",
+    last_sync_at: c.last_sync_at ?? null,
+    updated_at: c.updated_at ?? null,
+    provider: c.provider ?? null,
+  }));
+
+  return {
+    asOf,
+    accounts,
+    transactions,
+    recurringBills,
+    recurringIncome,
+    connections,
+  };
+}
+
+function normalizeCadence(value: string | null | undefined): MoneyCadence {
+  switch (value) {
+    case "weekly":
+    case "fortnightly":
+    case "monthly":
+    case "quarterly":
+    case "annual":
+    case "yearly":
+      return value;
+    default:
+      return "monthly";
+  }
 }
