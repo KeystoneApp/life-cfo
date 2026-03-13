@@ -591,6 +591,7 @@ function ConnectionsPageClient() {
 
             toast({ title: "Bank connected" });
             await load();
+            router.refresh();
           } catch (e: any) {
             toast({ title: "Couldn’t finish connection", description: e?.message });
           } finally {
