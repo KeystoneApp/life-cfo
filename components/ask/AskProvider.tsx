@@ -211,7 +211,7 @@ export function AskProvider({ children }: { children: ReactNode }) {
             headline,
             summary,
             section("What stands out right now:", insights),
-            section("Where pressure is showing:", pressureLines),
+            section("Where it may feel heavy:", pressureLines),
             stableGroundLine({ mode: "snapshot", hasEvidence: insights.length > 0 }),
           ]);
 
@@ -241,7 +241,7 @@ export function AskProvider({ children }: { children: ReactNode }) {
             headline,
             summary,
             section("What seems to be driving this:", drivers),
-            section("Pressure pattern in plain language:", signalLines),
+            section("What that pressure looks like right now:", signalLines),
             stableGroundLine({
               mode: "diagnosis",
               hasEvidence: drivers.length > 0 || signalLines.length > 0,
@@ -270,8 +270,8 @@ export function AskProvider({ children }: { children: ReactNode }) {
           const lines = composeMessage([
             headline,
             summary,
-            section("What to keep in view:", upcoming),
-            section("Context that matters:", notes),
+            section("What is coming up:", upcoming),
+            section("A helpful note:", notes),
             stableGroundLine({
               mode: "planning",
               hasEvidence: upcoming.length > 0 || notes.length > 0,
@@ -301,8 +301,8 @@ export function AskProvider({ children }: { children: ReactNode }) {
           const lines = composeMessage([
             headline,
             summary,
-            section("What this baseline is showing:", signals),
-            section("What would sharpen this:", caveat ? [caveat] : []),
+            section("What this is showing right now:", signals),
+            section("What would make this clearer:", caveat ? [caveat] : []),
             stableGroundLine({
               mode: "affordability",
               hasCaveat: !!caveat,
@@ -333,8 +333,8 @@ export function AskProvider({ children }: { children: ReactNode }) {
           const lines = composeMessage([
             headline,
             summary,
-            section("What to watch if this change happens:", watch),
-            section("What would sharpen the scenario:", caveat ? [caveat] : []),
+            section("If this changes, keep an eye on:", watch),
+            section("What would make this clearer:", caveat ? [caveat] : []),
             stableGroundLine({
               mode: "scenario",
               hasCaveat: !!caveat,
