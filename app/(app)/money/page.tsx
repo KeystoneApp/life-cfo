@@ -240,7 +240,7 @@ export default function MoneyClientNext() {
                     : "This page gives a short view of your household money right now.")}
               </div>
               <ul className="list-disc space-y-1 pl-4 text-xs text-zinc-600">
-                {(explanation?.insights ?? []).slice(0, 2).map((line, idx) => (
+                {(explanation?.insights ?? []).slice(0, 3).map((line, idx) => (
                   <li key={idx}>{line}</li>
                 ))}
                 {!loading && (!explanation?.insights || explanation.insights.length === 0) ? (

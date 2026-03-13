@@ -20,12 +20,14 @@ export function explainSnapshot(snapshot: FinancialSnapshot): SnapshotExplanatio
     structuralLevel: pressure.structural_pressure.level,
     incomeCents: income.recurringMonthlyCents,
     commitmentsCents: commitments.recurringMonthlyCents,
+    connections,
   });
   const summary = buildSummary({
     incomeCents: income.recurringMonthlyCents,
     commitmentsCents: commitments.recurringMonthlyCents,
     cashCents: liquidity.availableCashCents,
     discretionaryCents: discretionary.last30DayOutflowCents,
+    connections,
   });
 
   const insights = buildInsights({
@@ -53,13 +55,18 @@ function buildHeadline(params: {
   structuralLevel: PressureSignals["structural_pressure"]["level"];
   incomeCents: number;
   commitmentsCents: number;
+  connections: FinancialSnapshot["connections"];
 }): string {
-  const { structuralLevel, incomeCents, commitmentsCents } = params;
+  const { structuralLevel, incomeCents, commitmentsCents, connections } = params;
   const hasIncome = incomeCents > 0;
   const hasBills = commitmentsCents > 0;
+  const hasConnectedData = connections.total > 0;
+  const hasFreshConnectedData = hasConnectedData && connections.stale === 0;
 
   if (!hasIncome && !hasBills) {
-    return "Recurring income and commitments are not set up yet.";
+    return hasConnectedData
+      ? "Connected data is coming through. Income and commitments still need mapping."
+      : "Recurring income and commitments are not set up yet.";
   }
 
   if (!hasIncome && hasBills) {
@@ -68,13 +75,19 @@ function buildHeadline(params: {
 
   switch (structuralLevel) {
     case "high":
-      return "Your commitments consume most of your recurring income.";
+      return hasFreshConnectedData
+        ? "Most recurring income is already committed right now."
+        : "Most recurring income looks committed right now.";
     case "medium":
-      return "A significant share of income is already committed.";
+      return hasFreshConnectedData
+        ? "A meaningful share of income is already committed."
+        : "A meaningful share of income appears committed.";
     case "low":
     case "none":
     default:
-      return "Recurring commitments leave meaningful flexibility.";
+      return hasFreshConnectedData
+        ? "You still have room after recurring commitments."
+        : "Recurring commitments still leave some room.";
   }
 }
 
@@ -83,24 +96,30 @@ function buildSummary(params: {
   commitmentsCents: number;
   cashCents: number;
   discretionaryCents: number;
+  connections: FinancialSnapshot["connections"];
 }): string {
-  const { incomeCents, commitmentsCents, cashCents, discretionaryCents } = params;
+  const {
+    incomeCents,
+    commitmentsCents,
+    cashCents,
+    discretionaryCents,
+    connections,
+  } = params;
   const committedPct = pct(commitmentsCents, incomeCents);
 
   const parts: string[] = [];
   if (incomeCents > 0 && commitmentsCents > 0) {
-    parts.push(`Committed spend is about ${committedPct}% of monthly income.`);
+    parts.push(`About ${committedPct}% of recurring income is already committed.`);
   } else if (incomeCents <= 0 && commitmentsCents > 0) {
     parts.push("Recurring bills are tracked but recurring income is missing.");
   } else if (incomeCents > 0 && commitmentsCents === 0) {
-    parts.push("Recurring income is set; commitments are not mapped yet.");
+    parts.push("Recurring income is mapped. Commitments are still light or not fully mapped.");
   } else {
     parts.push("Recurring income and commitments are not set up yet.");
   }
   parts.push(`Available cash is ${formatCurrency(cashCents)}.`);
-  parts.push(
-    `Discretionary outflow over the last 30 days is ${formatCurrency(discretionaryCents)}.`
-  );
+  parts.push(`Flexible outflow over the last 30 days is ${formatCurrency(discretionaryCents)}.`);
+  parts.push(connectionSummaryLine(connections));
 
   return parts.join(" ");
 }
@@ -119,8 +138,10 @@ function buildInsights(params: {
 
   const insights: string[] = [];
 
+  insights.push(connectionSummaryLine(connections));
+
   if (incomeCents > 0 && commitmentsCents > 0) {
-    insights.push(`About ${committedPct}% of income is already committed.`);
+    insights.push(`About ${committedPct}% of recurring income is already committed.`);
   } else if (incomeCents <= 0 && commitmentsCents > 0) {
     insights.push("Recurring bills are recorded but recurring income is missing.");
   } else if (incomeCents > 0 && commitmentsCents === 0) {
@@ -136,20 +157,22 @@ function buildInsights(params: {
   }
 
   insights.push(
-    `Recent discretionary outflow: ${formatCurrency(discretionaryCents)} (last 30 days).`
-  );
-
-  insights.push(
-    connections.total === 0
-      ? "No active money connections available."
-      : connections.stale === 0
-        ? `All ${connections.total} connections are recently synced.`
-        : `${connections.stale} of ${connections.total} connections are stale; max age ${formatNumber(
-            connections.maxAgeDays
-          )} day(s).`
+    `Flexible outflow over the last 30 days is ${formatCurrency(discretionaryCents)}.`
   );
 
   return insights.slice(0, 5);
+}
+
+function connectionSummaryLine(connections: FinancialSnapshot["connections"]): string {
+  if (connections.total === 0) {
+    return "No connected sources yet, so this read is based on manual and recurring setup data.";
+  }
+  if (connections.stale === 0) {
+    return `Connected data looks fresh across ${connections.total} source(s).`;
+  }
+  return `${connections.stale} of ${connections.total} connected source(s) may be stale (up to ${formatNumber(
+    connections.maxAgeDays
+  )} day(s)).`;
 }
 
 function pct(part: number, whole: number): number {
