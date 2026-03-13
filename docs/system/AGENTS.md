@@ -7,10 +7,11 @@ Before performing tasks in this repository:
 3. Read `docs/system/money-reasoning-layer.md`
 4. Read `docs/system/financial-snapshot-engine.md`
 5. Read `docs/system/financial-pressure-signals.md`
-6. Follow engineering rules in `docs/system/engineering-rules.md`
-7. Respect household-scoped data boundaries
-8. Do not introduce autonomous financial behavior
-9. Preserve calm product language
+6. Read `docs/product/tone-and-language.md` (canonical tone reference)
+7. Follow engineering rules in `docs/system/engineering-rules.md`
+8. Respect household-scoped data boundaries
+9. Do not introduce autonomous financial behavior
+10. Preserve calm product language
 
 When proposing changes:
 - prefer small, reviewable diffs
