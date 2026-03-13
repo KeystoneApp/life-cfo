@@ -181,6 +181,26 @@ function isOlderThanHours(value: string | null | undefined, hours: number) {
   return Date.now() - ms > hours * 60 * 60 * 1000;
 }
 
+const BASIQ_AUTOSYNC_MARKER_PREFIX = "lifecfo:basiq-autosync:";
+
+function hasBasiqAutoSyncAttempt(id: string) {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.sessionStorage.getItem(`${BASIQ_AUTOSYNC_MARKER_PREFIX}${id}`) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function markBasiqAutoSyncAttempt(id: string) {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(`${BASIQ_AUTOSYNC_MARKER_PREFIX}${id}`, "1");
+  } catch {
+    // ignore
+  }
+}
+
 let plaidScriptPromise: Promise<void> | null = null;
 
 function loadPlaidScript(): Promise<void> {
@@ -364,6 +384,58 @@ export default function ConnectionsPage() {
   useEffect(() => {
     void load();
   }, []);
+
+  useEffect(() => {
+    if (loading) return;
+    if (connectingId || syncingId) return;
+
+    const candidate = items.find((c) => {
+      if (c.provider !== "basiq" || c.status !== "needs_auth") return false;
+      if (hasBasiqAutoSyncAttempt(c.id)) return false;
+      return !isOlderThanHours(c.updated_at || c.created_at, 6);
+    });
+
+    if (!candidate) return;
+
+    let cancelled = false;
+    markBasiqAutoSyncAttempt(candidate.id);
+
+    (async () => {
+      setSyncingId(candidate.id);
+      try {
+        const res = await fetch(`/api/money/sync/${candidate.id}`, { method: "POST" });
+        const json = await res.json().catch(() => ({}));
+
+        if (!res.ok) {
+          const err = coerceStr(json?.error).toLowerCase();
+          const looksNotReady = err.includes("no linked basiq accounts");
+          if (!looksNotReady) {
+            toast({
+              title: "Couldn’t finish Basiq connection",
+              description: coerceStr(json?.error) || "Sync failed",
+            });
+          }
+          return;
+        }
+
+        toast({ title: "Basiq connected" });
+        if (!cancelled) await load();
+      } catch (e: unknown) {
+        if (!cancelled) {
+          toast({
+            title: "Couldn’t finish Basiq connection",
+            description: e instanceof Error ? e.message : "Sync failed",
+          });
+        }
+      } finally {
+        if (!cancelled) setSyncingId(null);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [items, loading, connectingId, syncingId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function createManual() {
     setCreatingManual(true);

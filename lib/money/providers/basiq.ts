@@ -547,6 +547,12 @@ export const basiqProvider: MoneyProvider = {
     }
 
     const accounts = (await getBasiqAccounts(basiqUserId)) as Record<string, unknown>[];
+    if (!accounts.length) {
+      throw new Error(
+        "No linked Basiq accounts found yet. Finish bank consent and try syncing again."
+      );
+    }
+
     const accountsResult = await upsertAccounts({
       supabase,
       householdId,
