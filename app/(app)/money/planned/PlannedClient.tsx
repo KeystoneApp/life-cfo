@@ -1,10 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Page } from "@/components/Page";
 import { Card, CardContent, Chip, useToast } from "@/components/ui";
+import { supabase } from "@/lib/supabaseClient";
+import { resolveActiveHouseholdIdClient } from "@/lib/households/resolveActiveHouseholdClient";
 
 type FinancialSnapshot = {
   asOf: string;
@@ -30,6 +32,21 @@ type SnapshotExplanation = {
 type OverviewResponse = {
   snapshot: FinancialSnapshot;
   explanation: SnapshotExplanation;
+};
+
+type GoalStatus = "active" | "paused" | "done" | "archived";
+
+type MoneyGoal = {
+  id: string;
+  title: string | null;
+  currency: string | null;
+  target_cents: number | null;
+  current_cents: number | null;
+  status: GoalStatus | string | null;
+  deadline_at: string | null;
+  is_primary: boolean | null;
+  updated_at?: string | null;
+  created_at?: string | null;
 };
 
 function formatMoney(cents: number | undefined | null, currency = "AUD") {
@@ -69,6 +86,28 @@ function getErrorMessage(error: unknown, fallback: string) {
   return fallback;
 }
 
+function toInt(v: unknown) {
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(n) ? Math.trunc(n) : null;
+}
+
+function normalizeGoalStatus(s: unknown): GoalStatus {
+  const t = String(s ?? "active").trim().toLowerCase();
+  if (t === "paused" || t === "done" || t === "archived") return t;
+  return "active";
+}
+
+function sortGoals(goals: MoneyGoal[]) {
+  return [...goals].sort((a, b) => {
+    const ap = a.is_primary ? 1 : 0;
+    const bp = b.is_primary ? 1 : 0;
+    if (ap !== bp) return bp - ap;
+    const au = Date.parse(a.updated_at || a.created_at || "") || 0;
+    const bu = Date.parse(b.updated_at || b.created_at || "") || 0;
+    return bu - au;
+  });
+}
+
 export default function PlannedClient() {
   const router = useRouter();
   const { showToast } = useToast();
@@ -76,6 +115,8 @@ export default function PlannedClient() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<OverviewResponse | null>(null);
+  const [goalsLoading, setGoalsLoading] = useState(true);
+  const [goals, setGoals] = useState<MoneyGoal[]>([]);
 
   const snapshot = data?.snapshot;
   const explanation = data?.explanation;
@@ -96,19 +137,77 @@ export default function PlannedClient() {
     }
   }, [showToast]);
 
-  useEffect(() => {
-    void load(false);
-  }, [load]);
+  const loadGoals = useCallback(async (silent = false) => {
+    if (!silent) setGoalsLoading(true);
+    try {
+      const { data: authData, error: authErr } = await supabase.auth.getUser();
+      const userId = authData?.user?.id;
+      if (authErr || !userId) {
+        setGoals([]);
+        return;
+      }
+
+      const householdId = await resolveActiveHouseholdIdClient(supabase, userId);
+      if (!householdId) {
+        setGoals([]);
+        return;
+      }
+
+      const res = await supabase.from("money_goals").select("*").eq("household_id", householdId);
+      if (res.error) throw res.error;
+
+      const rows = (res.data ?? []) as MoneyGoal[];
+      const cleaned = rows.map((g) => ({
+        ...g,
+        status: normalizeGoalStatus(g.status),
+        currency: (g.currency || "AUD").toUpperCase(),
+      }));
+      setGoals(sortGoals(cleaned));
+    } catch {
+      setGoals([]);
+    } finally {
+      if (!silent) setGoalsLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    const onFocus = () => void load(true);
+    void load(false);
+    void loadGoals(false);
+  }, [load, loadGoals]);
+
+  useEffect(() => {
+    const onFocus = () => {
+      void load(true);
+      void loadGoals(true);
+    };
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
-  }, [load]);
+  }, [load, loadGoals]);
+
+  const goalsInFocus = useMemo(() => {
+    if (!goals.length) return [] as MoneyGoal[];
+    const active = goals.filter((g) => normalizeGoalStatus(g.status) === "active");
+    const primary =
+      active.find((g) => !!g.is_primary) ??
+      goals.find((g) => !!g.is_primary) ??
+      null;
+
+    if (primary) {
+      return [primary, ...active.filter((g) => g.id !== primary.id)].slice(0, 3);
+    }
+    return (active.length ? active : goals).slice(0, 3);
+  }, [goals]);
 
   const right = (
     <div className="flex flex-wrap items-center gap-2">
-      <Chip onClick={() => void load(false)}>Refresh</Chip>
+      <Chip
+        onClick={() => {
+          void load(false);
+          void loadGoals(false);
+        }}
+      >
+        Refresh
+      </Chip>
       <Chip onClick={() => router.push("/money")}>Back to Money</Chip>
     </div>
   );
@@ -150,13 +249,27 @@ export default function PlannedClient() {
 
         <Card className="border-zinc-200 bg-white">
           <CardContent className="space-y-3">
-            <div className="text-sm font-semibold text-zinc-900">Goals snapshot</div>
+            <div className="text-sm font-semibold text-zinc-900">Goals in focus</div>
             <ul className="space-y-1 text-xs text-zinc-700">
+              {goalsLoading ? <li>Loading goals...</li> : null}
+              {!goalsLoading && goalsInFocus.length === 0 ? <li>No goals in focus yet.</li> : null}
+              {goalsInFocus.map((goal) => {
+                const current = toInt(goal.current_cents) ?? 0;
+                const target = toInt(goal.target_cents) ?? 0;
+                const currency = goal.currency || "AUD";
+                const progress = target > 0
+                  ? `${formatMoney(current, currency)} of ${formatMoney(target, currency)}`
+                  : `${formatMoney(current, currency)} saved`;
+                const due = goal.deadline_at ? `, target ${softDate(goal.deadline_at)}` : "";
+                const primary = goal.is_primary ? " (primary)" : "";
+                return (
+                  <li key={goal.id}>
+                    {(goal.title || "Goal").trim() || "Goal"}: {progress}{due}{primary}
+                  </li>
+                );
+              })}
               <li>
                 Commitments in view: {snapshot ? `${snapshot.commitments.billCount} bill(s)` : loading ? "Loading..." : "-"}
-              </li>
-              <li>
-                Monthly commitments: {snapshot ? formatMoney(snapshot.commitments.recurringMonthlyCents) : loading ? "Loading..." : "-"}
               </li>
               <li>{explanation?.pressure.timing || "Timing notes will appear here."}</li>
             </ul>

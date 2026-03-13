@@ -4,6 +4,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+import { resolveActiveHouseholdIdClient } from "@/lib/households/resolveActiveHouseholdClient";
 import { Page } from "@/components/Page";
 import { Card, CardContent, Button, Chip, Badge, useToast } from "@/components/ui";
 
@@ -13,7 +14,8 @@ type GoalStatus = "active" | "paused" | "done" | "archived";
 
 type MoneyGoal = {
   id: string;
-  user_id: string;
+  user_id?: string | null;
+  household_id?: string | null;
 
   title: string | null;
   currency: string | null;
@@ -38,7 +40,8 @@ type MoneyGoal = {
 type GoalUpdate = {
   id: string;
   goal_id: string;
-  user_id: string;
+  user_id?: string | null;
+  household_id?: string | null;
 
   delta_cents: number;
   note: string | null;
@@ -171,6 +174,7 @@ export default function GoalsPage() {
   };
 
   const [userId, setUserId] = useState<string | null>(null);
+  const [householdId, setHouseholdId] = useState<string | null>(null);
   const [authStatus, setAuthStatus] = useState<"loading" | "signed_out" | "signed_in">("loading");
 
   const [loadingGoals, setLoadingGoals] = useState(false);
@@ -207,11 +211,20 @@ export default function GoalsPage() {
 
       if (error || !data?.user) {
         setUserId(null);
+        setHouseholdId(null);
         setAuthStatus("signed_out");
         return;
       }
 
       setUserId(data.user.id);
+      try {
+        const hid = await resolveActiveHouseholdIdClient(supabase, data.user.id);
+        if (!alive) return;
+        setHouseholdId(hid);
+      } catch {
+        if (!alive) return;
+        setHouseholdId(null);
+      }
       setAuthStatus("signed_in");
     })();
 
@@ -278,10 +291,10 @@ export default function GoalsPage() {
     setNotes(String(g.notes ?? ""));
   };
 
-  async function loadGoals(uid: string) {
+  async function loadGoals(hid: string) {
     setLoadingGoals(true);
     try {
-      const res = await supabase.from("money_goals").select("*").eq("user_id", uid);
+      const res = await supabase.from("money_goals").select("*").eq("household_id", hid);
       if (res.error) throw res.error;
 
       const rows = (res.data ?? []) as MoneyGoal[];
@@ -310,13 +323,13 @@ export default function GoalsPage() {
     }
   }
 
-  async function loadUpdates(uid: string, goalId: string) {
+  async function loadUpdates(hid: string, goalId: string) {
     setLoadingUpdates(true);
     try {
       const res = await supabase
         .from("money_goal_updates")
         .select("*")
-        .eq("user_id", uid)
+        .eq("household_id", hid)
         .eq("goal_id", goalId)
         .order("created_at", { ascending: false })
         .limit(20);
@@ -336,18 +349,18 @@ export default function GoalsPage() {
   }
 
   useEffect(() => {
-    if (!userId) return;
-    void loadGoals(userId);
+    if (!userId || !householdId) return;
+    void loadGoals(householdId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userId]);
+  }, [userId, householdId]);
 
   useEffect(() => {
-    if (!userId || !selectedGoalId) {
+    if (!userId || !householdId || !selectedGoalId) {
       setUpdates([]);
       return;
     }
-    void loadUpdates(userId, selectedGoalId);
-  }, [userId, selectedGoalId]);
+    void loadUpdates(householdId, selectedGoalId);
+  }, [userId, householdId, selectedGoalId]);
 
   const activeGoals = useMemo(() => sortedGoals.filter((g) => normalizeStatus(g.status) === "active"), [sortedGoals]);
   const pausedGoals = useMemo(() => sortedGoals.filter((g) => normalizeStatus(g.status) === "paused"), [sortedGoals]);
@@ -374,7 +387,7 @@ export default function GoalsPage() {
   }, [selectedGoal]);
 
   async function upsertGoal() {
-    if (!userId) return;
+    if (!userId || !householdId) return;
 
     const t = title.trim();
     if (!t) {
@@ -423,6 +436,7 @@ export default function GoalsPage() {
     }
 
     const payload: any = {
+      household_id: householdId,
       user_id: userId,
       title: t,
       currency: (currency || "AUD").toUpperCase(),
@@ -446,7 +460,7 @@ export default function GoalsPage() {
 
       resetForm();
 
-      await loadGoals(userId);
+      await loadGoals(householdId);
       const savedId = String((res.data as any)?.id ?? editingId ?? "");
       if (savedId) setSelectedGoalId(savedId);
     } catch (e: any) {
@@ -455,18 +469,18 @@ export default function GoalsPage() {
   }
 
   async function setGoalStatus(goal: MoneyGoal, status: GoalStatus) {
-    if (!userId) return;
+    if (!userId || !householdId) return;
 
     try {
       const res = await supabase
         .from("money_goals")
         .update({ status, updated_at: new Date().toISOString() } as any)
-        .eq("user_id", userId)
+        .eq("household_id", householdId)
         .eq("id", goal.id);
 
       if (res.error) throw res.error;
 
-      await loadGoals(userId);
+      await loadGoals(householdId);
       notify({ title: "Saved", description: "Updated." });
     } catch (e: any) {
       notify({ title: "Couldn’t update", description: e?.message ?? "Unknown error" });
@@ -474,7 +488,7 @@ export default function GoalsPage() {
   }
 
   async function deleteGoal(goal: MoneyGoal) {
-    if (!userId) return;
+    if (!userId || !householdId) return;
 
     const status = normalizeStatus(goal.status);
     if (status !== "archived") {
@@ -485,14 +499,14 @@ export default function GoalsPage() {
     try {
       // best-effort: remove updates too
       try {
-        await supabase.from("money_goal_updates").delete().eq("user_id", userId).eq("goal_id", goal.id);
+        await supabase.from("money_goal_updates").delete().eq("household_id", householdId).eq("goal_id", goal.id);
       } catch {}
 
-      const res = await supabase.from("money_goals").delete().eq("user_id", userId).eq("id", goal.id);
+      const res = await supabase.from("money_goals").delete().eq("household_id", householdId).eq("id", goal.id);
       if (res.error) throw res.error;
 
       notify({ title: "Removed", description: "Deleted." });
-      await loadGoals(userId);
+      await loadGoals(householdId);
       setSelectedGoalId((prev) => (prev === goal.id ? null : prev));
     } catch (e: any) {
       notify({ title: "Couldn’t delete", description: e?.message ?? "Unknown error" });
@@ -500,23 +514,23 @@ export default function GoalsPage() {
   }
 
   async function markPrimary(goal: MoneyGoal) {
-    if (!userId) return;
+    if (!userId || !householdId) return;
 
     try {
       // 1) clear all
-      const clearRes = await supabase.from("money_goals").update({ is_primary: false } as any).eq("user_id", userId);
+      const clearRes = await supabase.from("money_goals").update({ is_primary: false } as any).eq("household_id", householdId);
       if (clearRes.error) throw clearRes.error;
 
       // 2) set one
       const setRes = await supabase
         .from("money_goals")
         .update({ is_primary: true, updated_at: new Date().toISOString() } as any)
-        .eq("user_id", userId)
+        .eq("household_id", householdId)
         .eq("id", goal.id);
 
       if (setRes.error) throw setRes.error;
 
-      await loadGoals(userId);
+      await loadGoals(householdId);
       notify({ title: "Primary goal set", description: "Pinned." });
     } catch {
       notify({
@@ -527,7 +541,7 @@ export default function GoalsPage() {
   }
 
   async function applyDeltaCents(goal: MoneyGoal, deltaCents: number, note: string | null) {
-    if (!userId) return;
+    if (!userId || !householdId) return;
 
     const cur = toInt(goal.current_cents) ?? 0;
     const next = Math.max(0, cur + deltaCents);
@@ -535,7 +549,7 @@ export default function GoalsPage() {
     const updRes = await supabase
       .from("money_goals")
       .update({ current_cents: next, updated_at: new Date().toISOString() } as any)
-      .eq("user_id", userId)
+      .eq("household_id", householdId)
       .eq("id", goal.id);
 
     if (updRes.error) {
@@ -547,6 +561,7 @@ export default function GoalsPage() {
     try {
       const ins = await supabase.from("money_goal_updates").insert([
         {
+          household_id: householdId,
           user_id: userId,
           goal_id: goal.id,
           delta_cents: deltaCents,
@@ -561,9 +576,9 @@ export default function GoalsPage() {
       // ignore
     }
 
-    await loadGoals(userId);
+    await loadGoals(householdId);
     if (selectedGoalId === goal.id) {
-      await loadUpdates(userId, goal.id);
+      await loadUpdates(householdId, goal.id);
     }
 
     notify({ title: "Saved", description: "Progress updated." });
