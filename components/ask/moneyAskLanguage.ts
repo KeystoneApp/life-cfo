@@ -4,7 +4,7 @@ export function cleanLines(values: Array<string | null | undefined>) {
     .filter(Boolean);
 }
 
-export function section(title: string, items: string[]) {
+export function section(title: string, items: Array<string | null | undefined>) {
   const cleaned = cleanLines(items);
   if (!cleaned.length) return null;
   return `${title}\n- ${cleaned.join("\n- ")}`;
@@ -37,25 +37,25 @@ export function stableGroundLine(params: StableGroundParams) {
 
   if (mode === "search") {
     return hasEvidence
-      ? "This gives you a grounded starting point to ask a more specific follow-up."
+      ? "This gives you a clear place to start before we narrow it further."
       : "There is not much matching data yet, which still helps narrow the next question.";
   }
 
   if (hasCaveat) {
-    return "This is still useful as a baseline, even if a bit more detail would sharpen it.";
+    return "This is still useful for direction, even if a little more detail would make it sharper.";
   }
 
   switch (mode) {
     case "snapshot":
-      return "Even if parts feel tight, the picture here is clear enough to reason from.";
+      return "Even if money feels a bit tight, there is enough here to see what is going on.";
     case "diagnosis":
-      return "The helpful part is that the pressure drivers are identifiable, not random.";
+      return "The good news is this does not look random.";
     case "planning":
-      return "You have enough mapped to plan ahead without relying on guesswork.";
+      return "There is enough mapped out here to plan ahead with a bit more confidence.";
     case "affordability":
-      return "This gives a steady baseline for the decision before adding more specifics.";
+      return "This gives you a solid starting point before getting more specific.";
     case "scenario":
-      return "You now have a stable baseline to compare any scenario details against.";
+      return "You can treat this as the before picture, then layer the change on top.";
     default:
       return null;
   }
