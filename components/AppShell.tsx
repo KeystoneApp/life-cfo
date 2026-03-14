@@ -19,6 +19,11 @@ type NavItem = {
   label: string;
 };
 
+type NavGroup = {
+  label: string;
+  items: NavItem[];
+};
+
 type HouseholdItem = {
   id: string;
   name: string;
@@ -54,6 +59,15 @@ function isActivePath(pathname: string, href: string) {
   return pathname === href || pathname.startsWith(href + "/");
 }
 
+function compactLabel(label: string) {
+  const words = label.trim().split(/\s+/).filter(Boolean);
+  if (words.length <= 1) return label.slice(0, 1).toUpperCase();
+  return words
+    .slice(0, 2)
+    .map((w) => w.slice(0, 1).toUpperCase())
+    .join("");
+}
+
 export function AppShell({ children }: AppShellProps) {
   const pathname = usePathname();
   const router = useRouter();
@@ -73,8 +87,41 @@ export function AppShell({ children }: AppShellProps) {
     []
   );
 
+  const sidebarGroups: NavGroup[] = useMemo(
+    () => [
+      {
+        label: "Home",
+        items: [{ href: "/lifecfo-home", label: "Home" }],
+      },
+      {
+        label: "Money",
+        items: [
+          { href: "/money", label: "Money" },
+          { href: "/money/in", label: "In" },
+          { href: "/money/out", label: "Out" },
+          { href: "/money/saved", label: "Saved" },
+          { href: "/money/planned", label: "Planned" },
+          { href: "/accounts", label: "Accounts" },
+          { href: "/transactions", label: "Transactions" },
+          { href: "/connections", label: "Connections" },
+          { href: "/money/goals", label: "Goals" },
+        ],
+      },
+      {
+        label: "Life",
+        items: [
+          { href: "/decisions", label: "Decisions" },
+          { href: "/family", label: "Family" },
+          { href: "/household", label: "Household" },
+        ],
+      },
+    ],
+    []
+  );
+
   const [menuOpen, setMenuOpen] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
   useOutsideClick(menuRef, () => setMenuOpen(false), menuOpen);
 
@@ -168,7 +215,7 @@ export function AppShell({ children }: AppShellProps) {
   return (
     <div className="min-h-dvh bg-white">
       <div className="sticky top-0 z-40 border-b border-zinc-100 bg-white">
-        <div className="mx-auto flex w-full max-w-[1100px] items-center justify-between gap-2 px-4 py-3">
+        <div className={["mx-auto flex w-full items-center justify-between gap-2 px-4 py-3", askOpen ? "max-w-[1720px]" : "max-w-[1320px]"].join(" ")}>
           <div className="flex min-w-0 items-center gap-3">
             <Link
               href="/lifecfo-home"
@@ -206,11 +253,11 @@ export function AppShell({ children }: AppShellProps) {
                 </div>
               </div>
             ) : householdsLoading ? (
-              <div className="hidden sm:block text-xs text-zinc-500">Loading…</div>
+              <div className="hidden sm:block text-xs text-zinc-500">Loading...</div>
             ) : null}
 
             <Chip onClick={() => setMenuOpen((v) => !v)}>
-              Menu <span className="ml-1 opacity-70">▾</span>
+              Menu <span className="ml-1 opacity-70">v</span>
             </Chip>
 
             {menuOpen ? (
@@ -327,7 +374,7 @@ export function AppShell({ children }: AppShellProps) {
                     disabled={signingOut}
                     className={menuItemClass}
                   >
-                    {signingOut ? "Signing out…" : "Sign out"}
+                    {signingOut ? "Signing out..." : "Sign out"}
                   </button>
                 </div>
               </div>
@@ -339,23 +386,88 @@ export function AppShell({ children }: AppShellProps) {
       <div
         className={[
           "mx-auto w-full px-4 py-6",
-          askOpen ? "max-w-[1480px]" : "max-w-[1100px]",
+          askOpen ? "max-w-[1720px]" : "max-w-[1320px]",
         ].join(" ")}
       >
-        {askOpen ? (
-          <>
-            <div className="hidden md:grid md:h-[calc(100dvh-110px)] md:grid-cols-[minmax(0,2fr)_minmax(360px,1fr)] md:gap-4">
-              <div className="min-h-0 overflow-y-auto pr-1">{children}</div>
-              <div className="min-h-0">
-                <AskPanel mode="split" />
-              </div>
+        <div className="md:flex md:items-start md:gap-4">
+          <aside
+            className={[
+              "hidden md:flex md:shrink-0 md:flex-col md:gap-3 md:rounded-2xl md:border md:border-zinc-200 md:bg-white md:p-3",
+              sidebarCollapsed ? "md:w-[76px]" : "md:w-[240px]",
+            ].join(" ")}
+            aria-label="Primary navigation"
+          >
+            <div className="mb-1 flex items-center justify-end">
+              <button
+                type="button"
+                onClick={() => setSidebarCollapsed((v) => !v)}
+                className="rounded-lg px-2 py-1 text-xs text-zinc-500 hover:bg-zinc-50 hover:text-zinc-700"
+                aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+                title={sidebarCollapsed ? "Expand" : "Collapse"}
+              >
+                {sidebarCollapsed ? "Expand" : "Collapse"}
+              </button>
             </div>
-            <div className="md:hidden">{children}</div>
-          </>
-        ) : (
-          children
-        )}
+
+            <nav className="space-y-3">
+              {sidebarGroups.map((group) => (
+                <div key={group.label} className="space-y-1">
+                  {!sidebarCollapsed ? (
+                    <div className="px-2 text-[11px] font-medium uppercase tracking-wide text-zinc-400">
+                      {group.label}
+                    </div>
+                  ) : null}
+                  <div className="space-y-1">
+                    {group.items.map((it) => {
+                      const active = isActivePath(pathname || "", it.href);
+                      return (
+                        <Link
+                          key={it.href}
+                          href={it.href}
+                          className={[
+                            "flex items-center rounded-xl px-2.5 py-2 text-sm transition",
+                            sidebarCollapsed ? "justify-center" : "gap-2",
+                            active
+                              ? "bg-zinc-100 font-medium text-zinc-900"
+                              : "text-zinc-700 hover:bg-zinc-50 hover:text-zinc-900",
+                          ].join(" ")}
+                          title={sidebarCollapsed ? it.label : undefined}
+                          aria-label={it.label}
+                        >
+                          {sidebarCollapsed ? (
+                            <span className="inline-flex h-6 w-6 items-center justify-center rounded-md bg-zinc-100 text-[11px] font-medium text-zinc-700">
+                              {compactLabel(it.label)}
+                            </span>
+                          ) : (
+                            <span>{it.label}</span>
+                          )}
+                        </Link>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </nav>
+          </aside>
+
+          <div className="min-w-0 flex-1">
+            {askOpen ? (
+              <>
+                <div className="hidden md:grid md:h-[calc(100dvh-110px)] md:grid-cols-[minmax(0,2fr)_minmax(360px,1fr)] md:gap-4">
+                  <div className="min-h-0 overflow-y-auto pr-1">{children}</div>
+                  <div className="min-h-0">
+                    <AskPanel mode="split" />
+                  </div>
+                </div>
+                <div className="md:hidden">{children}</div>
+              </>
+            ) : (
+              children
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );
 }
+
