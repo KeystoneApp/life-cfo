@@ -189,30 +189,63 @@ export function AskPanel({ mode = "overlay" }: { mode?: AskPanelMode }) {
           ) : null}
 
           {messages.length === 0 && status !== "loading" && status !== "error" ? (
-            <div className="rounded-2xl border border-zinc-200 bg-white p-3">
-              <div className="flex items-center justify-between gap-2">
-                <div className="text-sm text-zinc-700">Ask things like</div>
-                <button
-                  type="button"
-                  onClick={() => setExamplesExpanded((v) => !v)}
-                  className="text-xs text-zinc-500 hover:text-zinc-700"
-                >
-                  {examplesExpanded ? "Hide" : "Show"}
-                </button>
+            mode === "split" ? (
+              <div className="rounded-2xl border border-zinc-200 bg-white p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-sm text-zinc-700">Ask things like</div>
+                  <button
+                    type="button"
+                    onClick={() => setExamplesExpanded((v) => !v)}
+                    className="text-xs text-zinc-500 hover:text-zinc-700"
+                  >
+                    {examplesExpanded ? "Hide" : "Show"}
+                  </button>
+                </div>
+                {examplesExpanded ? (
+                  <div className="mt-2 space-y-1 text-sm text-zinc-600">
+                    <div>• Are we okay this month?</div>
+                    <div>• What bills are coming up?</div>
+                    <div>• Where is our money leaking?</div>
+                    <div>• Can we afford this?</div>
+                  </div>
+                ) : (
+                  <div className="mt-2 text-xs text-zinc-500">
+                    Keep this closed for a cleaner view, or open examples for ideas.
+                  </div>
+                )}
               </div>
-              {examplesExpanded ? (
-                <div className="mt-2 space-y-1 text-sm text-zinc-600">
-                  <div>• Are we okay this month?</div>
-                  <div>• What bills are coming up?</div>
-                  <div>• Where is our money leaking?</div>
-                  <div>• Can we afford this?</div>
-                </div>
-              ) : (
-                <div className="mt-2 text-xs text-zinc-500">
-                  Keep this closed for a cleaner view, or open examples for ideas.
-                </div>
-              )}
-            </div>
+            ) : (
+              <div>
+                {!examplesExpanded ? (
+                  <button
+                    type="button"
+                    onClick={() => setExamplesExpanded(true)}
+                    className="text-xs text-zinc-500 hover:text-zinc-700"
+                  >
+                    Need ideas? Show examples
+                  </button>
+                ) : (
+                  <div className="rounded-2xl border border-zinc-200 bg-white p-3">
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <div className="text-sm text-zinc-700">Ask things like</div>
+                      <button
+                        type="button"
+                        onClick={() => setExamplesExpanded(false)}
+                        className="text-xs text-zinc-500 hover:text-zinc-700"
+                      >
+                        Hide
+                      </button>
+                    </div>
+                    <div className="space-y-1 text-sm text-zinc-600">
+                      <div>• Are we okay this month?</div>
+                      <div>• What bills are coming up?</div>
+                      <div>• Where is our money leaking?</div>
+                      <div>• Can we afford this?</div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )
           ) : null}
         </div>
       </div>
