@@ -108,6 +108,12 @@ export function AskPanel({ mode = "overlay" }: { mode?: AskPanelMode }) {
     if (latestAssistant) return toneLabel(latestAssistant.tone, latestAssistant.verdict);
     return "Ask Life CFO";
   }, [status, latestAssistant]);
+  const hasScrollableContentAboveInput =
+    messages.length > 0 ||
+    status === "loading" ||
+    status === "error" ||
+    mode === "split" ||
+    examplesExpanded;
 
   if (!effectiveOpen) return null;
 
@@ -125,7 +131,14 @@ export function AskPanel({ mode = "overlay" }: { mode?: AskPanelMode }) {
         </div>
       </div>
 
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4">
+      <div
+        ref={scrollRef}
+        className={
+          hasScrollableContentAboveInput
+            ? "flex-1 overflow-y-auto px-4 py-4"
+            : "px-4 py-4"
+        }
+      >
         <div className="space-y-4">
           {messages.length > 0 ? (
             <div className="space-y-4">
