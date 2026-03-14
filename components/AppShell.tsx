@@ -7,6 +7,8 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { Chip } from "@/components/ui";
 import { supabase } from "@/lib/supabaseClient";
+import { useAsk } from "@/components/ask/AskProvider";
+import { AskPanel } from "@/components/ask/AskPanel";
 
 type AppShellProps = {
   children: ReactNode;
@@ -55,6 +57,12 @@ function isActivePath(pathname: string, href: string) {
 export function AppShell({ children }: AppShellProps) {
   const pathname = usePathname();
   const router = useRouter();
+  const { open: askOpen, setShellSplitHostActive } = useAsk();
+
+  useEffect(() => {
+    setShellSplitHostActive(true);
+    return () => setShellSplitHostActive(false);
+  }, [setShellSplitHostActive]);
 
   const topNav: NavItem[] = useMemo(
     () => [
@@ -127,7 +135,9 @@ export function AppShell({ children }: AppShellProps) {
     }
 
     loadHouseholds();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => {
+      cancelled = true;
+    };
   }, [router, pathname]);
 
   const activeHouseholdName = useMemo(() => {
@@ -326,7 +336,26 @@ export function AppShell({ children }: AppShellProps) {
         </div>
       </div>
 
-      <div className="mx-auto w-full max-w-[1100px] px-4 py-6">{children}</div>
+      <div
+        className={[
+          "mx-auto w-full px-4 py-6",
+          askOpen ? "max-w-[1480px]" : "max-w-[1100px]",
+        ].join(" ")}
+      >
+        {askOpen ? (
+          <>
+            <div className="hidden md:grid md:h-[calc(100dvh-110px)] md:grid-cols-[minmax(0,1fr)_440px] md:gap-4">
+              <div className="min-h-0 overflow-y-auto pr-1">{children}</div>
+              <div className="min-h-0">
+                <AskPanel mode="split" />
+              </div>
+            </div>
+            <div className="md:hidden">{children}</div>
+          </>
+        ) : (
+          children
+        )}
+      </div>
     </div>
   );
 }

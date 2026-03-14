@@ -40,6 +40,7 @@ type AskState = {
   errorMessage: string | null;
   currentPath: string;
   currentScope: string | null;
+  shellSplitHostActive: boolean;
 };
 
 type SubmitOptions = {
@@ -49,6 +50,7 @@ type SubmitOptions = {
 type AskContextValue = AskState & {
   recentMoneyAsks: string[];
   setDraft: (value: string) => void;
+  setShellSplitHostActive: (active: boolean) => void;
   openAsk: () => void;
   closeAsk: () => void;
   toggleAsk: () => void;
@@ -154,6 +156,7 @@ export function AskProvider({ children }: { children: ReactNode }) {
   const [draft, setDraft] = useState("");
   const [messages, setMessages] = useState<AskMessage[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [shellSplitHostActive, setShellSplitHostActive] = useState(false);
   const [recentMoneyAsks, setRecentMoneyAsks] = useState<string[]>(() =>
     readRecentMoneyAsksFromStorage()
   );
@@ -559,8 +562,10 @@ export function AskProvider({ children }: { children: ReactNode }) {
       errorMessage,
       currentPath,
       currentScope,
+      shellSplitHostActive,
       recentMoneyAsks,
       setDraft,
+      setShellSplitHostActive,
       openAsk,
       closeAsk,
       toggleAsk,
@@ -576,10 +581,12 @@ export function AskProvider({ children }: { children: ReactNode }) {
       errorMessage,
       currentPath,
       currentScope,
+      shellSplitHostActive,
       recentMoneyAsks,
       openAsk,
       closeAsk,
       toggleAsk,
+      setShellSplitHostActive,
       clearAsk,
       submitAsk,
       retryLast,
