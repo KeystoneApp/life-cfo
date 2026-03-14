@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAsk } from "@/components/ask/AskProvider";
-import { Button, Chip } from "@/components/ui";
+import { Chip } from "@/components/ui";
 
 type AskPanelMode = "overlay" | "split";
 
@@ -253,13 +253,25 @@ export function AskPanel({ mode = "overlay" }: { mode?: AskPanelMode }) {
 
       <div className="shrink-0 border-t border-zinc-100 px-4 py-4">
         <div className="rounded-2xl border border-zinc-200 bg-white p-3">
-          <div className="text-xs font-medium text-zinc-700">Question</div>
+          {mode === "overlay" && messages.length === 0 && !examplesExpanded ? (
+            <div className="mb-2">
+              <button
+                type="button"
+                onClick={() => setExamplesExpanded(true)}
+                className="text-xs text-zinc-500 hover:text-zinc-700"
+              >
+                Need ideas? Show examples
+              </button>
+            </div>
+          ) : null}
+
+          <div className="relative">
           <textarea
             ref={inputRef}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             placeholder="Ask anything about money, decisions, pressure points, or what to do next..."
-            className="mt-2 min-h-[90px] w-full resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[14px] leading-relaxed text-zinc-800 outline-none focus:ring-2 focus:ring-zinc-200"
+            className="min-h-[90px] w-full resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 pr-14 text-[14px] leading-relaxed text-zinc-800 outline-none focus:ring-2 focus:ring-zinc-200"
             onKeyDown={(e) => {
               const isMac =
                 typeof navigator !== "undefined" &&
@@ -278,28 +290,33 @@ export function AskPanel({ mode = "overlay" }: { mode?: AskPanelMode }) {
               }
             }}
           />
-
-          <div className="mt-3 flex items-center justify-between gap-2">
-            {mode === "overlay" && messages.length === 0 && !examplesExpanded ? (
-              <button
-                type="button"
-                onClick={() => setExamplesExpanded(true)}
-                className="text-xs text-zinc-500 hover:text-zinc-700"
-              >
-                Need ideas? Show examples
-              </button>
-            ) : (
-              <div />
-            )}
-            <div className="ml-auto">
-              <Button
-                onClick={() => void submitAsk()}
-                disabled={!draft.trim() || status === "loading"}
-                className="rounded-2xl"
-              >
-                {status === "loading" ? "Thinking..." : "Get answer"}
-              </Button>
-            </div>
+            <button
+              type="button"
+              onClick={() => void submitAsk()}
+              disabled={!draft.trim() || status === "loading"}
+              className={[
+                "absolute bottom-3 right-3 inline-flex h-8 w-8 items-center justify-center rounded-full border transition",
+                !draft.trim() || status === "loading"
+                  ? "cursor-not-allowed border-zinc-200 bg-zinc-100 text-zinc-400"
+                  : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-50",
+              ].join(" ")}
+              aria-label={status === "loading" ? "Thinking..." : "Send question"}
+              title={status === "loading" ? "Thinking..." : "Send"}
+            >
+              {status === "loading" ? (
+                <span className="text-[11px]">...</span>
+              ) : (
+                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" aria-hidden="true">
+                  <path
+                    d="M4 12h14M12 6l6 6-6 6"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              )}
+            </button>
           </div>
         </div>
       </div>
