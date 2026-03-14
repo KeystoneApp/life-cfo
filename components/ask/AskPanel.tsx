@@ -118,8 +118,8 @@ export function AskPanel({ mode = "overlay" }: { mode?: AskPanelMode }) {
   if (!effectiveOpen) return null;
 
   const panelContent = (
-    <div className="flex h-full w-full flex-col">
-      <div className="flex items-center justify-between gap-3 border-b border-zinc-100 px-4 py-4">
+    <div className="flex h-full w-full min-h-0 flex-col">
+      <div className="shrink-0 flex items-center justify-between gap-3 border-b border-zinc-100 px-4 py-4">
         <div className="min-w-0">
           <div className="text-sm font-semibold text-zinc-900">{title}</div>
           <div className="text-xs text-zinc-500">{scopeLabel(currentScope)}.</div>
@@ -135,7 +135,7 @@ export function AskPanel({ mode = "overlay" }: { mode?: AskPanelMode }) {
         ref={scrollRef}
         className={
           hasScrollableContentAboveInput
-            ? "flex-1 overflow-y-auto px-4 py-4"
+            ? "min-h-0 flex-1 overflow-y-auto px-4 py-4"
             : "px-4 py-0"
         }
       >
@@ -251,7 +251,7 @@ export function AskPanel({ mode = "overlay" }: { mode?: AskPanelMode }) {
         </div>
       </div>
 
-      <div className="border-t border-zinc-100 px-4 py-4">
+      <div className="shrink-0 border-t border-zinc-100 px-4 py-4">
         <div className="rounded-2xl border border-zinc-200 bg-white p-3">
           <div className="text-xs font-medium text-zinc-700">Question</div>
           <textarea
