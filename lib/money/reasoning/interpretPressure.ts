@@ -57,7 +57,7 @@ function unique(items: string[]): string[] {
 
 function buildSignalDetails(snapshot: FinancialSnapshot): SignalDetail[] {
   const p = snapshot.pressure;
-  return [
+  const details: SignalDetail[] = [
     {
       key: "structural",
       score: p.structural_pressure.score,
@@ -86,7 +86,8 @@ function buildSignalDetails(snapshot: FinancialSnapshot): SignalDetail[] {
       summary: normalizeSentence(p.stability_risk.summary),
       drivers: p.stability_risk.drivers ?? [],
     },
-  ].sort((a, b) => b.score - a.score);
+  ];
+  return details.sort((a, b) => b.score - a.score);
 }
 
 function plainWhyNow(main: SignalDetail, snapshot: FinancialSnapshot): string {
