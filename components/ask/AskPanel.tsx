@@ -58,6 +58,7 @@ export function AskPanel({ mode = "overlay" }: { mode?: AskPanelMode }) {
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [isDesktop, setIsDesktop] = useState(false);
+  const [examplesExpanded, setExamplesExpanded] = useState(mode === "split");
 
   useEffect(() => {
     const media = window.matchMedia("(min-width: 768px)");
@@ -189,13 +190,28 @@ export function AskPanel({ mode = "overlay" }: { mode?: AskPanelMode }) {
 
           {messages.length === 0 && status !== "loading" && status !== "error" ? (
             <div className="rounded-2xl border border-zinc-200 bg-white p-3">
-              <div className="text-sm text-zinc-700">Ask things like:</div>
-              <div className="mt-2 space-y-1 text-sm text-zinc-600">
-                <div>• Are we okay this month?</div>
-                <div>• What bills are coming up?</div>
-                <div>• Where is our money leaking?</div>
-                <div>• Can we afford this?</div>
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-sm text-zinc-700">Ask things like</div>
+                <button
+                  type="button"
+                  onClick={() => setExamplesExpanded((v) => !v)}
+                  className="text-xs text-zinc-500 hover:text-zinc-700"
+                >
+                  {examplesExpanded ? "Hide" : "Show"}
+                </button>
               </div>
+              {examplesExpanded ? (
+                <div className="mt-2 space-y-1 text-sm text-zinc-600">
+                  <div>• Are we okay this month?</div>
+                  <div>• What bills are coming up?</div>
+                  <div>• Where is our money leaking?</div>
+                  <div>• Can we afford this?</div>
+                </div>
+              ) : (
+                <div className="mt-2 text-xs text-zinc-500">
+                  Keep this closed for a cleaner view, or open examples for ideas.
+                </div>
+              )}
             </div>
           ) : null}
         </div>
