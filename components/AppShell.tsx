@@ -59,13 +59,78 @@ function isActivePath(pathname: string, href: string) {
   return pathname === href || pathname.startsWith(href + "/");
 }
 
-function compactLabel(label: string) {
-  const words = label.trim().split(/\s+/).filter(Boolean);
-  if (words.length <= 1) return label.slice(0, 1).toUpperCase();
-  return words
-    .slice(0, 2)
-    .map((w) => w.slice(0, 1).toUpperCase())
-    .join("");
+function navIcon(href: string) {
+  const shared = "h-4 w-4 text-zinc-600";
+
+  switch (href) {
+    case "/lifecfo-home":
+      return (
+        <svg viewBox="0 0 24 24" fill="none" className={shared} aria-hidden="true">
+          <path d="M3 10.5L12 3l9 7.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+          <path d="M5.5 9.8V20h13V9.8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        </svg>
+      );
+    case "/money":
+    case "/money/in":
+    case "/money/out":
+    case "/money/saved":
+    case "/money/planned":
+    case "/money/goals":
+      return (
+        <svg viewBox="0 0 24 24" fill="none" className={shared} aria-hidden="true">
+          <rect x="3.5" y="6.5" width="17" height="11" rx="2.5" stroke="currentColor" strokeWidth="1.8" />
+          <circle cx="12" cy="12" r="2.4" stroke="currentColor" strokeWidth="1.8" />
+        </svg>
+      );
+    case "/accounts":
+      return (
+        <svg viewBox="0 0 24 24" fill="none" className={shared} aria-hidden="true">
+          <rect x="3.5" y="5.5" width="17" height="13" rx="2.5" stroke="currentColor" strokeWidth="1.8" />
+          <path d="M3.5 10h17" stroke="currentColor" strokeWidth="1.8" />
+        </svg>
+      );
+    case "/transactions":
+      return (
+        <svg viewBox="0 0 24 24" fill="none" className={shared} aria-hidden="true">
+          <path d="M6 8h12M6 12h9M6 16h7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        </svg>
+      );
+    case "/connections":
+      return (
+        <svg viewBox="0 0 24 24" fill="none" className={shared} aria-hidden="true">
+          <path d="M9.5 14.5l-2 2a3 3 0 104.2 4.2l2-2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+          <path d="M14.5 9.5l2-2a3 3 0 10-4.2-4.2l-2 2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+          <path d="M8.5 15.5l7-7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        </svg>
+      );
+    case "/decisions":
+      return (
+        <svg viewBox="0 0 24 24" fill="none" className={shared} aria-hidden="true">
+          <path d="M12 4v16M4 8h8M12 16h8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        </svg>
+      );
+    case "/family":
+      return (
+        <svg viewBox="0 0 24 24" fill="none" className={shared} aria-hidden="true">
+          <circle cx="9" cy="9" r="2.3" stroke="currentColor" strokeWidth="1.8" />
+          <circle cx="15.2" cy="10.2" r="1.8" stroke="currentColor" strokeWidth="1.8" />
+          <path d="M5.5 18c.7-2.3 2.3-3.5 4.7-3.5s4 1.2 4.7 3.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        </svg>
+      );
+    case "/household":
+      return (
+        <svg viewBox="0 0 24 24" fill="none" className={shared} aria-hidden="true">
+          <path d="M3 10.5L12 3l9 7.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+          <path d="M6.5 20v-7.5h11V20" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        </svg>
+      );
+    default:
+      return (
+        <svg viewBox="0 0 24 24" fill="none" className={shared} aria-hidden="true">
+          <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.8" />
+        </svg>
+      );
+  }
 }
 
 export function AppShell({ children }: AppShellProps) {
@@ -393,7 +458,7 @@ export function AppShell({ children }: AppShellProps) {
           <aside
             className={[
               "hidden md:flex md:h-full md:min-h-0 md:shrink-0 md:flex-col md:gap-3 md:overflow-y-auto md:rounded-2xl md:border md:border-zinc-200 md:bg-white md:p-3",
-              sidebarCollapsed ? "md:w-[76px]" : "md:w-[240px]",
+              sidebarCollapsed ? "md:w-[88px]" : "md:w-[240px]",
             ].join(" ")}
             aria-label="Primary navigation"
           >
@@ -405,7 +470,15 @@ export function AppShell({ children }: AppShellProps) {
                 aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
                 title={sidebarCollapsed ? "Expand" : "Collapse"}
               >
-                {sidebarCollapsed ? "Expand" : "Collapse"}
+                {sidebarCollapsed ? (
+                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" aria-hidden="true">
+                    <path d="M9 6l6 6-6 6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                ) : (
+                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" aria-hidden="true">
+                    <path d="M15 6l-6 6 6 6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                )}
               </button>
             </div>
 
@@ -435,8 +508,8 @@ export function AppShell({ children }: AppShellProps) {
                           aria-label={it.label}
                         >
                           {sidebarCollapsed ? (
-                            <span className="inline-flex h-6 w-6 items-center justify-center rounded-md bg-zinc-100 text-[11px] font-medium text-zinc-700">
-                              {compactLabel(it.label)}
+                            <span className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-zinc-100">
+                              {navIcon(it.href)}
                             </span>
                           ) : (
                             <span>{it.label}</span>
