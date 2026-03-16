@@ -197,8 +197,8 @@ type StatusRun = {
   id: string;
   user_id: string;
   status: "all_clear" | "tight" | "attention" | "unknown";
-  reasons: any;
-  facts_snapshot: any;
+  reasons: unknown;
+  facts_snapshot: Record<string, unknown> | null;
   memo_text: string | null;
   checked_at: string;
 };
@@ -208,6 +208,25 @@ type StatusState =
   | { status: "loading" }
   | { status: "ready"; run: StatusRun }
   | { status: "error"; message: string };
+
+type TriageState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | {
+      status: "ready";
+      reviewDueCount: number;
+      reviewSoonCount: number;
+      openDecisionCount: number;
+    }
+  | { status: "error" };
+
+type HomeNowItem = {
+  key: string;
+  title: string;
+  detail: string;
+  href: string;
+  priority: number;
+};
 
 /* ---------- routing helpers ---------- */
 
@@ -240,6 +259,8 @@ export default function LifeCFOHomePage() {
   const [showAssumptions, setShowAssumptions] = useState(false);
 
   const [statusMemo, setStatusMemo] = useState<StatusState>({ status: "idle" });
+  const [triage, setTriage] = useState<TriageState>({ status: "idle" });
+  const [showQuickAsk, setShowQuickAsk] = useState(false);
 
   // follow-up (inline, keeps context on-screen)
   const [followUpOpen, setFollowUpOpen] = useState(false);
@@ -350,6 +371,69 @@ export default function LifeCFOHomePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authStatus, userId]);
 
+  async function loadTriage(u: string) {
+    setTriage({ status: "loading" });
+    try {
+      const { data, error } = await supabase
+        .from("decisions")
+        .select("id,status,decided_at,review_at,reviewed_at")
+        .eq("user_id", u)
+        .limit(200);
+
+      if (error) {
+        setTriage({ status: "error" });
+        return;
+      }
+
+      const rows = (Array.isArray(data) ? data : []) as Array<{
+        status?: unknown;
+        decided_at?: unknown;
+        review_at?: unknown;
+        reviewed_at?: unknown;
+      }>;
+      const now = Date.now();
+      const soonMs = now + 14 * 24 * 60 * 60 * 1000;
+
+      let reviewDueCount = 0;
+      let reviewSoonCount = 0;
+      let openDecisionCount = 0;
+
+      for (const row of rows) {
+        const status = String(row.status ?? "").toLowerCase();
+        const decidedAt = typeof row.decided_at === "string" ? row.decided_at : null;
+        const reviewAt = typeof row.review_at === "string" ? row.review_at : null;
+        const reviewedAt = typeof row.reviewed_at === "string" ? row.reviewed_at : null;
+
+        if (!decidedAt && status !== "chapter" && status !== "closed") {
+          openDecisionCount += 1;
+        }
+
+        if (!reviewAt || reviewedAt) continue;
+        const reviewMs = Date.parse(reviewAt);
+        if (Number.isNaN(reviewMs)) continue;
+        if (reviewMs <= now) reviewDueCount += 1;
+        else if (reviewMs <= soonMs) reviewSoonCount += 1;
+      }
+
+      setTriage({
+        status: "ready",
+        reviewDueCount,
+        reviewSoonCount,
+        openDecisionCount,
+      });
+    } catch {
+      setTriage({ status: "error" });
+    }
+  }
+
+  useEffect(() => {
+    if (authStatus !== "signed_in" || !userId) {
+      setTriage({ status: "idle" });
+      return;
+    }
+    void loadTriage(userId);
+  }, [authStatus, userId]);
+
   /* ---------- ask ---------- */
 
   const askHome = async (question: string) => {
@@ -370,7 +454,7 @@ export default function LifeCFOHomePage() {
         body: JSON.stringify({ userId, question }),
       });
 
-      const json = (await res.json().catch(() => ({}))) as any;
+      const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
 
       if (!res.ok) {
         setAsk({ status: "error", question, message: "I couldn’t answer that right now." });
@@ -406,6 +490,7 @@ export default function LifeCFOHomePage() {
     const msg = text.trim();
     if (!msg) return;
 
+    setShowQuickAsk(true);
     setText("");
     focusInput();
 
@@ -439,6 +524,7 @@ export default function LifeCFOHomePage() {
     if (!fu) return;
 
     if (followUpSending) return;
+    setShowQuickAsk(true);
 
     if (authStatus !== "signed_in" || !userId) {
       toast({ title: "Sign in", description: "Sign in to ask a follow-up." });
@@ -487,6 +573,88 @@ Follow-up question: ${fu}`
     const bullets = extractBullets(body || "");
     return { tone, headline, body, bullets };
   }, [ask]);
+
+  const whatMattersNow = useMemo(() => {
+    if (authStatus !== "signed_in") return [] as HomeNowItem[];
+
+    const items: HomeNowItem[] = [];
+    const push = (item: HomeNowItem) => {
+      if (items.some((x) => x.key === item.key)) return;
+      items.push(item);
+    };
+
+    if (statusMemo.status === "ready") {
+      if (statusMemo.run.status === "attention") {
+        push({
+          key: "status_attention",
+          title: "Attention now",
+          detail: "Your latest check-in flagged one area worth handling first.",
+          href: "/money",
+          priority: 100,
+        });
+      } else if (statusMemo.run.status === "tight") {
+        push({
+          key: "status_tight",
+          title: "A bit tight",
+          detail: "Nothing urgent, but this month could use tighter timing.",
+          href: "/money",
+          priority: 80,
+        });
+      } else if (statusMemo.run.status === "unknown") {
+        push({
+          key: "status_unknown",
+          title: "Needs more visibility",
+          detail: "Connect or refresh data to improve your check-in confidence.",
+          href: "/money",
+          priority: 70,
+        });
+      }
+
+      const facts = statusMemo.run.facts_snapshot as { due_soon?: unknown } | null;
+      const dueSoon = Array.isArray(facts?.due_soon) ? facts.due_soon : [];
+      if (dueSoon.length > 0) {
+        push({
+          key: "bills_due_soon",
+          title: dueSoon.length === 1 ? "1 bill due soon" : `${dueSoon.length} bills due soon`,
+          detail: "A quick bill check can prevent avoidable pressure.",
+          href: "/bills",
+          priority: 75,
+        });
+      }
+    }
+
+    if (triage.status === "ready") {
+      if (triage.reviewDueCount > 0) {
+        push({
+          key: "reviews_due",
+          title: triage.reviewDueCount === 1 ? "1 review is due" : `${triage.reviewDueCount} reviews are due`,
+          detail: "Revisit decisions that are now ready for a check-in.",
+          href: "/revisit",
+          priority: 95,
+        });
+      } else if (triage.reviewSoonCount > 0) {
+        push({
+          key: "reviews_soon",
+          title: triage.reviewSoonCount === 1 ? "1 review is coming up" : `${triage.reviewSoonCount} reviews are coming up`,
+          detail: "A quick look now can make the next review easier.",
+          href: "/revisit",
+          priority: 65,
+        });
+      }
+
+      if (triage.openDecisionCount > 0) {
+        push({
+          key: "open_decisions",
+          title: triage.openDecisionCount === 1 ? "1 active decision" : `${triage.openDecisionCount} active decisions`,
+          detail: "Keep commitments clear in Decisions.",
+          href: "/decisions",
+          priority: 60,
+        });
+      }
+    }
+
+    return items.sort((a, b) => b.priority - a.priority).slice(0, 3);
+  }, [authStatus, statusMemo, triage]);
 
   const subtitle = preferredName ? `Good to see you, ${preferredName}.` : undefined;
   const canType = authStatus === "signed_in";
@@ -574,58 +742,131 @@ Follow-up question: ${fu}`
           </CardContent>
         </Card>
 
-        {/* Input card */}
+        {/* What matters now */}
         <Card className="border-zinc-200 bg-white shadow-none">
           <CardContent className="p-0">
-            <div className="px-6 py-5">
-              <textarea
-                ref={inputRef}
-                value={text}
-                onChange={(e) => setText(e.target.value)}
-                placeholder="Ask Life CFO… (or just unload what’s in your head)"
-                className="w-full min-h-[140px] resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[15px] leading-relaxed text-zinc-800 placeholder:text-zinc-500 outline-none focus:ring-2 focus:ring-zinc-200"
-                disabled={!canType}
-                onKeyDown={(e) => {
-                  const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
-                  const cmdOrCtrl = isMac ? e.metaKey : e.ctrlKey;
-
-                  if (cmdOrCtrl && e.key === "Enter") {
-                    e.preventDefault();
-                    void submit();
-                    return;
-                  }
-
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    void submit();
-                  }
-                }}
-              />
-
-              <div className="mt-2 flex justify-between text-xs text-zinc-500">
-                <span>Ask anything. Save only if you want to.</span>
-                {ask.status === "loading" ? <span aria-live="polite">Thinking…</span> : <span className="h-4" aria-hidden="true" />}
-              </div>
-
-              <div className="mt-3 flex gap-2">
-                <Button onClick={() => void submit()} disabled={!canType || !text.trim() || ask.status === "loading"} className="rounded-2xl">
-                  Get answer
-                </Button>
-                <Chip className="text-xs" title="Clear" onClick={() => setText("")} disabled={!text.trim() || ask.status === "loading"}>
-                  Clear
+            <div className="px-6 py-5 space-y-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-semibold text-zinc-900">What matters now</div>
+                  <div className="text-xs text-zinc-500">Top priorities only, so this stays calm.</div>
+                </div>
+                <Chip className="text-xs" title="Refresh check-in" onClick={() => void runStatusCheck({ force: true })}>
+                  Refresh
                 </Chip>
               </div>
 
-              <div className="mt-3 flex flex-wrap gap-2">
-                {["Are we okay this month?", "What bills are due soon?", "What changed recently?", "Can we afford $___?"].map((ex) => (
-                  <Chip key={ex} className="text-xs" title={ex} disabled={!canType || ask.status === "loading"} onClick={() => setText(ex)}>
-                    {ex}
-                  </Chip>
-                ))}
+              {authStatus === "signed_out" ? (
+                <div className="text-sm text-zinc-700">Sign in to see your current priorities.</div>
+              ) : whatMattersNow.length === 0 ? (
+                <div className="text-sm text-zinc-700">Nothing urgent right now. You can check Money or continue a decision if you want.</div>
+              ) : (
+                <div className="space-y-2">
+                  {whatMattersNow.map((item) => (
+                    <button
+                      key={item.key}
+                      type="button"
+                      onClick={() => router.push(item.href)}
+                      className="w-full rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-left transition hover:bg-white"
+                      title={item.title}
+                    >
+                      <div className="text-sm font-medium text-zinc-900">{item.title}</div>
+                      <div className="mt-1 text-xs text-zinc-600">{item.detail}</div>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              <div className="flex flex-wrap gap-2">
+                <Chip className="text-xs" title="Open Money" onClick={() => router.push("/money")}>
+                  Money
+                </Chip>
+                <Chip className="text-xs" title="Open Decisions" onClick={() => router.push("/decisions")}>
+                  Decisions
+                </Chip>
+                <Chip className="text-xs" title="Open Review" onClick={() => router.push("/revisit")}>
+                  Review
+                </Chip>
+                <Chip
+                  className="text-xs"
+                  title={showQuickAsk ? "Hide quick ask" : "Think it through"}
+                  onClick={() => {
+                    setShowQuickAsk((v) => !v);
+                    if (!showQuickAsk) focusInput();
+                  }}
+                >
+                  {showQuickAsk ? "Hide quick ask" : "Think it through"}
+                </Chip>
               </div>
             </div>
           </CardContent>
         </Card>
+
+        {/* Optional quick ask (secondary on Home) */}
+        {showQuickAsk || ask.status !== "idle" ? (
+          <Card className="border-zinc-200 bg-white shadow-none">
+            <CardContent className="p-0">
+              <div className="px-6 py-5">
+                <div className="mb-2 text-xs text-zinc-500">Quick ask on Home. For deeper work, use Ask or Decisions.</div>
+
+                <textarea
+                  ref={inputRef}
+                  value={text}
+                  onChange={(e) => setText(e.target.value)}
+                  placeholder="Ask Life CFO..."
+                  className="w-full min-h-[120px] resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[15px] leading-relaxed text-zinc-800 placeholder:text-zinc-500 outline-none focus:ring-2 focus:ring-zinc-200"
+                  disabled={!canType}
+                  onKeyDown={(e) => {
+                    const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+                    const cmdOrCtrl = isMac ? e.metaKey : e.ctrlKey;
+
+                    if (cmdOrCtrl && e.key === "Enter") {
+                      e.preventDefault();
+                      void submit();
+                      return;
+                    }
+
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      void submit();
+                    }
+                  }}
+                />
+
+                <div className="mt-2 flex justify-between text-xs text-zinc-500">
+                  <span>Temporary by default. Save only if you choose.</span>
+                  {ask.status === "loading" ? <span aria-live="polite">Thinking…</span> : <span className="h-4" aria-hidden="true" />}
+                </div>
+
+                <div className="mt-3 flex gap-2">
+                  <Button onClick={() => void submit()} disabled={!canType || !text.trim() || ask.status === "loading"} className="rounded-2xl">
+                    Get answer
+                  </Button>
+                  <Chip className="text-xs" title="Clear" onClick={() => setText("")} disabled={!text.trim() || ask.status === "loading"}>
+                    Clear
+                  </Chip>
+                </div>
+
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {["Are we okay this month?", "What changed recently?", "What is coming up for review?"].map((ex) => (
+                    <Chip
+                      key={ex}
+                      className="text-xs"
+                      title={ex}
+                      disabled={!canType || ask.status === "loading"}
+                      onClick={() => {
+                        setShowQuickAsk(true);
+                        setText(ex);
+                      }}
+                    >
+                      {ex}
+                    </Chip>
+                  ))}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        ) : null}
 
         {/* Q&A CFO Answer card */}
         {ask.status !== "idle" ? (
@@ -727,6 +968,7 @@ Follow-up question: ${fu}`
                           className="text-xs"
                           title="Ask something else"
                           onClick={() => {
+                            setShowQuickAsk(true);
                             focusInput();
                             window.setTimeout(() => inputRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }), 40);
                           }}
@@ -849,34 +1091,34 @@ Follow-up question: ${fu}`
 
                       {/* Permissioned save (post-answer, calm) */}
                       <div className="pt-2">
-                        <div className="text-xs font-medium text-zinc-600">Want me to hold onto this?</div>
+                        <div className="text-xs font-medium text-zinc-600">Promote this if it matters:</div>
                         <div className="mt-2 flex flex-wrap gap-2">
                           <Chip
                             className="text-xs"
-                            title="Save a note"
+                            title="Save to Capture"
                             onClick={async () => {
                               try {
                                 await navigator.clipboard.writeText(ask.question);
-                                toast({ title: "Copied", description: "Paste into Notes." });
+                                toast({ title: "Copied", description: "Paste into Capture." });
                               } catch {}
                               router.push("/capture");
                             }}
                           >
-                            Save a note
+                            Save to Capture
                           </Chip>
 
                           <Chip
                             className="text-xs"
-                            title="Save a decision"
+                            title="Open in Decisions"
                             onClick={async () => {
                               try {
                                 await navigator.clipboard.writeText(ask.question);
-                                toast({ title: "Copied", description: "Paste into a Decision." });
+                                toast({ title: "Copied", description: "Paste into Decisions." });
                               } catch {}
-                              router.push("/framing");
+                              router.push("/decisions");
                             }}
                           >
-                            Save a decision
+                            Open in Decisions
                           </Chip>
 
                           <Chip
