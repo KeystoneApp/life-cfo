@@ -188,6 +188,33 @@ export interface PromotionAction {
   created_at: ISODateTimeString;
 }
 
+export interface PromotionTarget {
+  decision_id?: UUID;
+}
+
+export interface AskCandidatePromotionRequest {
+  action_type: PromotionActionType;
+  confirmed_by_user: boolean;
+  candidate: MemoryCandidate;
+  target?: PromotionTarget;
+}
+
+export type PromotedEntityKind = "decision" | "decision_summary" | "decision_review";
+
+export interface AskCandidatePromotionResult {
+  kind: PromotedEntityKind;
+  id: UUID;
+  decision_id?: UUID;
+}
+
+export interface AskCandidatePromotionResponse {
+  ok: true;
+  action_type: PromotionActionType;
+  candidate_type: CandidateType;
+  result: AskCandidatePromotionResult;
+  warning?: string;
+}
+
 export interface AskCandidatePayload {
   insight_candidates?: InsightCandidate[];
   assumption_candidates?: AssumptionCandidate[];
