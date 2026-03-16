@@ -1,7 +1,11 @@
-// app/api/ai/conversation/route.ts
+﻿// app/api/ai/conversation/route.ts
 import { NextResponse } from "next/server";
 import OpenAI from "openai";
 import { maybeCrisisIntercept } from "@/lib/safety/guard";
+import type {
+  DecisionConversationRequest,
+  DecisionConversationResponse,
+} from "@/lib/memory/contracts";
 
 export const dynamic = "force-dynamic";
 
@@ -25,7 +29,7 @@ const STYLE_GUIDE = [
   "- Output MUST be valid Markdown.",
   "- Use blank lines between paragraphs and between sections.",
   "- Keep replies calm and scannable. No walls of text.",
-  "- Start by answering the user's NEW message in 1–3 sentences.",
+  "- Start by answering the user's NEW message in 1-3 sentences.",
   "- Only use structured sections if they genuinely help this turn.",
   "- Do NOT reuse the same full structure every reply.",
   "- If listing 3+ items, use bullets.",
@@ -40,7 +44,7 @@ const STYLE_GUIDE = [
 
 const OPTIONAL_SECTION_HEADINGS = [
   "Optional headings you may use (only when helpful):",
-  "- ### What I’m hearing",
+  "- ### What I'm hearing",
   "- ### Key factors",
   "- ### Options",
   "- ### Trade-offs",
@@ -58,7 +62,7 @@ function buildSystemPrompt(args: { decisionTitle: string; decisionStatement?: st
       "Rules:",
       "- Do NOT recommend a choice unless explicitly asked.",
       "- Keep it scannable and calm.",
-      "- Include: what’s decided (if anything), constraints, open questions, suggested next step.",
+      "- Include: what's decided (if anything), constraints, open questions, suggested next step.",
       "",
       STYLE_GUIDE,
       "",
@@ -72,7 +76,7 @@ function buildSystemPrompt(args: { decisionTitle: string; decisionStatement?: st
   }
 
   return [
-    "You are Keystone — a calm, values-anchored decision partner.",
+    "You are Keystone - a calm, values-anchored decision partner.",
     "You help the user think clearly without forcing a decision.",
     "Rules:",
     "- Do NOT recommend a choice unless the user asks you to recommend.",
@@ -131,7 +135,6 @@ function classifyTurn(userText: string) {
 
 const TITLE_SET = new Set(
   [
-    "what i’m hearing",
     "what i'm hearing",
     "key factors",
     "options",
@@ -162,7 +165,7 @@ function isTitleLine(s: string) {
 }
 
 function bulletifyLabelLine(s: string) {
-  const m = s.match(/^([A-Za-z][A-Za-z0-9 &'’\/-]{1,36}):\s+(.+)$/);
+  const m = s.match(/^([A-Za-z][A-Za-z0-9 &'\/-]{1,36}):\s+(.+)$/);
   if (!m) return null;
   const label = m[1].trim();
   const rest = m[2].trim();
@@ -250,12 +253,7 @@ function normalizeMarkdown(raw: string) {
 
 export async function POST(req: Request) {
   try {
-    const body = (await req.json()) as {
-      decisionTitle?: string;
-      decisionStatement?: string;
-      messages?: InMsg[];
-      mode?: Mode;
-    };
+    const body = (await req.json()) as DecisionConversationRequest;
 
     const decisionTitle = String(body.decisionTitle ?? "").trim();
     const decisionStatement = String(body.decisionStatement ?? "").trim();
@@ -280,7 +278,7 @@ export async function POST(req: Request) {
     const userText = lastUserText(safeMessages);
     const intercept = maybeCrisisIntercept(userText);
     if (intercept) {
-      const payload =
+      const payload: DecisionConversationResponse =
         mode === "summarise"
           ? { summaryText: intercept.content, kind: intercept.kind, version: VERSION }
           : { assistantText: intercept.content, kind: intercept.kind, version: VERSION };
@@ -310,9 +308,9 @@ export async function POST(req: Request) {
         : [
             `Turn type: ${turnKind}.`,
             "You MUST answer the user's latest message first.",
-            "If Turn type is 'direct': reply plainly (no big template), max ~120–180 words, 0–1 headings, bullets only if helpful.",
-            "If Turn type is 'light': 1 short paragraph + (optional) a small bullet list (3–6 bullets) + 1 question.",
-            "If Turn type is 'structured': you may use 2–4 headings, but only those that help.",
+            "If Turn type is 'direct': reply plainly (no big template), max ~120-180 words, 0-1 headings, bullets only if helpful.",
+            "If Turn type is 'light': 1 short paragraph + (optional) a small bullet list (3-6 bullets) + 1 question.",
+            "If Turn type is 'structured': you may use 2-4 headings, but only those that help.",
             "Do NOT repeat the same headings every turn.",
             "",
             "CONVERSATION:",
@@ -338,7 +336,8 @@ export async function POST(req: Request) {
 
     const text = normalizeMarkdown(rawText);
 
-    const payload = mode === "summarise" ? { summaryText: text, version: VERSION } : { assistantText: text, version: VERSION };
+    const payload: DecisionConversationResponse =
+      mode === "summarise" ? { summaryText: text, version: VERSION } : { assistantText: text, version: VERSION };
     return NextResponse.json(payload, { headers: { "x-keystone-ai-version": VERSION } });
   } catch (err: any) {
     const message = err?.message ? String(err.message) : "AI request failed.";

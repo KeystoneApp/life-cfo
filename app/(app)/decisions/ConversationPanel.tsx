@@ -1,8 +1,9 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { Chip } from "@/components/ui";
+import type { DecisionConversationResponse } from "@/lib/memory/contracts";
 
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -63,7 +64,7 @@ export function ConversationPanel(props: {
   decisionTitle: string;
   frame?: Frame | null;
 
-  // ✅ optional now to fix TS error in callers that don’t pass it
+  // optional now to fix TS error in callers that don't pass it
   onClose?: () => void;
 
   onSummarySaved?: () => void;
@@ -100,7 +101,7 @@ export function ConversationPanel(props: {
 
   const [bootMessage, setBootMessage] = useState<string>("");
 
-  // ✅ Two-step summary flow
+  // Two-step summary flow
   const [summaryPreview, setSummaryPreview] = useState<string>("");
   const [summaryStatus, setSummaryStatus] = useState<string>("");
   const [creatingSummary, setCreatingSummary] = useState<boolean>(false);
@@ -140,7 +141,7 @@ export function ConversationPanel(props: {
       if (!mounted) return;
 
       if (error) {
-        setStatus(`Couldn’t load conversation: ${error.message}`);
+        setStatus(`Couldn't load conversation: ${error.message}`);
         setMessages([]);
         setLoading(false);
         return;
@@ -176,8 +177,8 @@ export function ConversationPanel(props: {
     if (!autoStartToken) return;
 
     const asked = (askedText || decisionStatement || decisionTitle || "").trim();
-    const line1 = asked ? `Okay — let’s work through: “${asked}”.` : "Okay — let’s work through this.";
-    const line2 = "I’ll clarify what matters, then lay out options + trade-offs.";
+    const line1 = asked ? `Okay - let's work through: "${asked}".` : "Okay - let's work through this.";
+    const line2 = "I'll clarify what matters, then lay out options + trade-offs.";
     setBootMessage(`${line1}\n\n${line2}`);
   }, [autoStartToken, askedText, decisionStatement, decisionTitle]);
 
@@ -223,12 +224,12 @@ export function ConversationPanel(props: {
     setStatus("");
     void persist(next);
 
-    // If user continues chatting, we don’t keep an old summary preview hanging around
+    // If user continues chatting, we don't keep an old summary preview hanging around
     setSummaryPreview("");
     setSummaryStatus("");
 
     try {
-      setStatus("Thinking…");
+      setStatus("Thinking...");
 
       const res = await fetch("/api/ai/conversation", {
         method: "POST",
@@ -241,14 +242,20 @@ export function ConversationPanel(props: {
         }),
       });
 
-      const json = await res.json().catch(() => ({}));
+      const json = (await res.json().catch(() => ({}))) as DecisionConversationResponse;
       if (!res.ok) {
-        const errMsg = json?.error ? String(json.error) : "AI request failed.";
+        const errMsg =
+          json && typeof json === "object" && "error" in json && typeof json.error === "string"
+            ? json.error
+            : "AI request failed.";
         setStatus(isQuotaError(res.status, errMsg) ? "AI is paused right now. Your conversation is still saved." : errMsg);
         return;
       }
 
-      const assistantText = String(json?.assistantText ?? "").trim();
+      const assistantText =
+        json && typeof json === "object" && "assistantText" in json && typeof json.assistantText === "string"
+          ? json.assistantText.trim()
+          : "";
       if (!assistantText) {
         setStatus("No response.");
         return;
@@ -294,7 +301,7 @@ export function ConversationPanel(props: {
 
     setCreatingSummary(true);
     setSummaryPreview("");
-    setSummaryStatus("Creating summary…");
+    setSummaryStatus("Creating summary...");
 
     try {
       const res = await fetch("/api/ai/conversation", {
@@ -308,14 +315,20 @@ export function ConversationPanel(props: {
         }),
       });
 
-      const json = await res.json().catch(() => ({}));
+      const json = (await res.json().catch(() => ({}))) as DecisionConversationResponse;
       if (!res.ok) {
-        const errMsg = json?.error ? String(json.error) : "Summary failed.";
+        const errMsg =
+          json && typeof json === "object" && "error" in json && typeof json.error === "string"
+            ? json.error
+            : "Summary failed.";
         setSummaryStatus(isQuotaError(res.status, errMsg) ? "AI summaries are paused right now." : errMsg);
         return;
       }
 
-      const text = String(json?.summaryText ?? "").trim();
+      const text =
+        json && typeof json === "object" && "summaryText" in json && typeof json.summaryText === "string"
+          ? json.summaryText.trim()
+          : "";
       if (!text) {
         setSummaryStatus("No summary returned.");
         return;
@@ -340,7 +353,7 @@ export function ConversationPanel(props: {
     }
 
     setSavingSummary(true);
-    setSummaryStatus("Saving…");
+    setSummaryStatus("Saving...");
 
     try {
       const { error } = await supabase.from("decision_summaries").insert({
@@ -350,11 +363,11 @@ export function ConversationPanel(props: {
       });
 
       if (error) {
-        setSummaryStatus(`Couldn’t save: ${error.message}`);
+        setSummaryStatus(`Couldn't save: ${error.message}`);
         return;
       }
 
-      // ✅ Collapse preview after save
+      // Collapse preview after save
       setSummaryPreview("");
       setSummaryStatus("Saved.");
       onSummarySaved?.();
@@ -371,7 +384,7 @@ export function ConversationPanel(props: {
       {/* Minimal header (no top-right close) */}
       <div className="flex items-start justify-between gap-3 px-1">
         <div className="min-w-0">
-          <div className="text-sm font-semibold text-zinc-900">Let’s work this through</div>
+          <div className="text-sm font-semibold text-zinc-900">Let's work this through</div>
           {askedText ? <div className="mt-1 text-xs text-zinc-500 truncate">{askedText}</div> : null}
         </div>
 
@@ -389,12 +402,12 @@ export function ConversationPanel(props: {
             </div>
           </div>
         ) : null}
-        {loading ? <div className="px-2 text-sm text-zinc-600">Loading…</div> : null}
+        {loading ? <div className="px-2 text-sm text-zinc-600">Loading...</div> : null}
 
         {!loading && messages.length === 0 ? (
           <div className="py-2">
             <div className="max-w-[80%] rounded-2xl bg-zinc-50 px-5 py-4 text-sm leading-relaxed text-zinc-800">
-              <div className="whitespace-pre-wrap">{bootMessage || "Okay — let’s think this through."}</div>
+              <div className="whitespace-pre-wrap">{bootMessage || "Okay - let's think this through."}</div>
             </div>
           </div>
         ) : null}
@@ -435,7 +448,7 @@ export function ConversationPanel(props: {
                   Discard
                 </Chip>
                 <Chip onClick={saveSummary} title="Save summary to the decision">
-                  {savingSummary ? "Saving…" : "Save summary"}
+                  {savingSummary ? "Saving..." : "Save summary"}
                 </Chip>
               </div>
             </div>
@@ -457,7 +470,7 @@ export function ConversationPanel(props: {
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               rows={3}
-              placeholder="Reply…"
+              placeholder="Reply..."
               className="w-full rounded-2xl border border-zinc-200 bg-white px-4 py-3 pr-12 text-sm text-zinc-800 outline-none focus:ring-2 focus:ring-zinc-200"
               onKeyDown={(e) => {
                 const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
@@ -484,7 +497,7 @@ export function ConversationPanel(props: {
                 aria-label="Send"
                 title="Send"
               >
-                →
+                {"->"}
               </button>
             ) : null}
           </div>
@@ -492,12 +505,12 @@ export function ConversationPanel(props: {
           <div className="mt-2 flex flex-wrap items-center gap-2">
             {!summaryPreview ? (
               <Chip onClick={createChatSummary} title="Create a chat summary (preview first)">
-                {creatingSummary ? "Creating…" : "Create chat summary"}
+                {creatingSummary ? "Creating..." : "Create chat summary"}
               </Chip>
             ) : null}
           </div>
 
-          {/* ✅ Bottom "Close chat" (no top Done) */}
+          {/* Bottom "Close chat" (no top Done) */}
           {onClose ? (
             <div className="mt-3 flex items-center justify-start">
               <Chip onClick={onClose} title="Close chat">
