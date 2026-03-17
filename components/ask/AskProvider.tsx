@@ -18,6 +18,13 @@ import {
   stableGroundLine,
 } from "@/components/ask/moneyAskLanguage";
 import type { PressureInterpretation } from "@/lib/money/reasoning/interpretPressure";
+import type {
+  AskCandidatePayload,
+  AskCandidatePromotionResponse,
+  AskErrorResponse,
+  MemoryCandidate,
+  PromotionActionType,
+} from "@/lib/memory/contracts";
 
 type AskActionHref = string | null;
 type AskStatus = "idle" | "loading" | "done" | "error";
@@ -30,6 +37,17 @@ export type AskMessage = {
   tone?: string | null;
   verdict?: string | null;
   actionHref?: AskActionHref;
+  candidates?: AskCandidatePayload;
+  promotions?: Record<string, AskPromotionState>;
+};
+
+type AskPromotionStatus = "idle" | "saving" | "saved" | "error";
+
+export type AskPromotionState = {
+  status: AskPromotionStatus;
+  error?: string;
+  resultKind?: string;
+  resultId?: string;
 };
 
 type AskState = {
@@ -57,6 +75,7 @@ type AskContextValue = AskState & {
   clearAsk: () => void;
   submitAsk: (question?: string, options?: SubmitOptions) => Promise<void>;
   retryLast: () => Promise<void>;
+  promoteCandidate: (params: { messageId: string; candidate: MemoryCandidate }) => Promise<void>;
 };
 
 const AskContext = createContext<AskContextValue | null>(null);
@@ -146,6 +165,13 @@ function buildInterpretationLines(
       : [];
 
   return { main, next, confidence };
+}
+
+function actionForCandidateType(candidateType: MemoryCandidate["candidate_type"]): PromotionActionType | null {
+  if (candidateType === "decision_candidate") return "create_decision";
+  if (candidateType === "insight_candidate") return "save_insight";
+  if (candidateType === "revisit_candidate") return "add_revisit_trigger";
+  return null;
 }
 
 export function AskProvider({ children }: { children: ReactNode }) {
@@ -526,6 +552,7 @@ export function AskProvider({ children }: { children: ReactNode }) {
           tone,
           verdict,
           actionHref: actionMap[String(json?.action ?? "none")] ?? null,
+          candidates: (json?.candidates as AskCandidatePayload | undefined) ?? undefined,
         };
 
         setMessages((prev) => [...prev, assistantMessage]);
@@ -553,6 +580,94 @@ export function AskProvider({ children }: { children: ReactNode }) {
     await runQuestion(q, { appendUserMessage: false });
   }, [runQuestion]);
 
+  const promoteCandidate = useCallback(
+    async ({ messageId, candidate }: { messageId: string; candidate: MemoryCandidate }) => {
+      const actionType = actionForCandidateType(candidate.candidate_type);
+      if (!actionType) return;
+
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id !== messageId
+            ? msg
+            : {
+                ...msg,
+                promotions: {
+                  ...(msg.promotions || {}),
+                  [candidate.id]: { status: "saving" },
+                },
+              }
+        )
+      );
+
+      try {
+        const res = await fetch("/api/memory/promote", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action_type: actionType,
+            confirmed_by_user: true,
+            candidate,
+          }),
+        });
+
+        const json = (await res.json().catch(() => ({}))) as
+          | AskCandidatePromotionResponse
+          | AskErrorResponse;
+
+        if (!res.ok || !("ok" in json) || json.ok !== true) {
+          const err = "error" in json && typeof json.error === "string" ? json.error : "Could not save this yet.";
+          setMessages((prev) =>
+            prev.map((msg) =>
+              msg.id !== messageId
+                ? msg
+                : {
+                    ...msg,
+                    promotions: {
+                      ...(msg.promotions || {}),
+                      [candidate.id]: { status: "error", error: err },
+                    },
+                  }
+            )
+          );
+          return;
+        }
+
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id !== messageId
+              ? msg
+              : {
+                  ...msg,
+                  promotions: {
+                    ...(msg.promotions || {}),
+                    [candidate.id]: {
+                      status: "saved",
+                      resultKind: json.result.kind,
+                      resultId: json.result.id,
+                    },
+                  },
+                }
+          )
+        );
+      } catch {
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id !== messageId
+              ? msg
+              : {
+                  ...msg,
+                  promotions: {
+                    ...(msg.promotions || {}),
+                    [candidate.id]: { status: "error", error: "Could not save this yet." },
+                  },
+                }
+          )
+        );
+      }
+    },
+    []
+  );
+
   const value = useMemo<AskContextValue>(
     () => ({
       open,
@@ -572,6 +687,7 @@ export function AskProvider({ children }: { children: ReactNode }) {
       clearAsk,
       submitAsk,
       retryLast,
+      promoteCandidate,
     }),
     [
       open,
@@ -590,6 +706,7 @@ export function AskProvider({ children }: { children: ReactNode }) {
       clearAsk,
       submitAsk,
       retryLast,
+      promoteCandidate,
     ]
   );
 

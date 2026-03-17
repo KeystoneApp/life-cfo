@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAsk } from "@/components/ask/AskProvider";
 import { Chip } from "@/components/ui";
+import type { DecisionCandidate } from "@/lib/memory/contracts";
 
 type AskPanelMode = "overlay" | "split";
 
@@ -72,6 +73,7 @@ export function AskPanel({ mode = "overlay" }: { mode?: AskPanelMode }) {
     submitAsk,
     retryLast,
     clearAsk,
+    promoteCandidate,
     currentScope,
     currentPath,
     shellSplitHostActive,
@@ -170,6 +172,7 @@ export function AskPanel({ mode = "overlay" }: { mode?: AskPanelMode }) {
             <div className="space-y-4">
               {messages.map((message) => {
                 const isUser = message.role === "user";
+                const decisionCandidates = (message.candidates?.decision_candidates || []) as DecisionCandidate[];
 
                 return (
                   <div
@@ -201,6 +204,44 @@ export function AskPanel({ mode = "overlay" }: { mode?: AskPanelMode }) {
                         >
                           Copy
                         </Chip>
+                      </div>
+                    ) : null}
+
+                    {!isUser && decisionCandidates.length > 0 ? (
+                      <div className="mt-3 space-y-2">
+                        {decisionCandidates.map((candidate) => {
+                          const state = message.promotions?.[candidate.id];
+                          const isSaving = state?.status === "saving";
+                          const isSaved = state?.status === "saved";
+                          const hasError = state?.status === "error";
+
+                          return (
+                            <div
+                              key={candidate.id}
+                              className="rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2"
+                            >
+                              <div className="text-xs text-zinc-600">{candidate.title}</div>
+                              <div className="mt-2 flex items-center gap-2">
+                                <Chip
+                                  onClick={() => {
+                                    if (isSaved || isSaving) return;
+                                    void promoteCandidate({
+                                      messageId: message.id,
+                                      candidate,
+                                    });
+                                  }}
+                                >
+                                  {isSaved ? "Saved to Decisions" : isSaving ? "Saving..." : "Save to Decisions"}
+                                </Chip>
+                                {hasError ? (
+                                  <span className="text-xs text-rose-700">
+                                    {state?.error || "Could not save this yet."}
+                                  </span>
+                                ) : null}
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
                     ) : null}
                   </div>

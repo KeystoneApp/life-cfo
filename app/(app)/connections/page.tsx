@@ -553,6 +553,13 @@ function ConnectionsPageClient() {
 
       const connectionId = coerceStr(json?.connection?.id);
       if (!connectionId) throw new Error("Missing connection id");
+      const connectionStatus = coerceStr(json?.connection?.status).toLowerCase();
+
+      if (connectionStatus === "active") {
+        toast({ title: "Basiq is already connected" });
+        await load();
+        return;
+      }
 
       toast({ title: "Starting secure connection..." });
       await startBasiqAuth(connectionId);

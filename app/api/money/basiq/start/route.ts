@@ -317,6 +317,15 @@ export async function POST(req: Request) {
       requestedConnectionId,
     });
     const connectionId = conn.id;
+    const connectionStatus = safeStr(conn.status).toLowerCase();
+
+    if (connectionStatus === "active") {
+      return NextResponse.json({
+        ok: true,
+        already_connected: true,
+        connection_id: connectionId,
+      });
+    }
 
     let payload = safeJsonParse<ItemIdPayload>(conn.item_id) ?? null;
 
