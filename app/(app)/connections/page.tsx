@@ -389,6 +389,7 @@ function ConnectionsPageClient() {
   const [creatingPlaid, setCreatingPlaid] = useState(false);
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [connectingId, setConnectingId] = useState<string | null>(null);
+  const [removingId, setRemovingId] = useState<string | null>(null);
   const [showAllRecentPending, setShowAllRecentPending] = useState(false);
   const [showOlderPending, setShowOlderPending] = useState(false);
   const basiqReturnConnectionId = coerceStr(searchParams.get("basiq_connection_id"));
@@ -728,6 +729,27 @@ function ConnectionsPageClient() {
     );
   }
 
+  async function removeSetupAttempt(id: string) {
+    setRemovingId(id);
+    try {
+      const res = await fetch(`/api/money/connections/${id}`, {
+        method: "DELETE",
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(coerceStr(json?.error) || "Could not remove setup attempt.");
+
+      toast({ title: "Setup attempt removed" });
+      await load();
+    } catch (e: unknown) {
+      toast({
+        title: "Couldn't remove setup attempt",
+        description: e instanceof Error ? e.message : "Please try again.",
+      });
+    } finally {
+      setRemovingId(null);
+    }
+  }
+
   const activeItems = useMemo(
     () => items.filter((c) => c.status === "active" || c.status === "manual"),
     [items]
@@ -821,6 +843,10 @@ function ConnectionsPageClient() {
 
   const canShowConnect = (c: Connection) =>
     (c.provider === "basiq" || c.provider === "plaid") && c.status === "needs_auth";
+
+  const canRemoveSetupAttempt = (c: Connection) =>
+    coerceStr(c.provider).toLowerCase() === "basiq" &&
+    (c.status === "needs_auth" || c.status === "error");
 
   function handleComingSoon(label: string) {
     toast({
@@ -1037,6 +1063,19 @@ function ConnectionsPageClient() {
                                 </Button>
                               )}
 
+                              {canRemoveSetupAttempt(c) && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => void removeSetupAttempt(c.id)}
+                                  disabled={removingId === c.id || connectingId === c.id}
+                                >
+                                  {removingId === c.id
+                                    ? "Removing..."
+                                    : "Remove setup attempt"}
+                                </Button>
+                              )}
+
                               {statusChip(c.status)}
                             </div>
                           </div>
@@ -1119,6 +1158,19 @@ function ConnectionsPageClient() {
                                   disabled={connectingId === c.id}
                                 >
                                   {connectingId === c.id ? "Opening..." : "Continue setup"}
+                                </Button>
+                              )}
+
+                              {canRemoveSetupAttempt(c) && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => void removeSetupAttempt(c.id)}
+                                  disabled={removingId === c.id || connectingId === c.id}
+                                >
+                                  {removingId === c.id
+                                    ? "Removing..."
+                                    : "Remove setup attempt"}
                                 </Button>
                               )}
 
