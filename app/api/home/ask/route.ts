@@ -830,20 +830,20 @@ export async function POST(req: Request) {
           ? billsArr.map((b: any) => `${String(b?.currency ?? "").toUpperCase()}: ${String(b?.total ?? "—")}`)
           : ["(no recurring bills totals visible)"];
 
-      // 👇 Single, non-duplicative headline (no “Here’s what I can see…” + another line)
-      const headline = "I can’t answer “yes” or “no” from Home alone — here’s what I can see, and what’s missing.";
+      // Single, non-duplicative headline (no repeated intro lines)
+      const headline = "I can't give you a yes-or-no from Home alone. Here's what I'm seeing, and what's still missing.";
 
       const key_points = [
-        "Available balances (by currency) are listed below.",
-        "Recurring commitments (by currency) are listed below.",
+        "I'm seeing these available balances by currency.",
+        "I'm seeing these recurring commitments by currency.",
         mainPressureSummary ? `Current pressure baseline: ${mainPressureSummary}` : "",
-        confidenceNote ? `Confidence note: ${confidenceNote}` : "",
-        "To answer safely, we’d need timing + which account pays + your buffer.",
+        confidenceNote ? `From this data: ${confidenceNote}` : "",
+        "To answer this clearly, we'd need timing, which account pays, and your buffer.",
       ].filter(Boolean);
 
       const details = ["**Available balances**", composeBullets(balancesList), "", "**Recurring commitments**", composeBullets(billsList)].join("\n");
 
-      const what_changes_this = ["If the expense is one-off vs recurring", "If the timing is before/after pay day", "If it must come from a specific account"];
+      const what_changes_this = ["Whether the expense is one-off or recurring", "Whether timing lands before or after pay day", "Whether it must come from a specific account"];
       const assumptions = ["Balances reflect active accounts", "Commitments reflect active recurring bills"];
 
       const answer = buildMemoAnswer({ headline, key_points, details, what_changes_this, assumptions });
@@ -877,7 +877,7 @@ export async function POST(req: Request) {
           title: question,
           prompt: question,
           notes: [
-            "Affordability question — no permission granted",
+            "Affordability question - no permission granted",
             "Known: current balances (accounts)",
             "Known: recurring commitments (recurring bills totals)",
             "Unknown: timing, one-off vs recurring, which account pays, required buffer",
@@ -893,7 +893,7 @@ export async function POST(req: Request) {
       const upcoming = Array.isArray(review?.upcoming) ? review.upcoming : [];
 
       if (count <= 0 || upcoming.length === 0) {
-        const headline = "There are no items scheduled for review (from what I can see).";
+        const headline = "Nothing is lined up for review right now.";
         const assumptions = ["Review items come from decisions with review_at set and reviewed_at still empty"];
         const answer = buildMemoAnswer({ headline, key_points: [], details: "", what_changes_this: [], assumptions });
 
@@ -923,7 +923,7 @@ export async function POST(req: Request) {
         return `${title}${when ? ` — scheduled for ${when}` : ""}`;
       });
 
-      const headline = `There are ${count} items scheduled for review.`;
+      const headline = `${count} items are up for review.`;
       const assumptions = ["Review items come from decisions with review_at set and reviewed_at still empty"];
       const answer = buildMemoAnswer({ headline, key_points: items, details: "", what_changes_this: [], assumptions });
 
@@ -953,7 +953,7 @@ export async function POST(req: Request) {
       const recent = Array.isArray(chapters?.recent) ? chapters.recent : [];
 
       if (count <= 0 || recent.length === 0) {
-        const headline = "There are no chapters yet (from what I can see).";
+        const headline = "No chapters yet.";
         const assumptions = ["Chapters are decisions marked as chapter or with chaptered_at set"];
         const answer = buildMemoAnswer({ headline, key_points: [], details: "", what_changes_this: [], assumptions });
 
@@ -983,7 +983,7 @@ export async function POST(req: Request) {
         return `${title}${when ? ` — closed on ${when}` : ""}`;
       });
 
-      const headline = `There are ${count} chapters.`;
+      const headline = `${count} chapters are recorded so far.`;
       const assumptions = ["Chapters are decisions marked as chapter or with chaptered_at set"];
       const answer = buildMemoAnswer({ headline, key_points: items, details: "", what_changes_this: [], assumptions });
 
@@ -1015,7 +1015,7 @@ export async function POST(req: Request) {
       const active = Array.isArray(goals?.active) ? goals.active : [];
 
       if (countActive <= 0) {
-        const headline = "There are no active goals (from what I can see).";
+        const headline = "No active goals are visible right now.";
         const assumptions = ["Goals come from money_goals"];
         const answer = buildMemoAnswer({ headline, key_points: [], details: "", what_changes_this: [], assumptions });
 
@@ -1048,8 +1048,8 @@ export async function POST(req: Request) {
         })();
 
         if (!buffer) {
-          const headline = "I can see your goals, but I can’t see one explicitly named like “buffer” / “emergency fund”.";
-          const key_points = ["If you tell me the goal’s exact name, I can report its progress exactly."];
+          const headline = "I can see your goals, but I don't see one named \"buffer\" or \"emergency fund\".";
+          const key_points = ["If you share the exact goal name, I can pull its progress precisely."];
           const assumptions = ["Goals come from money_goals"];
           const answer = buildMemoAnswer({ headline, key_points, details: "", what_changes_this: [], assumptions });
 
@@ -1079,8 +1079,8 @@ export async function POST(req: Request) {
         const p = typeof buffer.percent === "number" ? buffer.percent : null;
 
         if (!tgt) {
-          const headline = `Your “${title}” goal is currently at ${cur ?? "—"}.`;
-          const key_points = ["I can’t calculate “how close” because I can’t see a target amount for it."];
+          const headline = `Your \"${title}\" goal is currently at ${cur ?? "—"}.`;
+          const key_points = ["I can't calculate how close it is yet because I can't see a target amount for it."];
           const assumptions = ["Goal target must be set to calculate remaining and percent"];
           const answer = buildMemoAnswer({ headline, key_points, details: "", what_changes_this: [], assumptions });
 
@@ -1116,9 +1116,9 @@ export async function POST(req: Request) {
                 .join(", ") + (linked.length > 3 ? ` +${linked.length - 3} more` : "")
             : "";
 
-        const headline = `Buffer goal (“${title}”): ${cur ?? "—"} / ${tgt}${p != null ? ` (${p}%)` : ""}.`;
-        const key_points = [rem ? `Remaining: ${rem}.` : "", linked.length > 0 ? `Funds visible in: ${fundsVisible}.` : "I can’t see which account funds this goal yet."].filter(Boolean);
-        const assumptions = ["Progress is based on the goal’s current and target values in money_goals"];
+        const headline = `Buffer goal (\"${title}\"): ${cur ?? "—"} / ${tgt}${p != null ? ` (${p}%)` : ""}.`;
+        const key_points = [rem ? `Remaining: ${rem}.` : "", linked.length > 0 ? `Funds visible in: ${fundsVisible}.` : "I can't see which account is feeding this goal yet."].filter(Boolean);
+        const assumptions = ["Progress is based on the goal's current and target values in money_goals"];
         const answer = buildMemoAnswer({ headline, key_points, details: "", what_changes_this: [], assumptions });
 
         const tone: HomeTone = decideHomeTone({ question, suggested_next: "none", action: "open_money", facts: facts as any });
@@ -1165,7 +1165,7 @@ export async function POST(req: Request) {
 
       if (titles.length) key_points.push(`Including: ${titles.join(", ")}.`);
 
-      const headline = `There are ${countActive} active goals.`;
+      const headline = `${countActive} goals are active right now.`;
       const assumptions = ["Goals come from money_goals"];
       const answer = buildMemoAnswer({ headline, key_points, details: "", what_changes_this: [], assumptions });
 
