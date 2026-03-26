@@ -264,19 +264,31 @@ function buildDiagnosisDrivers(
 ): string[] {
   const lines: string[] = [];
 
-  if (interpretation.main_pressure.key !== "none") {
-    lines.push(interpretation.main_pressure.summary);
-    if (interpretation.main_pressure.why_now) {
-      lines.push(interpretation.main_pressure.why_now);
-    }
+  const main = interpretation.main_pressure;
+  if (main.key !== "none") {
+    const meaning =
+      main.key === "structural"
+        ? "This usually feels tight because a large share of regular income is already committed."
+        : main.key === "discretionary"
+          ? "This can feel tight because flexible spending is taking more room than usual."
+          : main.key === "timing"
+            ? "This can feel tight when money out lands before money in."
+            : "This can feel tight because data confidence is lower right now.";
+    lines.push(`${main.summary} ${meaning}`);
+    if (main.why_now) lines.push(main.why_now);
+  } else {
+    lines.push(main.summary);
   }
 
   if (interpretation.secondary_pressure?.summary) {
-    lines.push(interpretation.secondary_pressure.summary);
+    lines.push(`A secondary factor is ${interpretation.secondary_pressure.summary}`);
   }
 
-  if (interpretation.confidence.note) {
-    lines.push(interpretation.confidence.note);
+  const includeConfidence =
+    interpretation.confidence.freshness !== "fresh" ||
+    interpretation.confidence.evidence === "limited";
+  if (includeConfidence && interpretation.confidence.note) {
+    lines.push(`Grounding note: ${interpretation.confidence.note}`);
   }
 
   if (lines.length) return lines.slice(0, 4);
@@ -408,11 +420,17 @@ export async function POST(req: Request) {
 
       const drivers = buildDiagnosisDrivers(rankedSignals, interpretation);
 
+      const diagnosisHeadline =
+        interpretation.main_pressure.key === "none"
+          ? "No single pressure point is standing out right now."
+          : `The main pressure right now looks ${interpretation.main_pressure.key}.`;
+
       const diagnosis = {
-        headline: explanation.headline || "Here is what seems to be creating pressure right now.",
+        headline: diagnosisHeadline,
         summary:
-          explanation.summary ||
-          "This is the current pressure pattern based on your latest household data.",
+          interpretation.main_pressure.key === "none"
+            ? "From your latest household data, pressure looks fairly balanced overall."
+            : interpretation.main_pressure.why_now || explanation.summary,
         drivers,
         signals: {
           structural: signals.structural_pressure.summary,
