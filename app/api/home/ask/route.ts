@@ -6,6 +6,8 @@ import { maybeCrisisIntercept } from "@/lib/safety/guard";
 import { decideHomeTone, type HomeTone } from "@/lib/lifecfo/homeTone";
 import { decideVerdict } from "@/lib/lifecfo/verdictDecision";
 import type { Verdict } from "@/lib/lifecfo/verdict";
+import { supabaseRoute } from "@/lib/supabaseRoute";
+import { resolveHouseholdIdRoute } from "@/lib/households/resolveHouseholdIdRoute";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,7 +17,7 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 type Action = "open_bills" | "open_money" | "open_decisions" | "open_review" | "open_chapters" | "none";
 type SuggestedNext = "none" | "create_capture" | "open_thinking";
 
-type AskRequest = { userId: string; question: string };
+type AskRequest = { userId?: string; question?: string };
 
 function isAction(x: unknown): x is Action {
   return (
@@ -220,7 +222,8 @@ type MoneyGoalRow = {
   updated_at: string | null;
 };
 
-async function buildFactsPack(userId: string) {
+async function buildFactsPack(scope: { userId: string; householdId: string }) {
+  const { userId, householdId } = scope;
   const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
 
   const { start, end } = monthBoundsLocal();
@@ -228,7 +231,7 @@ async function buildFactsPack(userId: string) {
   const { data: recurringBills, error: rbErr } = await supabase
     .from("recurring_bills")
     .select("id,name,amount_cents,currency,cadence,next_due_at,autopay,active,notes,updated_at")
-    .eq("user_id", userId)
+    .eq("household_id", householdId)
     .eq("active", true)
     .order("next_due_at", { ascending: true })
     .limit(200);
@@ -254,7 +257,7 @@ async function buildFactsPack(userId: string) {
   const { data: accounts, error: acctErr } = await supabase
     .from("accounts")
     .select("id,name,type,status,current_balance_cents,currency,archived,updated_at")
-    .eq("user_id", userId)
+    .eq("household_id", householdId)
     .eq("archived", false)
     .order("updated_at", { ascending: false })
     .limit(50);
@@ -318,7 +321,7 @@ async function buildFactsPack(userId: string) {
   const { data: decisions, error: decErr } = await supabase
     .from("decisions")
     .select("id,title,status,created_at,decided_at,review_at,reviewed_at")
-    .eq("user_id", userId)
+    .eq("household_id", householdId)
     .is("decided_at", null)
     .order("created_at", { ascending: false })
     .limit(20);
@@ -332,7 +335,7 @@ async function buildFactsPack(userId: string) {
     const { data: openPreview, error: openPreviewErr } = await supabase
       .from("decisions")
       .select("title, created_at")
-      .eq("user_id", userId)
+      .eq("household_id", householdId)
       .is("decided_at", null)
       .order("created_at", { ascending: true })
       .limit(3);
@@ -420,7 +423,7 @@ async function buildFactsPack(userId: string) {
     const { data, error } = await supabase
       .from("decisions")
       .select("id,title,review_at,reviewed_at")
-      .eq("user_id", userId)
+      .eq("household_id", householdId)
       .not("review_at", "is", null)
       .is("reviewed_at", null)
       .order("review_at", { ascending: true })
@@ -458,7 +461,7 @@ async function buildFactsPack(userId: string) {
     const { data, error } = await supabase
       .from("decisions")
       .select("id,title,chaptered_at,status,created_at")
-      .eq("user_id", userId)
+      .eq("household_id", householdId)
       .or("status.eq.chapter,chaptered_at.not.is.null")
       .order("chaptered_at", { ascending: false, nullsFirst: false })
       .order("created_at", { ascending: false })
@@ -483,7 +486,11 @@ async function buildFactsPack(userId: string) {
   let goalsRows: MoneyGoalRow[] = [];
 
   try {
-    const { data, error } = await supabase.from("money_goals").select("*").eq("user_id", userId).limit(200);
+    const { data, error } = await supabase
+      .from("money_goals")
+      .select("*")
+      .eq("household_id", householdId)
+      .limit(200);
     goalsErrFlag = !!error;
     if (!error && Array.isArray(data)) goalsRows = data as MoneyGoalRow[];
   } catch {
@@ -752,12 +759,26 @@ Return JSON only.
 
 export async function POST(req: Request) {
   try {
-    const body = (await req.json()) as Partial<AskRequest>;
-    const userId = String(body.userId ?? "").trim();
+    const body = (await req.json().catch(() => ({}))) as Partial<AskRequest>;
     const question = typeof body.question === "string" ? body.question.trim() : "";
 
-    if (!userId || !question) {
-      return NextResponse.json({ error: "Missing userId/question" }, { status: 400 });
+    if (!question) {
+      return NextResponse.json({ error: "Missing question" }, { status: 400 });
+    }
+
+    const routeSupabase = await supabaseRoute();
+    const {
+      data: { user },
+      error: userErr,
+    } = await routeSupabase.auth.getUser();
+
+    if (userErr || !user?.id) {
+      return NextResponse.json({ error: "Not signed in." }, { status: 401 });
+    }
+
+    const householdId = await resolveHouseholdIdRoute(routeSupabase, user.id);
+    if (!householdId) {
+      return NextResponse.json({ error: "User not linked to a household." }, { status: 400 });
     }
 
     // 🔒 SAFETY INTERCEPT (V1 REQUIRED)
@@ -791,7 +812,7 @@ export async function POST(req: Request) {
       });
     }
 
-    const facts = await buildFactsPack(userId);
+    const facts = await buildFactsPack({ userId: user.id, householdId });
 
     // ✅ Deterministic AFFORD handling (skip AI)
     if (isAffordIntent(question)) {
