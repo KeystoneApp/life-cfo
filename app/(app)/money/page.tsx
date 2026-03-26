@@ -277,11 +277,6 @@ export default function MoneyClientNext() {
                   />
                 </div>
               ) : null}
-              {interpretation ? (
-                <div className="text-xs leading-relaxed text-zinc-600">
-                  {`Main pressure now: ${interpretation.main_pressure.summary} ${interpretation.main_pressure.why_now}`}
-                </div>
-              ) : null}
               <ul className="list-disc space-y-1 pl-4 text-xs text-zinc-600">
                 {(explanation?.insights ?? []).slice(0, 3).map((line, idx) => (
                   <li key={idx}>{line}</li>
