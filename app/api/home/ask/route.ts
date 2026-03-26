@@ -13,6 +13,10 @@ import {
   type HouseholdMoneyReasoningResult,
 } from "@/lib/money/reasoning/runHouseholdMoneyReasoning";
 import { isHomeAffordabilityIntent } from "@/lib/money/reasoning/intentDetection";
+import {
+  buildMemoAnswer,
+  bullets as composeBullets,
+} from "@/lib/ask/responseComposition";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -105,51 +109,6 @@ function formatDateShort(iso: string) {
     month: "short",
     year: "numeric",
   });
-}
-
-/* ---------------- memo formatting helpers ---------------- */
-
-function mdSection(title: string, lines: string[]) {
-  const body = lines.filter(Boolean).join("\n");
-  return body ? `**${title}**\n${body}` : "";
-}
-
-function mdBullets(items: string[]) {
-  return items.filter(Boolean).map((x) => `- ${x}`).join("\n");
-}
-
-function buildMemoAnswer(params: {
-  headline: string;
-  key_points?: string[];
-  details?: string;
-  assumptions?: string[];
-  what_changes_this?: string[];
-}) {
-  const headline = (params.headline || "").trim();
-
-  const keyPoints = Array.isArray(params.key_points) ? params.key_points.map((x) => String(x || "").trim()).filter(Boolean) : [];
-  const assumptions = Array.isArray(params.assumptions) ? params.assumptions.map((x) => String(x || "").trim()).filter(Boolean) : [];
-  const changes = Array.isArray(params.what_changes_this)
-    ? params.what_changes_this.map((x) => String(x || "").trim()).filter(Boolean)
-    : [];
-  const details = typeof params.details === "string" ? params.details.trim() : "";
-
-  const blocks: string[] = [];
-  if (headline) blocks.push(headline);
-
-  const kpBlock = mdSection("Key points", [mdBullets(keyPoints)]);
-  if (kpBlock) blocks.push(kpBlock);
-
-  const detailsBlock = mdSection("Details", [details]);
-  if (detailsBlock) blocks.push(detailsBlock);
-
-  const changesBlock = mdSection("What would change this", [mdBullets(changes)]);
-  if (changesBlock) blocks.push(changesBlock);
-
-  const assumptionsBlock = mdSection("Assumptions", [mdBullets(assumptions)]);
-  if (assumptionsBlock) blocks.push(assumptionsBlock);
-
-  return blocks.filter(Boolean).join("\n\n").trim();
 }
 
 /* ---------------- facts pack ---------------- */
@@ -882,7 +841,7 @@ export async function POST(req: Request) {
         "To answer safely, we’d need timing + which account pays + your buffer.",
       ].filter(Boolean);
 
-      const details = ["**Available balances**", mdBullets(balancesList), "", "**Recurring commitments**", mdBullets(billsList)].join("\n");
+      const details = ["**Available balances**", composeBullets(balancesList), "", "**Recurring commitments**", composeBullets(billsList)].join("\n");
 
       const what_changes_this = ["If the expense is one-off vs recurring", "If the timing is before/after pay day", "If it must come from a specific account"];
       const assumptions = ["Balances reflect active accounts", "Commitments reflect active recurring bills"];

@@ -6,6 +6,7 @@ import type { FinancialSnapshot } from "@/lib/money/reasoning/buildFinancialSnap
 import { PressureInterpretation } from "@/lib/money/reasoning/interpretPressure";
 import { runHouseholdMoneyReasoning } from "@/lib/money/reasoning/runHouseholdMoneyReasoning";
 import { detectMoneyAskIntent } from "@/lib/money/reasoning/intentDetection";
+import { joinNonEmptyWithSpace } from "@/lib/ask/responseComposition";
 import { formatMoneyFromCents } from "@/lib/money/formatMoney";
 import { extractMoneyAskCandidates } from "@/lib/memory/candidateExtraction";
 
@@ -472,12 +473,10 @@ export async function POST(req: Request) {
       const missingPurchaseContext = !hasConcretePurchaseContext(lowerQ);
       const caveatNeeded = missingCostDetail || missingPurchaseContext;
 
-      const summary = [
+      const summary = joinNonEmptyWithSpace([
         "This is a grounded affordability baseline from your current household position.",
         explanation.summary,
-      ]
-        .filter(Boolean)
-        .join(" ");
+      ]);
 
       const caveat = caveatNeeded
         ? "The question is still broad, so this is a baseline rather than a precise affordability call. Amount and payment timing would sharpen it."
@@ -570,14 +569,12 @@ export async function POST(req: Request) {
         ? "Here is what is coming up in your household money."
         : "Here is your near-term money baseline.";
 
-      const summary = [
+      const summary = joinNonEmptyWithSpace([
         snapshot.commitments.billCount > 0
           ? `${snapshot.commitments.billCount} recurring commitment(s) are currently tracked.`
           : "No recurring commitments are currently tracked.",
         explanation.summary,
-      ]
-        .filter(Boolean)
-        .join(" ");
+      ]);
       const planning = {
         headline,
         summary,
@@ -642,12 +639,10 @@ export async function POST(req: Request) {
           ? `${snapshot.connections.stale} of ${snapshot.connections.total} connections are stale, so scenario confidence may be lower.`
           : undefined;
 
-      const summary = [
+      const summary = joinNonEmptyWithSpace([
         "This is the current baseline before any scenario change is layered in.",
         explanation.summary,
-      ]
-        .filter(Boolean)
-        .join(" ");
+      ]);
       const scenario = {
         headline: "Here is the baseline for that what-if question.",
         summary,
