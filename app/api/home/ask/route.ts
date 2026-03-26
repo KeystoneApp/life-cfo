@@ -8,6 +8,9 @@ import { decideVerdict } from "@/lib/lifecfo/verdictDecision";
 import type { Verdict } from "@/lib/lifecfo/verdict";
 import { supabaseRoute } from "@/lib/supabaseRoute";
 import { resolveHouseholdIdRoute } from "@/lib/households/resolveHouseholdIdRoute";
+import { getHouseholdMoneyTruth } from "@/lib/money/reasoning/getHouseholdMoneyTruth";
+import { buildFinancialSnapshot } from "@/lib/money/reasoning/buildFinancialSnapshot";
+import { explainSnapshot } from "@/lib/money/reasoning/explainSnapshot";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -566,6 +569,26 @@ async function buildFactsPack(scope: { userId: string; householdId: string }) {
   const balancesEntries = Object.entries(balancesByCurrency) as Array<[string, number]>;
   const recurringEntries = Object.entries(activeBillsCentsByCurrency) as Array<[string, number]>;
 
+  let moneyReasoningOk = false;
+  let moneyReasoningNote = "";
+  let moneyReasoning:
+    | {
+        snapshot: ReturnType<typeof buildFinancialSnapshot>;
+        explanation: ReturnType<typeof explainSnapshot>;
+      }
+    | null = null;
+
+  try {
+    const moneyTruth = await getHouseholdMoneyTruth(supabase as any, { householdId });
+    const snapshot = buildFinancialSnapshot(moneyTruth);
+    const explanation = explainSnapshot(snapshot);
+    moneyReasoning = { snapshot, explanation };
+    moneyReasoningOk = true;
+  } catch (err: unknown) {
+    moneyReasoningOk = false;
+    moneyReasoningNote = err instanceof Error ? err.message : "Money reasoning unavailable.";
+  }
+
   return {
     now_iso: new Date().toISOString(),
     data_quality: {
@@ -590,6 +613,8 @@ async function buildFactsPack(scope: { userId: string; householdId: string }) {
       goals_count_total: goalsClean.length,
       goals_count_active: goalsActive.length,
       goals_preview_titles_count: goalsPreviewTitles.length,
+      money_reasoning_ok: moneyReasoningOk,
+      money_reasoning_note: moneyReasoningNote || null,
       note:
         "Bills come from recurring_bills. Accounts come from accounts. Decisions come from decisions. Family comes from family_members + pets. Review comes from decisions.review_at (pending only). Chapters come from decisions where status='chapter' (or chaptered_at is set). Goals come from money_goals.",
     },
@@ -704,6 +729,15 @@ async function buildFactsPack(scope: { userId: string; householdId: string }) {
       balances_by_currency_cents: balancesEntries.map(([currency, cents]) => ({ currency, cents })),
       recurring_bills_totals_by_currency_cents: recurringEntries.map(([currency, cents]) => ({ currency, cents })),
     },
+    money_reasoning: moneyReasoning
+      ? {
+          snapshot: moneyReasoning.snapshot,
+          explanation: moneyReasoning.explanation,
+          interpretation: moneyReasoning.explanation.interpretation,
+          notes:
+            "Grounded household money reasoning baseline reused from the Money Ask pipeline (truth -> snapshot -> explanation).",
+        }
+      : null,
   };
 }
 
@@ -751,6 +785,11 @@ AFFORD / SHOULD-WE
 - Never grant permission.
 - Provide bounded facts and state what's missing.
 - suggested_next should be "create_capture" when more context is needed.
+
+MONEY GROUNDING
+- If facts.money_reasoning is available, prioritize it over generic financial wording.
+- Use interpretation main pressure and confidence note when they are present.
+- Keep wording plain-English, calm, and factual.
 
 Return JSON only.
 `.trim();
@@ -817,6 +856,15 @@ export async function POST(req: Request) {
     // ✅ Deterministic AFFORD handling (skip AI)
     if (isAffordIntent(question)) {
       const money = (facts as any)?.money_summary;
+      const moneyReasoning = (facts as any)?.money_reasoning;
+      const mainPressureSummary =
+        typeof moneyReasoning?.interpretation?.main_pressure?.summary === "string"
+          ? moneyReasoning.interpretation.main_pressure.summary
+          : "";
+      const confidenceNote =
+        typeof moneyReasoning?.interpretation?.confidence?.note === "string"
+          ? moneyReasoning.interpretation.confidence.note
+          : "";
 
       const balancesArr = Array.isArray(money?.balances_by_currency) ? money.balances_by_currency : [];
       const billsArr = Array.isArray(money?.recurring_bills_totals_by_currency) ? money.recurring_bills_totals_by_currency : [];
@@ -837,8 +885,10 @@ export async function POST(req: Request) {
       const key_points = [
         "Available balances (by currency) are listed below.",
         "Recurring commitments (by currency) are listed below.",
+        mainPressureSummary ? `Current pressure baseline: ${mainPressureSummary}` : "",
+        confidenceNote ? `Confidence note: ${confidenceNote}` : "",
         "To answer safely, we’d need timing + which account pays + your buffer.",
-      ];
+      ].filter(Boolean);
 
       const details = ["**Available balances**", mdBullets(balancesList), "", "**Recurring commitments**", mdBullets(billsList)].join("\n");
 
