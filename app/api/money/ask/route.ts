@@ -353,7 +353,7 @@ function buildRecentChangeDiagnosisLines(params: {
     if (billDelta >= 20000 && billRatio >= 1.12) {
       lines.push({
         score: billDelta,
-        text: "Bill-related spending looks higher than the prior period, which can leave less breathing room.",
+        text: "Bill-related spending looks higher than the prior period, which means there is less breathing room.",
       });
     }
   }
@@ -364,7 +364,7 @@ function buildRecentChangeDiagnosisLines(params: {
     if (spendDelta >= 30000 && spendRatio >= 1.12) {
       lines.push({
         score: spendDelta * 0.9,
-        text: "Spending has ticked up recently, which reduces what is left over.",
+        text: "Spending has ticked up recently, which means there is less left over.",
       });
     }
   }
@@ -375,7 +375,7 @@ function buildRecentChangeDiagnosisLines(params: {
     if (incomeDelta >= 30000 && incomeRatio <= 0.9) {
       lines.push({
         score: incomeDelta,
-        text: "Income-like inflows look lower than the prior period, which can make things feel tighter.",
+        text: "Income-like inflows look lower than the prior period, which can make things feel tighter day to day.",
       });
     }
   }
@@ -396,12 +396,12 @@ function buildDiagnosisDrivers(
   if (main.key !== "none") {
     const meaning =
       main.key === "structural"
-        ? "This usually feels tight because a large share of regular income is already committed."
+        ? "This usually means there is less left over each month."
         : main.key === "discretionary"
-          ? "This can feel tight because flexible spending is taking more room than usual."
+          ? "This can reduce day-to-day flexibility."
           : main.key === "timing"
-            ? "This can feel tight when money out lands before money in."
-            : "This can feel tight because data confidence is lower right now.";
+            ? "This can make things feel tighter when money out lands before money in."
+            : "This can make the picture feel tighter because confidence is lower right now.";
     lines.push(`${main.summary} ${meaning}`);
     if (main.why_now) lines.push(main.why_now);
   } else {
