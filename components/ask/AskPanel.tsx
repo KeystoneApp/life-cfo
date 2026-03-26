@@ -7,6 +7,7 @@ import { Chip } from "@/components/ui";
 import type { DecisionCandidate } from "@/lib/memory/contracts";
 
 type AskPanelMode = "overlay" | "split";
+const MONEY_SMART_INSIGHT_PREVIEW_KEY = "lifecfo:money-smart-insight-preview";
 
 function cleanAnswer(raw: string) {
   let t = (raw || "").trim();
@@ -83,6 +84,7 @@ export function AskPanel({ mode = "overlay" }: { mode?: AskPanelMode }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [isDesktop, setIsDesktop] = useState(false);
   const [examplesExpanded, setExamplesExpanded] = useState(mode === "split");
+  const [moneyInsightPreview, setMoneyInsightPreview] = useState<string | null>(null);
 
   useEffect(() => {
     const media = window.matchMedia("(min-width: 768px)");
@@ -119,6 +121,20 @@ export function AskPanel({ mode = "overlay" }: { mode?: AskPanelMode }) {
     el.scrollTop = el.scrollHeight;
   }, [messages, status, effectiveOpen]);
 
+  useEffect(() => {
+    if (!effectiveOpen || currentScope !== "money") {
+      setMoneyInsightPreview(null);
+      return;
+    }
+
+    try {
+      const value = window.sessionStorage.getItem(MONEY_SMART_INSIGHT_PREVIEW_KEY);
+      setMoneyInsightPreview(value && value.trim() ? value.trim() : null);
+    } catch {
+      setMoneyInsightPreview(null);
+    }
+  }, [effectiveOpen, currentScope]);
+
   const latestAssistant = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
       if (messages[i]?.role === "assistant") return messages[i];
@@ -142,6 +158,7 @@ export function AskPanel({ mode = "overlay" }: { mode?: AskPanelMode }) {
     status === "error" ||
     mode === "split" ||
     examplesExpanded;
+  const isMoneyContext = currentScope === "money";
 
   if (!effectiveOpen) return null;
 
@@ -151,6 +168,11 @@ export function AskPanel({ mode = "overlay" }: { mode?: AskPanelMode }) {
         <div className="min-w-0">
           <div className="text-sm font-semibold text-zinc-900">{title}</div>
           <div className="text-xs text-zinc-500">Looking at: {currentViewLabel}</div>
+          {isMoneyContext ? (
+            <div className="mt-1 text-xs text-zinc-500">
+              Money context
+            </div>
+          ) : null}
         </div>
 
         <div className="flex items-center gap-2">
@@ -269,6 +291,42 @@ export function AskPanel({ mode = "overlay" }: { mode?: AskPanelMode }) {
           ) : null}
 
           {messages.length === 0 && status !== "loading" && status !== "error" ? (
+            isMoneyContext ? (
+              <div className="rounded-2xl border border-zinc-200 bg-white p-3">
+                {moneyInsightPreview ? (
+                  <div
+                    className="mb-2 text-xs leading-relaxed text-zinc-400"
+                    style={{
+                      display: "-webkit-box",
+                      WebkitLineClamp: 2,
+                      WebkitBoxOrient: "vertical",
+                      overflow: "hidden",
+                    }}
+                  >
+                    {moneyInsightPreview}
+                  </div>
+                ) : null}
+                <div className="text-xs text-zinc-500">
+                  Ask about what&apos;s happening, what changed, or what matters next.
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {[
+                    "Why does money feel tight?",
+                    "What changed recently?",
+                    "Are we okay this month?",
+                  ].map((prompt) => (
+                    <button
+                      key={prompt}
+                      type="button"
+                      onClick={() => void submitAsk(prompt)}
+                      className="rounded-full border border-zinc-200 px-3 py-1 text-xs text-zinc-600 hover:bg-zinc-50 hover:text-zinc-700"
+                    >
+                      {prompt}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : (
             mode === "split" ? (
               <div className="rounded-2xl border border-zinc-200 bg-white p-3">
                 <div className="flex items-center justify-between gap-2">
@@ -314,13 +372,14 @@ export function AskPanel({ mode = "overlay" }: { mode?: AskPanelMode }) {
                 </div>
               </div>
             ) : null
+            )
           ) : null}
         </div>
       </div>
 
       <div className="shrink-0 border-t border-zinc-100 px-4 py-4">
         <div className="rounded-2xl border border-zinc-200 bg-white p-3">
-          {mode === "overlay" && messages.length === 0 && !examplesExpanded ? (
+          {mode === "overlay" && messages.length === 0 && !examplesExpanded && !isMoneyContext ? (
             <div className="mb-2">
               <button
                 type="button"

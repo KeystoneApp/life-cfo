@@ -11,6 +11,8 @@ import { formatMoneyFromCents } from "@/lib/money/formatMoney";
 import { joinNonEmptyWithSpace } from "@/lib/ask/responseComposition";
 import type { MiniSignalLevel } from "@/components/ui/MiniSignal";
 
+const MONEY_SMART_INSIGHT_PREVIEW_KEY = "lifecfo:money-smart-insight-preview";
+
 type FinancialSnapshot = {
   asOf: string;
   liquidity: { availableCashCents: number; accountCount: number };
@@ -196,6 +198,19 @@ export default function MoneyClientNext() {
     : explanation?.summary || "Your latest data is loading.";
 
   const smartInsightSubtle = "Based on your latest data.";
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      if (!smartInsightLine || smartInsightLine === "Your latest data is loading.") {
+        window.sessionStorage.removeItem(MONEY_SMART_INSIGHT_PREVIEW_KEY);
+        return;
+      }
+      window.sessionStorage.setItem(MONEY_SMART_INSIGHT_PREVIEW_KEY, smartInsightLine);
+    } catch {
+      // ignore storage availability issues
+    }
+  }, [smartInsightLine]);
 
   return (
     <Page title="Money" subtitle="A calm view of money coming in, going out, saved, and planned.">
